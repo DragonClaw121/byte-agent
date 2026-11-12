@@ -1,0 +1,19 @@
+# Alternativa sem Docker (systemd). Copie para /etc/systemd/system/byte.service, ajuste usuário e caminhos e rode:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now byte
+[Unit]
+Description=Byte - agente pessoal
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=byte
+WorkingDirectory=/opt/byte-agent
+EnvironmentFile=/opt/byte-agent/.env
+ExecStart=/opt/byte-agent/.venv/bin/python -m byte_agent
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

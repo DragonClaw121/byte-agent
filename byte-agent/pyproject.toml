@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "byte-agent"
+dynamic = ["version"]
+description = "Byte — agente pessoal com LLMs locais (Ollama), memória, agenda, e-mail e ponte para Telegram"
+requires-python = ">=3.10"
+dependencies = []            # o motor usa apenas a biblioteca padrão
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+jogos = ["pygame>=2.5"]
+
+[project.scripts]
+byte-agent = "byte_agent.headless:main"
+
+[tool.setuptools]
+packages = ["byte_agent"]
+
+[tool.setuptools.dynamic]
+version = { attr = "byte_agent.engine.BYTE_VERSION" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
