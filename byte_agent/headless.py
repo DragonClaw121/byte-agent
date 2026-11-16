@@ -37,11 +37,14 @@ def load_profile_data(data_dir: Path) -> dict:
         return {}
 
 
-def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None, profile: Optional[str] = None) -> Any:
+def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None, profile: Optional[str] = None,
+                  web: Optional[bool] = None) -> Any:
     """Monta banco, roteador, e-mail, terminal e serviço usando `data_dir` como armazenamento persistente.
     Com profile="trabalho" ativa o prompt profissional e instala as ferramentas de trabalho (uma instância por perfil)."""
     data_dir = Path(data_dir).expanduser()
     (data_dir / "database").mkdir(parents=True, exist_ok=True)
+    if web is None:
+        web = bool(profile)              # o modo servidor liga a web; chamadas diretas (testes) escolhem
     profile_data = load_profile_data(data_dir) if profile else {}
     if profile:
         engine.apply_profile(profile, profile_data)
@@ -58,6 +61,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         from .work import WorkAssistant
         service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem
         WorkAssistant(service, data_dir, profile_data).install()
+    if web:
+        engine.install_web_access(service, data_dir)
     return service
 
 

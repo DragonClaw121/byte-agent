@@ -14,6 +14,7 @@ byte_agent/
   stream.py            diretor da live: filtros, persona isolada, emoções
   work.py              perfil de trabalho: triagem de e-mails, análises e apresentações
   work_data.py         leitura de CSV/XLSX, estatística, relatório HTML, apresentação HTML/PPTX
+  web.py               busca, leitura segura de páginas e pesquisa profunda com fontes
 tests/                 pytest (Ollama, nvidia-smi, ollama.com e Telegram simulados)
 deploy/                Dockerfile, docker-compose.yml e unidade systemd
 ```
@@ -118,6 +119,17 @@ python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 Com uma única instância, o seletor **VTuber · Trabalho** no título do painel (ou `/perfil` no Telegram) troca de
 perfil sem reiniciar nada; cada perfil mantém seus próprios dados.
 
+## E-mail com várias contas
+
+Uma conta por provedor (Gmail e Outlook), cada uma com o seu segredo. A Byte procura a senha, nesta ordem: a digitada
+na sessão, o segredo que você nomear na aba E-mail, `BYTE_EMAIL_APP_PASSWORD_GMAIL` / `..._OUTLOOK` e, por
+compatibilidade, `BYTE_EMAIL_APP_PASSWORD`. Trocar o provedor na aba E-mail troca a conta ativa sem apagar a outra.
+
+## Internet
+
+Busca, leitura de páginas e pesquisa profunda com fontes, só leitura e com proteções contra páginas maliciosas.
+Guia: [docs/internet.md](docs/internet.md).
+
 ## Live na Twitch com VTube Studio
 
 Passo a passo completo em [docs/live-twitch-vtube-studio.md](docs/live-twitch-vtube-studio.md).
@@ -135,7 +147,9 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 | 5b. Calendário externo, busca e leitura web, arquivos | pendente |
 | Live: Twitch + VTube Studio + voz | feito (testado só com servidores simulados) |
 | Perfil de trabalho: e-mails, análises, apresentações | feito (testado com e-mail e LLM simulados) |
-| Pesquisa na web (pesquisa profunda) | pendente |
+| Pesquisa na web (busca, leitura, pesquisa profunda) | feito, só leitura ([docs/internet.md](docs/internet.md)) |
+| Microsoft Graph (e-mail corporativo com login da empresa) | pendente: depende de app registrado pela TI |
+| Vários usuários na mesma Byte | pendente |
 | 6. Sandbox de execução e permissões por ferramenta | pendente |
 | 7. Cliente leve em cada máquina | pendente |
 

@@ -1,5 +1,6 @@
 """Perfil de trabalho: análise de dados, documentos, triagem de e-mails e isolamento do perfil."""
 import json
+import sys
 import urllib.error
 import urllib.request
 from email.message import EmailMessage
@@ -384,3 +385,83 @@ def test_headless_work_profile_uses_its_own_folder_and_profile_file(tmp_path):
         service.shutdown()
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_auth_errors_are_explained():
+    R = engine.RealEmailConnector
+    tenant = ("[{\"mode\": \"starttls\", \"port\": 587, \"error\": \"SMTPAuthenticationError: (535, b'5.7.139 Authentication unsuccessful, "
+              "SmtpClientAuthentication is disabled for the Tenant.\"}]")
+    assert "política do administrador" in R.explain_auth_error(tenant) and "Gmail com senha de app" in R.explain_auth_error(tenant)
+    assert "senha de app" in R.explain_auth_error("534-5.7.9 Application-specific password required")
+    assert R.explain_auth_error("tudo certo") is None
+
+
+def test_send_failure_with_tenant_policy_is_reported_clearly(tmp_path, monkeypatch):
+    import smtplib
+    db = engine.UnifiedDatabase(tmp_path / "e.db", engine.VectorEngine())
+    client = engine.RealEmailConnector(db)
+    client.configure_account("outlook", "eu@empresa.com", "senha")
+
+    def refuse(*args, **kwargs):
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.139 Authentication unsuccessful, SmtpClientAuthentication is disabled for the Tenant.")
+    monkeypatch.setattr(client, "_smtp_send_once", refuse)
+    with pytest.raises(PermissionError) as err:
+        client.send_email("colega@empresa.com", "Teste", "Olá")
+    assert str(err.value).startswith("E-mail NÃO enviado.") and "Microsoft Graph" in str(err.value)
+    assert client.status()["provider"] == "outlook"                                   # a escolha continua salva
+    assert engine.RealEmailConnector(db).provider == "outlook"
+    db.close()
+
+
+def test_email_tab_does_not_overwrite_the_users_choice():
+    page = engine.build_v90_web_ui({"llm": {}})
+    assert "b90SyncField('b90-em-prov', st.email.provider)" in page
+    assert "document.getElementById('b90-em-prov').value = st.email.provider" not in page
+    assert 'id="b90-em-prov" class="b90-select" onchange="window.b90EmailSelect(this.value)"' in page
+
+
+def test_one_account_per_provider_with_its_own_secret(tmp_path, monkeypatch):
+    import types
+    secrets = {"BYTE_EMAIL_APP_PASSWORD_GMAIL": "senha-gmail", "SENHA_OUTLOOK_TRABALHO": "senha-outlook"}
+    reads = []
+
+    def fake_get(name):
+        reads.append(name)
+        return secrets.get(name)
+    colab = types.ModuleType("google.colab")
+    colab.userdata = types.SimpleNamespace(get=fake_get)
+    monkeypatch.setitem(sys.modules, "google", types.ModuleType("google"))
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    monkeypatch.delenv("BYTE_EMAIL_APP_PASSWORD", raising=False)
+    db = engine.UnifiedDatabase(tmp_path / "e.db", engine.VectorEngine())
+    client = engine.RealEmailConnector(db)
+    client.configure_account("gmail", "eu@gmail.com")
+    st = client.status()
+    assert st["credentials_ready"] and st["password_source"] == "Colab Secrets (BYTE_EMAIL_APP_PASSWORD_GMAIL)"
+    client.configure_account("outlook", "eu@empresa.com", secret_name="SENHA_OUTLOOK_TRABALHO")
+    assert client._resolve_password() == ("senha-outlook", "Colab Secrets (SENHA_OUTLOOK_TRABALHO)")
+    assert client.secret_names() == ["SENHA_OUTLOOK_TRABALHO", "BYTE_EMAIL_APP_PASSWORD_OUTLOOK", "BYTE_EMAIL_APP_PASSWORD"]
+    st = client.select_account("gmail")                                   # volta para o Gmail sem perder o Outlook
+    assert st["email_address"] == "eu@gmail.com" and client._resolve_password()[0] == "senha-gmail"
+    assert st["accounts"]["outlook"] == {"address": "eu@empresa.com", "secret": "SENHA_OUTLOOK_TRABALHO", "ready": True}
+    reloaded = engine.RealEmailConnector(db)                                # configuração sobrevive ao reinício
+    assert reloaded.provider == "gmail" and reloaded.accounts["outlook"]["secret"] == "SENHA_OUTLOOK_TRABALHO"
+    assert reads.count("SENHA_OUTLOOK_TRABALHO") == 1                        # cada segredo é lido uma única vez
+    client.configure_account("outlook", "eu@empresa.com", app_password="digitada")
+    assert client._resolve_password() == ("digitada", "memória desta sessão")
+    assert "digitada" not in json.dumps(db.get_setting("email.accounts"))   # senha nunca vai para o banco
+    with pytest.raises(ValueError):
+        client.configure_account("outlook", "eu@empresa.com", secret_name="nome com espaço")
+    with pytest.raises(ValueError):
+        client.select_account("yahoo")
+    db.close()
+
+
+def test_single_account_config_is_migrated(tmp_path):
+    db = engine.UnifiedDatabase(tmp_path / "m.db", engine.VectorEngine())
+    db.set_setting("email.provider", "outlook")
+    db.set_setting("email.address", "antigo@empresa.com")
+    client = engine.RealEmailConnector(db)
+    assert client.provider == "outlook" and client.email_address == "antigo@empresa.com"
+    assert client.accounts == {"outlook": {"address": "antigo@empresa.com", "secret": ""}}
+    db.close()

@@ -198,7 +198,7 @@ def test_knowledge_question_is_answered_directly_without_tools(env):
     assert fake.tool_rounds() == [] and res["response"] == fake.stream_reply
     assert res["tool_mode"] == "text" and len(fake.requests) == 1                        # uma única geração
     system = fake.requests[0]["messages"][0]["content"]
-    assert "NÃO tem acesso à internet" in system and "DIRETAMENTE" in system
+    assert "Você só acessa a internet pelas ferramentas web_search" in system and "DIRETAMENTE" in system
 
 
 def test_tool_selection_by_intent_and_model_size(env):

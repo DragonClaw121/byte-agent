@@ -34,6 +34,7 @@ HELP_TEXT = (
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
     "/rotina <HH:MM> <instrução> — todo dia, a Byte executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
+    "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil vtuber — troca de perfil\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
@@ -298,9 +299,10 @@ class TelegramBridge:
                                              "content_b64": base64.b64encode(data).decode("ascii")})
         self.send(chat_id, f"Planilha '{res['saved']}' recebida ({res['size_kb']} KB). Envie /analise {res['saved']} para analisar.")
 
-    def _work(self, chat_id: int, action: str, payload: Dict[str, Any], busy: str) -> None:
+    def _work(self, chat_id: int, action: str, payload: Dict[str, Any], busy: str,
+              unavailable: str = "Este comando é do perfil de trabalho, que não está ativo nesta instância.") -> None:
         if action not in getattr(self.service, "extra_actions", {}):
-            self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
+            self.send(chat_id, unavailable)
             return
         self.send(chat_id, busy)
         res = self._dispatch(action, payload)
@@ -417,6 +419,23 @@ class TelegramBridge:
             st = self._dispatch("switch_profile", {"profile": wanted})
             self.send(chat_id, f"Perfil ativo: {names.get(st.get('profile'), st.get('profile'))}. "
                                "Cada perfil guarda a própria conversa, agenda e memórias.")
+        elif cmd == "/pesquisar":
+            if not arg:
+                self.send(chat_id, "Use: /pesquisar <pergunta>")
+                return
+            self._work(chat_id, "web_research", {"question": arg}, "Pesquisando na web (pode levar alguns minutos)...",
+                       unavailable="O acesso à internet está desligado nesta instância (BYTE_WEB=0).")
+        elif cmd == "/buscar":
+            if not arg:
+                self.send(chat_id, "Use: /buscar <termos>")
+                return
+            if "web_search" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "O acesso à internet está desligado nesta instância (BYTE_WEB=0).")
+                return
+            found = self._dispatch("web_search", {"query": arg, "limit": 6})
+            self.send(chat_id, (f"Resultados ({found.get('backend')}):\n" + "\n\n".join(
+                f"• {h['title']}\n{h['url']}" for h in found.get("results", []))) if found.get("results")
+                else "Nenhum resultado. " + "; ".join(found.get("errors", [])[:2]))
         elif cmd == "/arquivos":
             if "work_status" not in getattr(self.service, "extra_actions", {}):
                 self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
