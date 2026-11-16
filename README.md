@@ -68,6 +68,10 @@ from byte_agent import iniciar_byte
 iniciar_byte()
 ```
 
+**Telegram no Colab:** crie os segredos `TELEGRAM_TOKEN` e `TELEGRAM_CHAT_ID` (ícone de chave, com acesso do
+notebook liberado). O `iniciar_byte()` liga a ponte sozinho. Só com o token, o bot sobe em modo privado e informa
+o seu `chat_id` quando você escrever para ele. Para não ligar: `iniciar_byte(telegram=False)`.
+
 ## 5. Testes e versionamento
 
 ```bash

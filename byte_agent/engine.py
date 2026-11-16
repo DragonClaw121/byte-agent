@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "10.4"
+BYTE_VERSION = "10.4.1"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -8058,7 +8058,60 @@ class ByteOmniServer:
 byte_service: Optional[ByteEcosystemService] = None
 
 
-def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True) -> None:
+def _read_secret(names: Tuple[str, ...]) -> str:
+    """Primeiro valor não vazio entre os nomes dados, procurando nos Segredos do Colab e nas variáveis de ambiente.
+    Segredo inexistente ou sem acesso liberado ao notebook conta como ausente."""
+    for name in names:
+        try:
+            from google.colab import userdata  # type: ignore
+            value = str(userdata.get(name) or "").strip()
+            if value:
+                return value
+        except Exception:
+            pass
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: Any = _read_secret) -> Optional[Any]:
+    """v10.4.1 — liga a ponte do Telegram junto com a Byte quando o token existir.
+    Segredos aceitos: TELEGRAM_TOKEN (ou BYTE_TELEGRAM_TOKEN) e TELEGRAM_CHAT_ID (ou BYTE_TELEGRAM_CHAT_IDS).
+    Sem o chat_id a ponte sobe em modo privado: recusa todo mundo e só informa o chat_id de quem escrever."""
+    previous = getattr(sys, "_byte_v90_active_telegram", None)
+    if previous is not None:                       # reexecutar a célula não pode deixar duas pontes disputando mensagens
+        try:
+            previous.stop()
+        except Exception:
+            pass
+        setattr(sys, "_byte_v90_active_telegram", None)
+    token = read_secret(("TELEGRAM_TOKEN", "BYTE_TELEGRAM_TOKEN"))
+    if not token:
+        return None
+    try:
+        from byte_agent.telegram_bridge import TelegramBridge
+    except Exception:
+        print("[TELEGRAM] Token encontrado, mas o pacote byte_agent não está instalado (script colado em célula). "
+              "Instale com pip a partir do GitHub para usar o Telegram.", flush=True)
+        return None
+    chat_ids = [int(x) for x in re.findall(r"-?\d+", read_secret(("TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_IDS", "BYTE_TELEGRAM_CHAT_IDS")))]
+    try:
+        bridge = TelegramBridge(service, token, chat_ids)
+    except ValueError as err:
+        print(f"[TELEGRAM] Não iniciado: {err}", flush=True)
+        return None
+    bridge.start()
+    setattr(sys, "_byte_v90_active_telegram", bridge)
+    if chat_ids:
+        print(f"[TELEGRAM] Ponte ativa para o(s) chat(s) {chat_ids}. Envie /ajuda ao seu bot.", flush=True)
+    else:
+        print("[TELEGRAM] Ponte ativa em modo privado (sem chat_id). Envie uma mensagem ao bot para ele informar o seu "
+              "chat_id, salve-o no segredo TELEGRAM_CHAT_ID e rode a célula de novo.", flush=True)
+    return bridge
+
+
+def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True, telegram: bool = True) -> None:
     """
     COMANDO ÚNICO DE INICIALIZAÇÃO DO ECOSSISTEMA BYTE v10.1 (Hardware-Aware & Unrestricted Registry Edition):
     0. Tags do Ollama respeitadas sem alias, telemetria real de GPU/VRAM/RAM, validador de alocação em
@@ -8140,6 +8193,9 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
 
     server = ByteOmniServer(byte_service)
     port = server.start()
+
+    if telegram:
+        start_telegram_if_configured(byte_service)
 
     initial_state = byte_service.dispatch_request("status", {})
     html_ui = build_v90_web_ui(initial_state)
