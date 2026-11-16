@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "11.1"
+BYTE_VERSION = "11.1.1"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -6671,7 +6671,7 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<style>
+<style data-b90="1">
   #byte-v90-root {
     --bg: #090d16; --panel: #131c2e; --border: #263650;
     --accent: #38bdf8; --ok: #22c55e; --warn: #f59e0b; --danger: #ef4444; --purple: #c084fc;
@@ -7195,7 +7195,7 @@ pygame.time.Clock().tick(60)</textarea>
   </div>
 </div>
 
-<script>
+<script data-b90="1">
 (function() {
   function b90EncodeB64(obj) {
     const jsonStr = JSON.stringify(obj || {});
@@ -8258,11 +8258,46 @@ pygame.time.Clock().tick(60)</textarea>
     if (b90PollTimer) { clearInterval(b90PollTimer); b90PollTimer = null; }
     if (b90ClockId) { clearInterval(b90ClockId); b90ClockId = null; }
     if (inColab && res.html) {
-      document.open(); document.write(res.html); document.close();   // painel novo, já com o tema do perfil
+      try {
+        b90SwapPanel(res.html);                                      // só o painel é trocado; a célula do Colab fica intacta
+      } catch (err) {
+        b90MarkDisconnected();
+        const banner = document.getElementById('b90-dead-banner');
+        if (banner) banner.innerHTML = '⚠️ <b>O perfil foi trocado, mas o painel não pôde ser redesenhado.</b> Rode a célula <code>iniciar_byte()</code> de novo.';
+      }
     } else {
       location.reload();                                             // modo servidor: a página vem com o tema novo
     }
   };
+
+  // v11.1.1: NÃO usar document.write no Colab. Ele substitui a página inteira da célula de saída, inclusive os
+  // scripts do próprio Colab que dimensionam e exibem a saída, e o painel some. Aqui trocamos apenas o estilo,
+  // a <div> do painel e o script dele, dentro do mesmo lugar da página.
+  function b90SwapPanel(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const newRoot = doc.getElementById('byte-v90-root');
+    const newScripts = Array.from(doc.querySelectorAll('script'));
+    const oldRoot = document.getElementById('byte-v90-root');
+    if (!newRoot || !oldRoot || !newScripts.length) throw new Error('painel novo incompleto');
+    const host = oldRoot.parentNode;
+    const oldStyles = Array.from(document.querySelectorAll('style')).filter(st => st.dataset.b90 || st.textContent.includes('#byte-v90-root'));
+    const oldScripts = Array.from(document.querySelectorAll('script')).filter(sc => sc.dataset.b90 || sc.textContent.includes('b90EncodeB64'));
+    doc.querySelectorAll('style').forEach(st => {
+      const el = document.createElement('style');
+      el.setAttribute('data-b90', '1');
+      el.textContent = st.textContent;
+      host.insertBefore(el, oldRoot);
+    });
+    oldStyles.forEach(st => st.remove());
+    oldRoot.replaceWith(document.importNode(newRoot, true));
+    oldScripts.forEach(sc => sc.remove());                           // o código antigo já foi parado acima
+    newScripts.forEach(sc => {                                       // <script> criado via DOM executa; via innerHTML não
+      const el = document.createElement('script');
+      el.setAttribute('data-b90', '1');
+      el.textContent = sc.textContent;
+      host.appendChild(el);
+    });
+  }
 
   // ---------------- v11.0: perfil de trabalho ----------------
   let b90WorkFilesKey = '';

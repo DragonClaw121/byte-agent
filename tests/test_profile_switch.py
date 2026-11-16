@@ -150,3 +150,11 @@ def test_switch_is_hidden_without_a_switcher(tmp_path, fake):
         assert "não está disponível" in service.dispatch_request("switch_profile", {"profile": "trabalho"})["error"]
     finally:
         service.shutdown()
+
+
+def test_panel_never_rewrites_the_whole_colab_cell():
+    """Regressão v11.1.1: document.write apagava a célula de saída do Colab e o painel sumia após a troca."""
+    for theme in ("neon", "pro"):
+        page = engine.build_v90_web_ui({"llm": {}}, theme=theme)
+        assert "document.write(" not in page and "document.open(" not in page
+        assert "b90SwapPanel(res.html)" in page and '<style data-b90="1">' in page and '<script data-b90="1">' in page
