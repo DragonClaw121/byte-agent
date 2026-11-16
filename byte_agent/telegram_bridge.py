@@ -8,8 +8,10 @@ Segurança:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import sys
 import threading
 import time
 import urllib.error
@@ -98,9 +100,24 @@ class TelegramBridge:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        # Só UMA ponte por bot: duas disputam as mensagens (o Telegram responde 409 Conflict) e a antiga pode
+        # estar presa a um serviço já encerrado. O registro fica em `sys` para valer mesmo se o módulo for reimportado.
+        registry = sys.__dict__.setdefault("_byte_telegram_bridges", {})
+        key = hashlib.sha256(self._token.encode("utf-8")).hexdigest()
+        previous = registry.get(key)
+        if previous is not None and previous is not self:
+            try:
+                previous.stop()
+            except Exception:
+                pass
+        registry[key] = self
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="ByteTelegramBridge")
         self._thread.start()
+
+    def _service_closed(self) -> bool:
+        """True quando o serviço desta ponte foi encerrado (ex.: a célula do Colab foi executada de novo)."""
+        return bool(getattr(self.service, "closed", False))
 
     def stop(self) -> None:
         self._stop.set()
@@ -124,6 +141,11 @@ class TelegramBridge:
                          timeout_s=self.poll_timeout_s + 10)
         updates = data.get("result", [])
         for upd in updates:
+            if self._stop.is_set() or self._service_closed():
+                # Ponte substituída enquanto esperava o Telegram: não trata nem confirma a mensagem,
+                # assim a ponte nova a recebe (antes isto gerava "cannot operate on a closed database").
+                self.stop()
+                return 0
             self._offset = max(self._offset, int(upd.get("update_id", 0)) + 1)
             try:
                 self.handle_update(upd)
@@ -135,7 +157,7 @@ class TelegramBridge:
 
     def push_proactive(self) -> int:
         """Entrega as iniciativas autônomas da Byte nos chats autorizados."""
-        if not self.allowed:
+        if not self.allowed or self._stop.is_set() or self._service_closed():
             return 0
         items = self.service.db.pop_undelivered_proactive_messages()
         for item in items:

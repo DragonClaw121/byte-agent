@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "10.4.1"
+BYTE_VERSION = "10.4.2"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -5657,6 +5657,7 @@ class ByteEcosystemService:
 
     def shutdown(self) -> None:
         """Encerra o daemon proativo, faz um último push e fecha o banco (reinício limpo no mesmo runtime)."""
+        self.closed = True              # pontes (Telegram) ligadas a este serviço param sozinhas ao ver isto
         self.proactive_engine.stop()
         try:
             self.terminal.close()
@@ -8128,6 +8129,13 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     t0 = time.perf_counter()
 
     # Reexecutar a célula não pode deixar o daemon antigo vivo escrevendo no mesmo arquivo SQLite.
+    # v10.4.2: as pontes do Telegram da execução anterior param ANTES de o banco antigo ser fechado.
+    for _old_bridge in [getattr(sys, "_byte_v90_active_telegram", None)] + list(getattr(sys, "_byte_telegram_bridges", {}).values()):
+        if _old_bridge is not None:
+            try:
+                _old_bridge.stop()
+            except Exception:
+                pass
     _prev_service = getattr(sys, "_byte_v90_active_service", None)
     if _prev_service is not None:
         try:

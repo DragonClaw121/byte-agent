@@ -160,3 +160,39 @@ def test_proactive_messages_are_pushed(env):
 def test_split_message():
     parts = split_message("linha\n" * 2000)
     assert len(parts) > 1 and all(len(p) <= 3900 for p in parts)
+
+
+def test_replaced_bridge_does_not_touch_messages(env):
+    """Reexecutar a célula do Colab: a ponte antiga não pode tratar (nem confirmar) mensagens com o serviço fechado."""
+    tg, svc, bridge = env
+    tg.text(1, OWNER, "oi")
+    svc.closed = True                                   # serviço antigo encerrado (banco fechado)
+    assert bridge.poll_once() == 0 and svc.calls == [] and tg.sent == []
+    assert bridge._stop.is_set() and bridge._offset == 0
+    fresh_service = FakeService()
+    fresh = TelegramBridge(fresh_service, TOKEN, [OWNER], api_base=tg.url, poll_timeout_s=0)
+    assert fresh.poll_once() == 1                       # a ponte nova recebe a mesma mensagem
+    assert fresh_service.calls == [("chat", {"message": "oi"})]
+
+
+def test_stopped_bridge_ignores_late_updates_and_proactive(env):
+    tg, svc, bridge = env
+    tg.text(1, OWNER, "oi")
+    svc.db.outbox = [{"message": "lembrete"}]
+    bridge.stop()
+    assert bridge.poll_once() == 0 and bridge.push_proactive() == 0
+    assert svc.calls == [] and svc.db.outbox == [{"message": "lembrete"}]
+
+
+def test_only_one_bridge_per_bot_token(env):
+    tg, svc, bridge = env
+    bridge.poll_timeout_s = 1
+    bridge.start()
+    second = TelegramBridge(FakeService(), TOKEN, [OWNER], api_base=tg.url, poll_timeout_s=1)
+    second.start()
+    assert bridge._stop.is_set() and not second._stop.is_set()
+    other_bot = TelegramBridge(FakeService(), "999999:" + "B" * 30, [OWNER], api_base=tg.url, poll_timeout_s=1)
+    other_bot.start()
+    assert not second._stop.is_set()                    # bots diferentes não se derrubam
+    second.stop()
+    other_bot.stop()
