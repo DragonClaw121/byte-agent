@@ -109,7 +109,9 @@ def test_native_model_reads_agenda_and_answers_from_the_result(env):
     assert tool_msg["role"] == "tool" and "Validar arquitetura do EVFI" in tool_msg["content"]     # o modelo VIU o resultado
     system = rounds[0]["messages"][0]["content"]
     assert "function calling" in system and '<tool_call>{"tool"' not in system                      # prompt do modo nativo
-    assert {t["function"]["name"] for t in rounds[0]["tools"]} >= {"list_tasks", "add_task", "run_python", "email_send"}
+    offered = {t["function"]["name"] for t in rounds[0]["tools"]}
+    assert offered >= {"list_tasks", "add_task", "schedule_reminder"}
+    assert not offered & {"run_python", "run_shell", "email_send", "email_inbox"}        # pergunta de agenda não oferece código nem e-mail
 
 
 def test_native_add_task_writes_once_and_skips_background_extractor(env):
@@ -161,11 +163,11 @@ def test_model_without_tools_uses_text_mode(env):
 def test_native_failure_falls_back_to_text_mode_and_is_remembered(env):
     fake, service = env
     fake.script = [400]
-    res = service.interact("oi, tudo bem?")
+    res = service.interact("como está minha agenda?")
     assert res["tool_mode"] == "text" and "modo nativo falhou" in res["tool_mode_note"]
     assert res["response"] == fake.stream_reply
     n = len(fake.tool_rounds())
-    service.interact("e agora?")
+    service.interact("e as tarefas de amanhã?")
     assert len(fake.tool_rounds()) == n                                        # não tenta `tools` de novo neste modelo
 
 
@@ -184,3 +186,67 @@ def test_env_switch_disables_native_mode(env):
     service.llm.native_tools_enabled = False
     res = service.interact("oi")
     assert res["tool_mode"] == "text" and fake.tool_rounds() == []
+
+
+def test_knowledge_question_is_answered_directly_without_tools(env):
+    """Caso real: 'Me fale sobre a refração da luz' fazia o modelo pequeno propor curl em vez de responder."""
+    fake, service = env
+    fake.stream_reply = "A refração é a mudança de direção da luz ao passar de um meio para outro."
+    res = service.interact("Me fale sobre a refração da Luz")
+    assert fake.tool_rounds() == [] and res["response"] == fake.stream_reply
+    assert res["tool_mode"] == "text" and len(fake.requests) == 1                        # uma única geração
+    system = fake.requests[0]["messages"][0]["content"]
+    assert "NÃO tem acesso à internet" in system and "DIRETAMENTE" in system
+
+
+def test_tool_selection_by_intent_and_model_size(env):
+    fake, service = env
+    names = lambda msg, model=None: {t["function"]["name"] for t in service.select_tools_for_message(msg, model)}
+    internal = {n for n, spec in service.AGENT_TOOLS.items() if spec["auto"]}
+    assert names("Me fale sobre a refração da luz") == set()
+    assert names("explique listas em Python") == set()                                   # falar de código não é pedir para executar
+    assert names("o que tenho amanhã?") == internal
+    assert names("me lembra de beber água em 30 minutos") == internal
+    assert names("rode esse script para mim") == {"run_python", "run_shell"}
+    assert names("execute ls no terminal e veja minha agenda") == internal | {"run_python", "run_shell"}
+    assert names("leia minha caixa de entrada") == {"email_inbox", "email_send"}
+    assert names("mande um e-mail para a@b.com") == {"email_inbox", "email_send"}
+    service.llm.ollama_model_sizes["modelo-grande:7b"] = 5 * GIB                          # modelo de 7B decide sozinho quando usar agenda/memória
+    assert names("Me fale sobre a refração da luz", "modelo-grande:7b") == internal
+    assert not names("Me fale sobre a refração da luz", "modelo-grande:7b") & {"run_python", "run_shell", "email_send"}
+
+
+def test_tool_not_offered_this_turn_is_refused(env):
+    fake, service = env
+    fake.script = [call("run_shell", command="curl https://exemplo.com"), {"content": "Amanhã você está livre."}]
+    res = service.interact("o que tenho amanhã?")
+    assert "NÃO executada" not in res["response"] and "curl" not in res["response"]
+    assert "não existe" in fake.tool_rounds()[1]["messages"][-1]["content"]              # nem chega ao executor
+    turn = {"blocks": [], "executions": [], "wrote": False, "allowed": {"list_tasks"}}
+    assert "não está disponível" in service.run_agent_tool("run_shell", {"command": "id"}, turn) and turn["blocks"] == []
+
+
+def test_auto_router_keeps_the_model_the_user_chose():
+    R = engine.EffortBasedAutoRouter
+    hard = ("Implemente em Python uma API completa com classe, função, endpoint e teste unittest; refatore, otimize o algoritmo "
+            "passo a passo e analise a complexidade de forma detalhada, compare a arquitetura do sistema e corrija o bug do script bash no linux")
+    base = dict(mode="geral", loaded_vram_models=[], active_provider="ollama", configured_cloud_keys={})
+    installed = ["qwen2.5:3b", "mimo2.6:9b-q4_k_m", "qwen2.5-coder:7b"]
+    sizes = {"qwen2.5:3b": 2 * GIB, "mimo2.6:9b-q4_k_m": 6 * GIB, "qwen2.5-coder:7b": 5 * GIB}
+    out = R.evaluate_effort(user_msg=hard, installed_ollama_models=installed, active_model="Mimo2.6:9b-q4_k_m", model_sizes=sizes, **base)
+    assert out["effort_tier"] in {"HIGH_CODE", "DEEP_REASONING"} and out["routed_model"] == "mimo2.6:9b-q4_k_m"
+    out = R.evaluate_effort(user_msg="oi", installed_ollama_models=installed, active_model="mimo2.6:9b-q4_k_m", model_sizes=sizes, **base)
+    assert out["routed_model"] == "mimo2.6:9b-q4_k_m"
+    # modelo ativo pequeno + preferido maior instalado: aí sim o roteador sobe de modelo
+    out = R.evaluate_effort(user_msg=hard, installed_ollama_models=installed, active_model="qwen2.5:3b", model_sizes=sizes, **base)
+    assert out["routed_model"] == "qwen2.5-coder:7b"
+
+
+def test_failed_model_switch_is_announced_outside_the_panel(env):
+    fake, service = env
+    service.db.pop_undelivered_proactive_messages()
+    service.llm.ollama_installed = [TOOL_MODEL, PLAIN_MODEL]
+    service.llm.last_working_model = TOOL_MODEL
+    service.llm._rollback_to_working_model("pull model manifest: file does not exist", 0.0, requested="mimo2.6:9b-q4_k_m")
+    messages = [m["message"] for m in service.db.pop_undelivered_proactive_messages()]
+    assert len(messages) == 1 and "mimo2.6:9b-q4_k_m" in messages[0] and "file does not exist" in messages[0] and TOOL_MODEL in messages[0]
