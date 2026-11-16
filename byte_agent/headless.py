@@ -10,6 +10,7 @@ Configuração por variáveis de ambiente (veja .env.example):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import signal
@@ -27,10 +28,23 @@ from .twitch_bridge import TwitchAuth, TwitchChat
 from .vtube_studio import VTubeStudioClient
 
 
-def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None) -> Any:
-    """Monta banco, roteador, e-mail, terminal e serviço usando `data_dir` como armazenamento persistente."""
+def load_profile_data(data_dir: Path) -> dict:
+    """Lê <data_dir>/perfil.json (usuario, cargo, empresa, assinatura...). Arquivo ausente ou inválido = perfil vazio."""
+    try:
+        data = json.loads((Path(data_dir).expanduser() / "perfil.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None, profile: Optional[str] = None) -> Any:
+    """Monta banco, roteador, e-mail, terminal e serviço usando `data_dir` como armazenamento persistente.
+    Com profile="trabalho" ativa o prompt profissional e instala as ferramentas de trabalho (uma instância por perfil)."""
     data_dir = Path(data_dir).expanduser()
     (data_dir / "database").mkdir(parents=True, exist_ok=True)
+    profile_data = load_profile_data(data_dir) if profile else {}
+    if profile:
+        engine.apply_profile(profile, profile_data)
     vec = engine.VectorEngine()
     db = engine.UnifiedDatabase(data_dir / "database" / "byte.db", vec,
                                 drive_backup_path=data_dir / "database" / "byte_backup.db")
@@ -40,6 +54,10 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         llm.active_model = llm._require_valid_tag(model)[0]
     service = engine.ByteEcosystemService(db, llm, engine.RealEmailConnector(db),
                                           engine.MultiFrameGameTerminal(db, data_dir / "workspace"))
+    if profile and engine.ACTIVE_PROFILE == "trabalho":
+        from .work import WorkAssistant
+        service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem
+        WorkAssistant(service, data_dir, profile_data).install()
     return service
 
 
@@ -104,7 +122,7 @@ def parse_chat_ids(raw: str) -> List[int]:
 
 
 def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge], Optional[StreamDirector]]:
-    service = build_service(Path(args.data_dir), args.ollama_url, args.model)
+    service = build_service(Path(args.data_dir), args.ollama_url, args.model, profile=args.profile)
     if args.no_autonomy:
         service.proactive_engine.autonomous_mode_enabled = False
     service.llm.start_online_setup_async()
@@ -115,7 +133,9 @@ def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBrid
             raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
         server.token = args.ui_token
     port = server.start()
-    print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{args.host}:{port}/ui?token={server.token}", flush=True)
+    print(f"[BYTE v{engine.BYTE_VERSION} | perfil {engine.ACTIVE_PROFILE}] Painel: http://{args.host}:{port}/ui?token={server.token}", flush=True)
+    if engine.ACTIVE_PROFILE == "trabalho":
+        print(f"[BYTE] Planilhas em {Path(args.data_dir).expanduser() / 'arquivos'} | entregas em {Path(args.data_dir).expanduser() / 'entregas'}", flush=True)
 
     bridge: Optional[TelegramBridge] = None
     if args.telegram_token:
@@ -126,6 +146,8 @@ def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBrid
         else:
             print("[BYTE] Telegram ativo SEM lista de permissão: o bot só informará o chat_id de quem escrever. "
                   "Defina BYTE_TELEGRAM_CHAT_IDS e reinicie.", flush=True)
+    if engine.ACTIVE_PROFILE == "trabalho" and os.environ.get("BYTE_TWITCH_CHANNEL", "").strip():
+        raise SystemExit("O perfil de trabalho não liga a live da Twitch. Rode a VTuber em outra instância, com o perfil pessoal e outra pasta de dados.")
     director = build_stream(service, os.environ, Path(args.data_dir))
     if director is not None:
         director.chat.start()
@@ -142,6 +164,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     env = os.environ
     parser = argparse.ArgumentParser(prog="byte_agent", description="Byte em modo servidor (sem Colab).")
     parser.add_argument("--data-dir", default=env.get("BYTE_DATA_DIR", str(Path.home() / ".byte-agent")))
+    parser.add_argument("--profile", default=env.get("BYTE_PROFILE", "pessoal"), choices=["pessoal", "trabalho"],
+                        help="trabalho = instância separada, com e-mails, análises e apresentações (use outra --data-dir).")
     parser.add_argument("--ollama-url", default=env.get("OLLAMA_URL", ""))
     parser.add_argument("--model", default=env.get("BYTE_MODEL", ""))
     parser.add_argument("--host", default=env.get("BYTE_HOST", "127.0.0.1"),

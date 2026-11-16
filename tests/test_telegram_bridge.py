@@ -14,21 +14,40 @@ OWNER, STRANGER = 111, 999
 class FakeTelegram:
     def __init__(self):
         self.updates, self.sent, self.calls = [], [], []
+        self.documents, self.files = [], {}        # arquivos recebidos via sendDocument / arquivos baixáveis via getFile
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
+            def do_GET(self):
+                data = outer.files.get(self.path.rsplit("/", 1)[-1])
+                self.send_response(200 if data is not None else 404)
+                self.send_header("Content-Length", str(len(data or b"")))
+                self.end_headers()
+                self.wfile.write(data or b"")
+
             def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                raw_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 method = self.path.rsplit("/", 1)[-1]
+                if method == "sendDocument":
+                    outer.documents.append(raw_body)
+                    raw = json.dumps({"ok": True, "result": True}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                body = json.loads(raw_body or b"{}")
                 outer.calls.append((method, body))
                 result = True
                 if method == "getUpdates":
                     result = [u for u in outer.updates if u["update_id"] >= body.get("offset", 0)]
                 elif method == "sendMessage":
                     outer.sent.append(body)
+                elif method == "getFile":
+                    result = {"file_path": body.get("file_id")}
                 raw = json.dumps({"ok": True, "result": result}).encode()
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(raw)))

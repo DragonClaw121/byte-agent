@@ -12,6 +12,8 @@ byte_agent/
   vtube_studio.py      API do VTube Studio (expressões e boca) + wsclient.py (WebSocket)
   speech.py            voz por TTS externo com sincronia labial
   stream.py            diretor da live: filtros, persona isolada, emoções
+  work.py              perfil de trabalho: triagem de e-mails, análises e apresentações
+  work_data.py         leitura de CSV/XLSX, estatística, relatório HTML, apresentação HTML/PPTX
 tests/                 pytest (Ollama, nvidia-smi, ollama.com e Telegram simulados)
 deploy/                Dockerfile, docker-compose.yml e unidade systemd
 ```
@@ -104,6 +106,15 @@ O painel mostra em cada resposta qual modo foi usado. `BYTE_NATIVE_TOOLS=0` for�
 
 Execução de código sem aprovação existe (`BYTE_TOOL_AUTORUN=1`), mas não há sandbox: use por sua conta e risco.
 
+## Perfil de trabalho
+
+Instância separada, com visual limpo, para e-mails, análises de dados e apresentações. Nenhum e-mail sai sem
+aprovação e todo número de análise é calculado por código. Guia completo: [docs/perfil-trabalho.md](docs/perfil-trabalho.md).
+
+```bash
+python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
+```
+
 ## Live na Twitch com VTube Studio
 
 Passo a passo completo em [docs/live-twitch-vtube-studio.md](docs/live-twitch-vtube-studio.md).
@@ -120,6 +131,8 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 | 5. Lembretes e rotinas com horário real | feito |
 | 5b. Calendário externo, busca e leitura web, arquivos | pendente |
 | Live: Twitch + VTube Studio + voz | feito (testado só com servidores simulados) |
+| Perfil de trabalho: e-mails, análises, apresentações | feito (testado com e-mail e LLM simulados) |
+| Pesquisa na web (pesquisa profunda) | pendente |
 | 6. Sandbox de execução e permissões por ferramenta | pendente |
 | 7. Cliente leve em cada máquina | pendente |
 

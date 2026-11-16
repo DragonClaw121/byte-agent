@@ -8,8 +8,10 @@ Segurança:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import uuid
 import re
 import sys
 import threading
@@ -32,6 +34,8 @@ HELP_TEXT = (
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
     "/rotina <HH:MM> <instrução> — todo dia, a Byte executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
+    "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
+    "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
     "/limpar — limpa a janela de contexto da conversa\n"
     "/iniciativas on|off — liga/desliga mensagens espontâneas\n"
@@ -95,6 +99,59 @@ class TelegramBridge:
             if reply_markup and idx == len(chunks) - 1:
                 payload["reply_markup"] = reply_markup
             self._api("sendMessage", payload)
+
+    def send_document(self, chat_id: int, path: Any, caption: str = "") -> None:
+        """Envia um arquivo (multipart/form-data montado à mão; limite do Telegram para bots: 50 MB)."""
+        data = open(str(path), "rb").read()
+        boundary = "----byte" + uuid.uuid4().hex
+        name = str(getattr(path, "name", None) or str(path).rsplit("/", 1)[-1]).replace('"', "")
+        parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode("utf-8")]
+        if caption:
+            parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n{caption[:900]}\r\n'.encode("utf-8"))
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{name}"\r\n'
+                     f'Content-Type: application/octet-stream\r\n\r\n'.encode("utf-8") + data + b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        req = urllib.request.Request(f"{self.api_base}/bot{self._token}/sendDocument", data=b"".join(parts),
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=120.0) as resp:
+            if not json.loads(resp.read().decode("utf-8")).get("ok"):
+                raise RuntimeError("Telegram recusou o envio do arquivo.")
+
+    def send_with_cards(self, chat_id: int, text: str, prefix: str = "") -> int:
+        """Envia um texto e transforma cada bloco de e-mail pendente em uma mensagem com botões Aprovar/Descartar."""
+        cards = []
+        for match in EMAIL_CARD_RE.finditer(text):
+            try:
+                cards.append(json.loads(match.group(1)))
+            except ValueError:
+                continue
+        body = EMAIL_CARD_RE.sub("", text).strip()
+        self.send(chat_id, (prefix + body) if body else (prefix + "(sem texto)"))
+        for card in cards:
+            action_id = str(card.get("id", ""))
+            shown = {"to": str(card.get("to", "")), "subject": str(card.get("subject", "")), "body": str(card.get("body", ""))}
+            self._pending_cards[action_id] = shown
+            self.send(
+                chat_id,
+                f"✉️ E-mail preparado — NÃO enviado\nPara: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "✅ Aprovar e enviar", "callback_data": f"ok:{action_id}"},
+                    {"text": "❌ Descartar", "callback_data": f"no:{action_id}"},
+                ]]},
+            )
+        return len(cards)
+
+    def _send_outputs(self, chat_id: int, names: Any) -> None:
+        """Manda pelo Telegram os arquivos que a Byte acabou de gerar (relatório, apresentação)."""
+        provider = getattr(self.service, "file_provider", None)
+        for name in list(names or [])[:4]:
+            path = provider(name) if callable(provider) else None
+            if path is None:
+                continue
+            try:
+                self.send_document(chat_id, path)
+            except Exception as err:
+                self.send(chat_id, f"Não consegui enviar {name}: {type(err).__name__}. O arquivo está na pasta de entregas.")
 
     # ---------------- ciclo de vida ----------------
     def start(self) -> None:
@@ -162,7 +219,8 @@ class TelegramBridge:
         items = self.service.db.pop_undelivered_proactive_messages()
         for item in items:
             for chat_id in self.allowed:
-                self.send(chat_id, f"🤖 {item.get('message', '')}")
+                # rotinas (ex.: triagem da manhã) podem trazer rascunhos de e-mail: chegam com os botões de aprovação
+                self.send_with_cards(chat_id, str(item.get("message", "")), prefix="🤖 ")
         return len(items)
 
     # ---------------- tratamento ----------------
@@ -182,6 +240,10 @@ class TelegramBridge:
             return
         if "callback_query" in upd:
             self._handle_callback(chat_id, upd["callback_query"])
+            return
+        document = (upd.get("message") or {}).get("document")
+        if isinstance(document, dict):
+            self._handle_document(chat_id, document)
             return
         text = str((upd.get("message") or {}).get("text") or "").strip()
         if not text:
@@ -208,29 +270,41 @@ class TelegramBridge:
             self.send(chat_id, f"⚠️ {res['error']}")
             return
         reply = str(res.get("response") or "")
-        cards = []
-        for match in EMAIL_CARD_RE.finditer(reply):
-            try:
-                cards.append(json.loads(match.group(1)))
-            except ValueError:
-                continue
-        reply = EMAIL_CARD_RE.sub("", reply).strip()
         fb = res.get("model_fallback")
         if fb:
             reply += f"\n\nℹ️ Respondido por {fb.get('used')} ({fb.get('reason')})."
-        self.send(chat_id, reply or "(sem texto)")
-        for card in cards:
-            action_id = str(card.get("id", ""))
-            shown = {"to": str(card.get("to", "")), "subject": str(card.get("subject", "")), "body": str(card.get("body", ""))}
-            self._pending_cards[action_id] = shown
-            self.send(
-                chat_id,
-                f"✉️ E-mail preparado — NÃO enviado\nPara: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}",
-                reply_markup={"inline_keyboard": [[
-                    {"text": "✅ Aprovar e enviar", "callback_data": f"ok:{action_id}"},
-                    {"text": "❌ Descartar", "callback_data": f"no:{action_id}"},
-                ]]},
-            )
+        self.send_with_cards(chat_id, reply)
+        generated = re.findall(r"Arquivos gerados em entregas/: ([^\n]+)", reply)
+        if generated:
+            self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
+
+    def _handle_document(self, chat_id: int, doc: Dict[str, Any]) -> None:
+        """Planilha enviada como documento -> pasta de arquivos do perfil de trabalho."""
+        if "work_upload" not in getattr(self.service, "extra_actions", {}):
+            self.send(chat_id, "Receber arquivos só funciona no perfil de trabalho.")
+            return
+        if int(doc.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.send(chat_id, "Arquivo acima de 20 MB.")
+            return
+        info = self._api("getFile", {"file_id": doc.get("file_id")}).get("result") or {}
+        file_path = str(info.get("file_path") or "")
+        if not file_path or ".." in file_path:
+            self.send(chat_id, "Não consegui obter o arquivo no Telegram.")
+            return
+        with urllib.request.urlopen(f"{self.api_base}/file/bot{self._token}/{file_path}", timeout=60.0) as resp:
+            data = resp.read(20 * 1024 * 1024 + 1)
+        res = self._dispatch("work_upload", {"name": str(doc.get("file_name") or "arquivo.csv"),
+                                             "content_b64": base64.b64encode(data).decode("ascii")})
+        self.send(chat_id, f"Planilha '{res['saved']}' recebida ({res['size_kb']} KB). Envie /analise {res['saved']} para analisar.")
+
+    def _work(self, chat_id: int, action: str, payload: Dict[str, Any], busy: str) -> None:
+        if action not in getattr(self.service, "extra_actions", {}):
+            self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
+            return
+        self.send(chat_id, busy)
+        res = self._dispatch(action, payload)
+        self.send_with_cards(chat_id, str(res.get("response") or "Concluído."))
+        self._send_outputs(chat_id, res.get("outputs"))
 
     def _handle_callback(self, chat_id: int, cb: Dict[str, Any]) -> None:
         verb, _, action_id = str(cb.get("data") or "").partition(":")
@@ -327,6 +401,26 @@ class TelegramBridge:
                 f"Respostas: {st['stats'].get('replied', 0)} | bloqueadas: {st['stats'].get('blocked_input', 0) + st['stats'].get('blocked_output', 0)}",
                 f"Última fala: {(st.get('last_reply') or {}).get('text', '—')}",
             ]))
+        elif cmd == "/arquivos":
+            if "work_status" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
+                return
+            st = self._dispatch("work_status")
+            self.send(chat_id, "Planilhas para análise:\n" + ("\n".join(f"• {f['name']}" for f in st["inputs"]) or "(nenhuma)")
+                      + "\n\nEntregas recentes:\n" + ("\n".join(f"• {f['name']}" for f in st["outputs"][:8]) or "(nenhuma)"))
+        elif cmd in {"/analise", "/análise"}:
+            name, _, question = arg.partition(" ")
+            if not name:
+                self.send(chat_id, "Use: /analise <arquivo> [pergunta]. Veja os arquivos em /arquivos.")
+                return
+            self._work(chat_id, "work_analyze", {"file": name, "question": question.strip()}, f"Analisando {name}...")
+        elif cmd in {"/apresentacao", "/apresentação"}:
+            if not arg:
+                self.send(chat_id, "Use: /apresentacao <tema>")
+                return
+            self._work(chat_id, "work_presentation", {"topic": arg}, "Montando a apresentação...")
+        elif cmd == "/triagem":
+            self._work(chat_id, "work_triage", {"unread_only": arg.lower() != "todas"}, "Lendo a caixa de entrada...")
         elif cmd == "/limpar":
             self._dispatch("clear_context")
             self.send(chat_id, "Janela de contexto limpa.")
