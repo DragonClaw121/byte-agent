@@ -27,6 +27,10 @@ HELP_TEXT = (
     "/tarefa <texto> — adiciona uma tarefa\n"
     "/memorias — lista as memórias\n"
     "/lembrar <fato> — grava uma memória\n"
+    "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
+    "/rotina <HH:MM> <instrução> — todo dia, a Byte executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
+    "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
+    "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
     "/limpar — limpa a janela de contexto da conversa\n"
     "/iniciativas on|off — liga/desliga mensagens espontâneas\n"
     "Qualquer outro texto é enviado ao chat da Byte."
@@ -66,6 +70,7 @@ class TelegramBridge:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._pending_cards: Dict[str, Dict[str, str]] = {}   # action_id -> conteúdo exatamente como foi exibido
+        self.stream_director: Optional[Any] = None             # definido pelo modo servidor quando a live está ativa
         self.last_error: Optional[str] = None
 
     # ---------------- API do Telegram ----------------
@@ -263,6 +268,41 @@ class TelegramBridge:
                 return
             self._dispatch("add_memory", {"content": arg, "importance": 5})
             self.send(chat_id, "Memória gravada.")
+        elif cmd in {"/lembrete", "/rotina"}:
+            if not arg:
+                self.send(chat_id, "Use: /lembrete 30m beber água   ou   /rotina 08:00 resuma minha agenda de hoje")
+                return
+            routine = cmd == "/rotina"
+            res = self._dispatch("add_reminder", {"spec": arg, "repeat": "daily" if routine else "none", "run_as_task": routine})
+            self.send(chat_id, f"{'🗓️ Rotina diária' if routine else '⏰ Lembrete'} #{res['id']} para {res['due_local']}: {res['text']}")
+        elif cmd == "/lembretes":
+            items = self._dispatch("list_reminders").get("reminders") or []
+            self.send(chat_id, "\n".join(
+                f"#{r['id']} {'🗓️' if r['kind'] == 'mission' else '⏰'} {r['due_local']}"
+                f"{' (todo dia)' if r['repeat'] == 'daily' else (' (toda semana)' if r['repeat'] == 'weekly' else '')} — {r['text']}"
+                for r in items) or "Nenhum lembrete agendado.")
+        elif cmd == "/cancelar":
+            if not arg.lstrip("#").isdigit():
+                self.send(chat_id, "Use: /cancelar <id> (veja os ids em /lembretes)")
+                return
+            done = self._dispatch("cancel_reminder", {"reminder_id": int(arg.lstrip("#"))}).get("cancelled")
+            self.send(chat_id, "Cancelado." if done else "Não encontrei esse lembrete pendente.")
+        elif cmd == "/live":
+            director = self.stream_director
+            if director is None:
+                self.send(chat_id, "A live não está configurada nesta execução (defina BYTE_TWITCH_CHANNEL).")
+                return
+            if arg.lower() in {"on", "off"}:
+                director.set_paused(arg.lower() == "off")
+            st = director.status()
+            chat = st.get("chat") or {}
+            self.send(chat_id, "\n".join([
+                f"Live: {'⏸️ PAUSADA' if st['paused'] else '▶️ ativa'} | modo: {st['mode']} | fila: {st['queue']}",
+                f"Twitch: {'conectada a #' + str(chat.get('channel')) if chat.get('joined') else 'desconectada'}"
+                f"{' — ' + str(chat.get('fatal_error') or chat.get('last_error')) if (chat.get('fatal_error') or chat.get('last_error')) else ''}",
+                f"Respostas: {st['stats'].get('replied', 0)} | bloqueadas: {st['stats'].get('blocked_input', 0) + st['stats'].get('blocked_output', 0)}",
+                f"Última fala: {(st.get('last_reply') or {}).get('text', '—')}",
+            ]))
         elif cmd == "/limpar":
             self._dispatch("clear_context")
             self.send(chat_id, "Janela de contexto limpa.")

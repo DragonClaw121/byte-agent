@@ -8,6 +8,10 @@ byte_agent/
   engine.py            motor completo (o mesmo script único que roda no Colab)
   headless.py          modo servidor: roda fora do Colab, sempre ligada
   telegram_bridge.py   conversa com a Byte pelo Telegram
+  twitch_bridge.py     chat da Twitch (IRC sobre TLS, renovação de token)
+  vtube_studio.py      API do VTube Studio (expressões e boca) + wsclient.py (WebSocket)
+  speech.py            voz por TTS externo com sincronia labial
+  stream.py            diretor da live: filtros, persona isolada, emoções
 tests/                 pytest (Ollama, nvidia-smi, ollama.com e Telegram simulados)
 deploy/                Dockerfile, docker-compose.yml e unidade systemd
 ```
@@ -74,6 +78,33 @@ git push -u origin main
 
 O GitHub Actions (`.github/workflows/tests.yml`) roda os testes a cada push.
 
+## Ferramentas (modo híbrido)
+
+A cada turno a Byte consulta as capacidades do modelo que vai responder (`/api/show`):
+
+- **Modelo com `tools`** → modo nativo: a LLM chama ferramentas, recebe o resultado e continua (até 5 rodadas).
+  Automáticas: `get_datetime`, `list_tasks`, `add_task`, `search_memories`, `add_memory`.
+  Com aprovação humana: `run_python`, `run_shell`, `email_inbox`, `email_send`.
+- **Modelo sem `tools`, ou se o modo nativo falhar** → modo texto de sempre (`<tool_call>` + contexto injetado no prompt).
+
+O painel mostra em cada resposta qual modo foi usado. `BYTE_NATIVE_TOOLS=0` força o modo texto.
+
+## Autonomia por horário
+
+- **Lembrete:** "me lembra de ligar para o dentista às 15h" (a LLM agenda pela ferramenta), `/lembrete 30m beber água`
+  no Telegram, ou o campo de lembretes no painel. No horário, a mensagem chega no Telegram e no painel.
+- **Rotina:** `/rotina 08:00 resuma minha agenda de hoje` — todo dia, a Byte executa a instrução sozinha e envia o resultado.
+  Tarefas agendadas só usam ferramentas de leitura, agenda e memória: nunca código, e-mail ou novos agendamentos.
+- Se a máquina estava desligada na hora, o lembrete é entregue ao ligar, marcado como atrasado; rotinas disparam uma vez.
+- `/lembretes` lista, `/cancelar <id>` cancela. Em Docker, defina `TZ` no `.env`.
+
+Execução de código sem aprovação existe (`BYTE_TOOL_AUTORUN=1`), mas não há sandbox: use por sua conta e risco.
+
+## Live na Twitch com VTube Studio
+
+Passo a passo completo em [docs/live-twitch-vtube-studio.md](docs/live-twitch-vtube-studio.md).
+Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feliz] Oi, chat!"`
+
 ## Estado do roteiro
 
 | Passo | Situação |
@@ -81,8 +112,10 @@ O GitHub Actions (`.github/workflows/tests.yml`) roda os testes a cada push.
 | 1. Projeto versionado com testes | feito (o motor ainda é um arquivo único; ver abaixo) |
 | 2. Rodar fora do Colab, sempre ligada | feito (`headless.py`, Docker, systemd) |
 | 3. Canal em qualquer lugar | feito (Telegram) |
-| 4. Chamado de ferramentas nativo do Ollama | pendente |
-| 5. Calendário, lembretes com horário, busca web | pendente |
+| 4. Chamado de ferramentas nativo do Ollama | feito, híbrido (ver "Ferramentas") |
+| 5. Lembretes e rotinas com horário real | feito |
+| 5b. Calendário externo, busca e leitura web, arquivos | pendente |
+| Live: Twitch + VTube Studio + voz | feito (testado só com servidores simulados) |
 | 6. Sandbox de execução e permissões por ferramenta | pendente |
 | 7. Cliente leve em cada máquina | pendente |
 

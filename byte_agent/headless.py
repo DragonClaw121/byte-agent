@@ -5,6 +5,7 @@
 Configuração por variáveis de ambiente (veja .env.example):
     BYTE_DATA_DIR, OLLAMA_URL, BYTE_MODEL, BYTE_HOST, BYTE_PORT, BYTE_UI_TOKEN,
     BYTE_TELEGRAM_TOKEN, BYTE_TELEGRAM_CHAT_IDS
+    Live: BYTE_TWITCH_CHANNEL, BYTE_TWITCH_NICK, BYTE_TWITCH_TOKEN, BYTE_VTS_URL, BYTE_TTS_COMMAND (ver README)
 """
 from __future__ import annotations
 
@@ -19,7 +20,11 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from . import engine
+from .speech import SpeechEngine
+from .stream import StreamConfig, StreamDirector
 from .telegram_bridge import TelegramBridge
+from .twitch_bridge import TwitchAuth, TwitchChat
+from .vtube_studio import VTubeStudioClient
 
 
 def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None) -> Any:
@@ -38,11 +43,67 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
     return service
 
 
+def build_avatar(env: Any, data_dir: Path) -> Tuple[Optional[VTubeStudioClient], Optional[SpeechEngine]]:
+    """VTube Studio (BYTE_VTS_URL) e voz (BYTE_TTS_COMMAND), cada um opcional."""
+    vts: Optional[VTubeStudioClient] = None
+    speech: Optional[SpeechEngine] = None
+    vts_url = env.get("BYTE_VTS_URL", "").strip()
+    if vts_url:
+        vts = VTubeStudioClient(vts_url, token_path=Path(data_dir).expanduser() / "vtube_studio_token.txt")
+    tts_command = env.get("BYTE_TTS_COMMAND", "").strip()
+    if tts_command:
+        speech = SpeechEngine(tts_command, env.get("BYTE_AUDIO_PLAYER", ""), work_dir=Path(data_dir).expanduser() / "tts")
+    return vts, speech
+
+
+def build_stream(service: Any, env: Any, data_dir: Path) -> Optional[StreamDirector]:
+    """Monta a live se BYTE_TWITCH_CHANNEL estiver definido. Devolve o diretor já ligado ao chat (ainda não iniciado)."""
+    channel = env.get("BYTE_TWITCH_CHANNEL", "").strip()
+    if not channel:
+        return None
+    data_dir = Path(data_dir).expanduser()
+    config = StreamConfig.from_env(env, data_dir)
+    auth = TwitchAuth(env.get("BYTE_TWITCH_TOKEN", ""), env.get("BYTE_TWITCH_REFRESH_TOKEN", ""),
+                      env.get("BYTE_TWITCH_CLIENT_ID", ""), env.get("BYTE_TWITCH_CLIENT_SECRET", ""),
+                      store_path=data_dir / "twitch_tokens.json")
+    vts, speech = build_avatar(env, data_dir)
+    director = StreamDirector(service.llm, config, vts=vts, speech=speech)
+    director.chat = TwitchChat(env.get("BYTE_TWITCH_NICK", ""), auth, channel, on_message=director.on_chat)
+    return director
+
+
+def run_avatar_check(env: Any, data_dir: Path, say: str, list_hotkeys: bool) -> int:
+    """Testa o avatar e a voz SEM Twitch e sem LLM: lista hotkeys e/ou fala uma frase com sincronia labial."""
+    vts, speech = build_avatar(env, data_dir)
+    if vts is None and speech is None:
+        print("Defina BYTE_VTS_URL (ex.: ws://127.0.0.1:8001) e/ou BYTE_TTS_COMMAND antes de testar.")
+        return 2
+    if vts is not None:
+        print("Conectando ao VTube Studio... se aparecer um aviso no VTube Studio, clique em Allow.")
+        try:
+            names = [h.get("name") for h in vts.hotkeys(refresh=True)]
+            print(f"VTube Studio OK. Hotkeys do modelo atual: {names}")
+        except Exception as err:
+            print(f"VTube Studio: {err}")
+            return 1
+    if say:
+        config = StreamConfig.from_env(env, data_dir)
+        director = StreamDirector(llm=None, config=config, vts=vts, speech=speech)
+        result = director.finalize_reply(say)
+        if result is None:
+            print("A frase foi descartada pelo filtro de saída.")
+            return 1
+        print(f"Resultado: {director._perform(result[0], result[1], mention=None, to_chat=False)}")
+        if speech is not None and speech.last_error:
+            print(f"Voz: {speech.last_error}")
+    return 0
+
+
 def parse_chat_ids(raw: str) -> List[int]:
     return [int(x) for x in re.findall(r"-?\d+", raw or "")]
 
 
-def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge]]:
+def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge], Optional[StreamDirector]]:
     service = build_service(Path(args.data_dir), args.ollama_url, args.model)
     if args.no_autonomy:
         service.proactive_engine.autonomous_mode_enabled = False
@@ -65,7 +126,16 @@ def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBrid
         else:
             print("[BYTE] Telegram ativo SEM lista de permissão: o bot só informará o chat_id de quem escrever. "
                   "Defina BYTE_TELEGRAM_CHAT_IDS e reinicie.", flush=True)
-    return service, server, bridge
+    director = build_stream(service, os.environ, Path(args.data_dir))
+    if director is not None:
+        director.chat.start()
+        director.start()
+        if bridge is not None:
+            bridge.stream_director = director
+        parts = [f"Twitch #{director.chat.channel} (modo {director.cfg.respond_mode})",
+                 "VTube Studio" if director.vts else "sem avatar", "voz" if director.speech else "sem voz"]
+        print(f"[BYTE] Live ativa: {' | '.join(parts)}", flush=True)
+    return service, server, bridge, director
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -81,9 +151,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--telegram-token", default=env.get("BYTE_TELEGRAM_TOKEN", ""))
     parser.add_argument("--telegram-chat-ids", default=env.get("BYTE_TELEGRAM_CHAT_IDS", ""))
     parser.add_argument("--no-autonomy", action="store_true", help="Desliga as iniciativas espontâneas.")
+    parser.add_argument("--vts-hotkeys", action="store_true", help="Só conecta ao VTube Studio, lista os hotkeys e sai.")
+    parser.add_argument("--say", default="", help='Só testa avatar e voz com uma frase, ex.: --say "[feliz] Oi, chat!"')
     args = parser.parse_args(argv)
 
-    service, server, bridge = start_all(args)
+    if args.vts_hotkeys or args.say:
+        return run_avatar_check(os.environ, Path(args.data_dir), args.say, args.vts_hotkeys)
+
+    service, server, bridge, director = start_all(args)
     stop = threading.Event()
 
     def _graceful(*_: Any) -> None:
@@ -95,6 +170,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     last_retry = time.monotonic()
     while not stop.wait(5.0):
         llm = service.llm
+        if director is not None and director.chat.fatal_error and not getattr(director, "_fatal_reported", False):
+            director._fatal_reported = True
+            print(f"[BYTE] Twitch: {director.chat.fatal_error}", flush=True)
         # o Ollama pode subir depois da Byte (docker compose, reboot): tenta de novo a cada 30 s
         if (llm.connection_mode == "online" and not llm.ollama_gpu_warm and not llm.provision_state.get("running")
                 and time.monotonic() - last_retry >= 30.0):
@@ -102,6 +180,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             llm.start_online_setup_async()
 
     print("[BYTE] Encerrando...", flush=True)
+    if director is not None:
+        director.stop()
+        director.chat.stop()
+        if director.vts is not None:
+            director.vts.close()
     if bridge:
         bridge.stop()
     server.stop()
