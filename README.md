@@ -115,6 +115,9 @@ aprovação e todo número de análise é calculado por código. Guia completo: 
 python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 ```
 
+Com uma única instância, o seletor **VTuber · Trabalho** no título do painel (ou `/perfil` no Telegram) troca de
+perfil sem reiniciar nada; cada perfil mantém seus próprios dados.
+
 ## Live na Twitch com VTube Studio
 
 Passo a passo completo em [docs/live-twitch-vtube-studio.md](docs/live-twitch-vtube-studio.md).

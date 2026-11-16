@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import engine
 from .speech import SpeechEngine
@@ -121,43 +121,145 @@ def parse_chat_ids(raw: str) -> List[int]:
     return [int(x) for x in re.findall(r"-?\d+", raw or "")]
 
 
-def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge], Optional[StreamDirector]]:
-    service = build_service(Path(args.data_dir), args.ollama_url, args.model, profile=args.profile)
-    if args.no_autonomy:
-        service.proactive_engine.autonomous_mode_enabled = False
-    service.llm.start_online_setup_async()
+def profile_data_dirs(data_dir: Path, profile: str, env: Any) -> Dict[str, Path]:
+    """Pasta de cada perfil. A do perfil iniciado é --data-dir; a do outro vem de BYTE_WORK_DATA_DIR /
+    BYTE_PERSONAL_DATA_DIR ou, por padrão, de uma pasta irmã (~/.byte-agent <-> ~/.byte-agent-trabalho)."""
+    base = Path(data_dir).expanduser()
+    current = engine.normalize_profile_name(profile)
+    other = "trabalho" if current == "pessoal" else "pessoal"
+    explicit = env.get("BYTE_WORK_DATA_DIR" if other == "trabalho" else "BYTE_PERSONAL_DATA_DIR", "").strip()
+    if explicit:
+        other_dir = Path(explicit).expanduser()
+    elif other == "trabalho":
+        other_dir = base.with_name(base.name + "-trabalho")
+    elif base.name.endswith("-trabalho"):
+        other_dir = base.with_name(base.name[: -len("-trabalho")])
+    else:
+        other_dir = base.with_name(base.name + "-pessoal")
+    if other_dir.resolve() == base.resolve():
+        raise SystemExit("As pastas dos perfis pessoal e de trabalho precisam ser diferentes.")
+    return {current: base, other: other_dir}
 
-    server = engine.ByteOmniServer(service, host=args.host, port=args.port)
-    if args.ui_token:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{24,}", args.ui_token):
-            raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
-        server.token = args.ui_token
-    port = server.start()
-    print(f"[BYTE v{engine.BYTE_VERSION} | perfil {engine.ACTIVE_PROFILE}] Painel: http://{args.host}:{port}/ui?token={server.token}", flush=True)
-    if engine.ACTIVE_PROFILE == "trabalho":
-        print(f"[BYTE] Planilhas em {Path(args.data_dir).expanduser() / 'arquivos'} | entregas em {Path(args.data_dir).expanduser() / 'entregas'}", flush=True)
 
-    bridge: Optional[TelegramBridge] = None
-    if args.telegram_token:
-        bridge = TelegramBridge(service, args.telegram_token, parse_chat_ids(args.telegram_chat_ids))
-        bridge.start()
-        if bridge.allowed:
-            print(f"[BYTE] Telegram ativo para os chats: {sorted(bridge.allowed)}", flush=True)
-        else:
-            print("[BYTE] Telegram ativo SEM lista de permissão: o bot só informará o chat_id de quem escrever. "
-                  "Defina BYTE_TELEGRAM_CHAT_IDS e reinicie.", flush=True)
-    if engine.ACTIVE_PROFILE == "trabalho" and os.environ.get("BYTE_TWITCH_CHANNEL", "").strip():
-        raise SystemExit("O perfil de trabalho não liga a live da Twitch. Rode a VTuber em outra instância, com o perfil pessoal e outra pasta de dados.")
-    director = build_stream(service, os.environ, Path(args.data_dir))
-    if director is not None:
+class Runtime:
+    """Serviço ativo + servidor + Telegram + live, com troca de perfil sem reiniciar o processo."""
+
+    def __init__(self, args: argparse.Namespace, env: Any = None):
+        self.args = args
+        self.env = os.environ if env is None else env
+        self.dirs = profile_data_dirs(Path(args.data_dir), args.profile, self.env)
+        self.service: Any = None
+        self.server: Any = None
+        self.bridge: Optional[TelegramBridge] = None
+        self.director: Optional[StreamDirector] = None
+        self._lock = threading.Lock()
+        self.port = 0
+
+    @property
+    def data_dir(self) -> Path:
+        return self.dirs[engine.ACTIVE_PROFILE]
+
+    def _build(self, profile: str, model: Optional[str]) -> Any:
+        service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
+        if self.args.no_autonomy:
+            service.proactive_engine.autonomous_mode_enabled = False
+        service.profile_switcher = self.switch
+        return service
+
+    def _announce(self) -> None:
+        print(f"[BYTE v{engine.BYTE_VERSION}] Perfil ativo: {engine.PROFILE_LABELS[engine.ACTIVE_PROFILE]} | dados em {self.data_dir}", flush=True)
+        if engine.ACTIVE_PROFILE == "trabalho":
+            print(f"[BYTE] Planilhas em {self.data_dir / 'arquivos'} | entregas em {self.data_dir / 'entregas'}", flush=True)
+
+    def _start_live(self) -> None:
+        if engine.ACTIVE_PROFILE == "trabalho":
+            if self.env.get("BYTE_TWITCH_CHANNEL", "").strip():
+                print("[BYTE] Live desligada no perfil de trabalho (troque para VTuber para ligá-la).", flush=True)
+            return
+        director = build_stream(self.service, self.env, self.dirs["pessoal"])
+        if director is None:
+            return
         director.chat.start()
         director.start()
-        if bridge is not None:
-            bridge.stream_director = director
+        self.director = director
+        if self.bridge is not None:
+            self.bridge.stream_director = director
         parts = [f"Twitch #{director.chat.channel} (modo {director.cfg.respond_mode})",
                  "VTube Studio" if director.vts else "sem avatar", "voz" if director.speech else "sem voz"]
         print(f"[BYTE] Live ativa: {' | '.join(parts)}", flush=True)
-    return service, server, bridge, director
+
+    def _stop_live(self) -> None:
+        director, self.director = self.director, None
+        if self.bridge is not None:
+            self.bridge.stream_director = None
+        if director is not None:
+            director.stop()
+            director.chat.stop()
+            if director.vts is not None:
+                director.vts.close()
+
+    def start(self) -> "Runtime":
+        self.service = self._build(engine.normalize_profile_name(self.args.profile), self.args.model or None)
+        self.service.llm.start_online_setup_async()
+        self.server = engine.ByteOmniServer(self.service, host=self.args.host, port=self.args.port)
+        if self.args.ui_token:
+            if not re.fullmatch(r"[A-Za-z0-9_-]{24,}", self.args.ui_token):
+                raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
+            self.server.token = self.args.ui_token
+        port = self.port = self.server.start()
+        print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{self.args.host}:{port}/ui?token={self.server.token}", flush=True)
+        self._announce()
+        if self.args.telegram_token:
+            self.bridge = TelegramBridge(self.service, self.args.telegram_token, parse_chat_ids(self.args.telegram_chat_ids))
+            self.bridge.start()
+            if self.bridge.allowed:
+                print(f"[BYTE] Telegram ativo para os chats: {sorted(self.bridge.allowed)}", flush=True)
+            else:
+                print("[BYTE] Telegram ativo SEM lista de permissão: o bot só informará o chat_id de quem escrever. "
+                      "Defina BYTE_TELEGRAM_CHAT_IDS e reinicie.", flush=True)
+        self._start_live()
+        return self
+
+    def switch(self, target: str, want_html: bool = False) -> Dict[str, Any]:
+        """Troca VTuber (pessoal) <-> Trabalho: desliga a live, sobe o serviço do outro perfil com o mesmo modelo
+        e aponta painel e Telegram para ele. Chamado pelo painel (switch_profile) e por /perfil no Telegram."""
+        target = engine.normalize_profile_name(target)
+        with self._lock:
+            if target != engine.ACTIVE_PROFILE:
+                old = self.service
+                previous = (engine.ACTIVE_PROFILE, dict(engine.ACTIVE_PROFILE_DATA))
+                try:
+                    new = self._build(target, None)
+                except Exception:
+                    engine.apply_profile(*previous)
+                    raise
+                self._stop_live()
+                engine.transfer_runtime(old, new, servers=[self.server])
+                self.service = new
+                if self.bridge is not None:
+                    self.bridge.service = new
+                engine.start_llm_like(old, new)
+                self._announce()
+                self._start_live()
+            st = self.service.dispatch_request("status", {})
+        if want_html:
+            st["html"] = engine.build_v90_web_ui(st, token=self.server.token)
+        return st
+
+    def stop(self) -> None:
+        self._stop_live()
+        if self.bridge is not None:
+            self.bridge.stop()
+        if self.server is not None:
+            self.server.stop()
+        if self.service is not None:
+            self.service.shutdown()
+
+
+def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge], Optional[StreamDirector]]:
+    """Compatibilidade: inicia tudo e devolve (serviço, servidor, Telegram, live) do perfil inicial."""
+    runtime = Runtime(args).start()
+    return runtime.service, runtime.server, runtime.bridge, runtime.director
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -165,7 +267,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="byte_agent", description="Byte em modo servidor (sem Colab).")
     parser.add_argument("--data-dir", default=env.get("BYTE_DATA_DIR", str(Path.home() / ".byte-agent")))
     parser.add_argument("--profile", default=env.get("BYTE_PROFILE", "pessoal"), choices=["pessoal", "trabalho"],
-                        help="trabalho = instância separada, com e-mails, análises e apresentações (use outra --data-dir).")
+                        help="perfil inicial; dá para trocar depois pelo painel ou por /perfil no Telegram.")
     parser.add_argument("--ollama-url", default=env.get("OLLAMA_URL", ""))
     parser.add_argument("--model", default=env.get("BYTE_MODEL", ""))
     parser.add_argument("--host", default=env.get("BYTE_HOST", "127.0.0.1"),
@@ -182,7 +284,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.vts_hotkeys or args.say:
         return run_avatar_check(os.environ, Path(args.data_dir), args.say, args.vts_hotkeys)
 
-    service, server, bridge, director = start_all(args)
+    runtime = Runtime(args).start()
     stop = threading.Event()
 
     def _graceful(*_: Any) -> None:
@@ -193,7 +295,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     last_retry = time.monotonic()
     while not stop.wait(5.0):
-        llm = service.llm
+        llm = runtime.service.llm
+        director = runtime.director
         if director is not None and director.chat.fatal_error and not getattr(director, "_fatal_reported", False):
             director._fatal_reported = True
             print(f"[BYTE] Twitch: {director.chat.fatal_error}", flush=True)
@@ -204,15 +307,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             llm.start_online_setup_async()
 
     print("[BYTE] Encerrando...", flush=True)
-    if director is not None:
-        director.stop()
-        director.chat.stop()
-        if director.vts is not None:
-            director.vts.close()
-    if bridge:
-        bridge.stop()
-    server.stop()
-    service.shutdown()
+    runtime.stop()
     return 0
 
 

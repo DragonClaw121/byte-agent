@@ -55,6 +55,20 @@ python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 A VTuber continua sendo outra instância (`--profile pessoal`, outra `--data-dir` e outra porta). O perfil de
 trabalho se recusa a ligar a live.
 
+## Trocar entre VTuber e Trabalho
+
+No canto do título do painel há um seletor discreto **VTuber · Trabalho**. Clique no perfil desejado e clique de
+novo em "Confirmar?". A Byte reinicia no outro perfil em poucos segundos, sem rodar a célula de novo, e o painel
+troca de visual sozinho. Pelo Telegram: `/perfil` mostra o atual, `/perfil trabalho` e `/perfil vtuber` trocam.
+
+- Cada perfil guarda a própria conversa, agenda, lembretes e memórias; trocar não mistura nada.
+- O modelo, os parâmetros e as chaves de API continuam os mesmos, e o modelo já carregado na GPU é aproveitado.
+- No perfil de trabalho a live da Twitch é desligada; ao voltar para VTuber ela liga de novo (modo servidor).
+- No Colab, os dados do perfil de trabalho ficam salvos em `MyDrive/byte-trabalho/perfil.json` na primeira vez
+  que você iniciar com `dados_perfil`; depois disso a troca os reaproveita.
+- No modo servidor, a pasta do outro perfil é uma pasta irmã (`~/.byte-agent` ↔ `~/.byte-agent-trabalho`), ou a
+  definida em `BYTE_WORK_DATA_DIR` / `BYTE_PERSONAL_DATA_DIR`.
+
 ## Usar
 
 **Painel:** aba "Trabalho". Escolha a planilha (ou envie uma), escreva a pergunta e clique em analisar; ou clique

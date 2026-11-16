@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "11.0"
+BYTE_VERSION = "11.1"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1635,8 +1635,18 @@ _PROMPT_TOOLS_SECTION = _PERSONAL_SYSTEM_PROMPT[
 _PROMPT_GUIDELINES_SECTION = _PERSONAL_SYSTEM_PROMPT[_PERSONAL_SYSTEM_PROMPT.index("4. DIRETRIZES DE RESPOSTA:"):]
 
 ACTIVE_PROFILE = "pessoal"
+ACTIVE_PROFILE_DATA: Dict[str, Any] = {}
 UI_THEME = "neon"
 OWNER_NAME = "Gabriel"
+PROFILE_LABELS = {"pessoal": "VTuber (pessoal)", "trabalho": "Trabalho"}
+
+
+def normalize_profile_name(profile: Any) -> str:
+    name = str(profile or "pessoal").strip().lower().translate(TRANSLATION_TABLE)
+    name = {"work": "trabalho", "personal": "pessoal", "vtuber": "pessoal", "": "pessoal"}.get(name, name)
+    if name not in {"pessoal", "trabalho"}:
+        raise ValueError("Perfil deve ser 'pessoal' (VTuber) ou 'trabalho'.")
+    return name
 
 WORK_GUIDELINES = (
     "\n- Tom profissional, cordial e objetivo; sem gírias e sem emojis."
@@ -1665,14 +1675,12 @@ def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = N
 
 def apply_profile(profile: str = "pessoal", profile_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Ativa um perfil para ESTE processo (rode uma instância por perfil, cada uma com sua pasta de dados)."""
-    global ACTIVE_PROFILE, UI_THEME, OWNER_NAME, USER_PROFILE_FIXED_JSON, SYSTEM_PROMPT_V100, SYSTEM_PROMPT_V90
+    global ACTIVE_PROFILE, ACTIVE_PROFILE_DATA, UI_THEME, OWNER_NAME, USER_PROFILE_FIXED_JSON, SYSTEM_PROMPT_V100, SYSTEM_PROMPT_V90
     global SYSTEM_PROMPT_TOOLS_TEXT_BLOCK
-    name = str(profile or "pessoal").strip().lower().translate(TRANSLATION_TABLE)
-    name = {"work": "trabalho", "personal": "pessoal", "": "pessoal"}.get(name, name)
-    if name not in {"pessoal", "trabalho"}:
-        raise ValueError("Perfil deve ser 'pessoal' ou 'trabalho'.")
+    name = normalize_profile_name(profile)
     data = dict(profile_data or {}) if isinstance(profile_data, dict) else {}
     ACTIVE_PROFILE = name
+    ACTIVE_PROFILE_DATA = dict(data)
     if name == "trabalho":
         UI_THEME = "pro"
         OWNER_NAME = str(data.get("usuario") or "você").split()[0]
@@ -5791,6 +5799,7 @@ class ByteEcosystemService:
         self.mission_interceptors: List[Tuple[Any, Any]] = []      # (regex, função(instrução) -> texto): fluxos determinísticos
         self.status_providers: Dict[str, Any] = {}                 # chave no status -> função() -> valor
         self.file_provider: Optional[Any] = None                   # nome de arquivo -> Path servível em /files/<nome>
+        self.profile_switcher: Optional[Any] = None                # v11.1: (perfil, want_html) -> status do serviço novo
         self.closed = False
         self.realtime_telemetry_feed: List[Dict[str, Any]] = []
 
@@ -6460,6 +6469,7 @@ class ByteEcosystemService:
                     "evolver": self.evolver.status(),
                     "version": BYTE_VERSION,
                     "profile": ACTIVE_PROFILE,
+                    "profile_switch_available": callable(self.profile_switcher),
                 }
                 for provider_key, provider in self.status_providers.items():
                     try:
@@ -6637,6 +6647,10 @@ class ByteEcosystemService:
                 res = {"cancelled": self.db.cancel_reminder(int(payload["reminder_id"]))}
             elif action == "del_memory":
                 res = {"deleted": self.db.delete_memory(int(payload["memory_id"]))}
+            elif action == "switch_profile":
+                if not callable(self.profile_switcher):
+                    raise RuntimeError("A troca de perfil não está disponível nesta execução.")
+                res = self.profile_switcher(str(payload.get("profile", "")), bool(payload.get("want_html", False)))
             elif action in self.extra_actions:
                 res = self.extra_actions[action](payload)
             else:
@@ -6666,6 +6680,12 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
     padding: 14px; border-radius: 12px; border: 1px solid var(--border); max-width: 1180px; margin: 6px auto;
   }
   #byte-v90-root * { box-sizing: border-box; }
+  .b90-profile-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 2px; gap: 2px; opacity: 0.75; vertical-align: middle; }
+  .b90-profile-switch:hover { opacity: 1; }
+  .b90-profile-switch button { background: transparent; border: none; color: var(--muted); font-size: 0.68rem; font-weight: 600; padding: 3px 9px; border-radius: 999px; cursor: pointer; font-family: inherit; }
+  .b90-profile-switch button.active { background: var(--border); color: var(--text); cursor: default; }
+  .b90-profile-switch button:disabled { cursor: wait; }
+  .b90-profile-msg { font-size: 0.7rem; color: var(--danger); margin-left: 6px; }
   .b90-header { display: flex; justify-content: space-between; align-items: center; background: var(--panel); padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
   .b90-header h2 { margin: 0; font-size: 1.02rem; color: var(--accent); }
   .b90-badge { background: #052e16; padding: 5px 11px; border-radius: 999px; font-size: 0.74rem; border: 1px solid var(--ok); color: #4ade80; font-weight: 700; cursor: pointer; }
@@ -6716,7 +6736,15 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
     Este painel é de uma execução anterior e não funciona mais: rode a célula <code>iniciar_byte()</code> de novo e use o painel novo que aparecer.
   </div>
   <div class="b90-header">
-    <h2 id="b90-title">⚡ Byte — agente pessoal</h2>
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h2 id="b90-title">⚡ Byte — agente pessoal</h2>
+      <div id="b90-profile-switch" class="b90-profile-switch" style="display:none;" role="group" aria-label="Perfil"
+           title="Trocar de perfil. A Byte reinicia no outro perfil; cada um guarda os próprios dados.">
+        <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">VTuber</button>
+        <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
+      </div>
+      <span id="b90-profile-msg" class="b90-profile-msg"></span>
+    </div>
     <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
       <div id="b90-live-timer" class="b90-timer">⏱️ UI Ativa (0.0 ms)</div>
       <div id="b90-gpu-badge" class="b90-badge-gpu" title="GPU detectada por nvidia-smi, VRAM livre/total e veredito do validador para o modelo ativo">🖥️ GPU: detectando...</div>
@@ -7690,6 +7718,7 @@ pygame.time.Clock().tick(60)</textarea>
     `).join('') || '<pre class="b90-pre">Sem compromissos na agenda.</pre>';
 
     if (st.work && !st.work.error) b90RenderWork(st.work);
+    b90RenderProfileSwitch(st);
 
     if (st.reminders) {
       document.getElementById('b90-reminders-list').innerHTML = st.reminders.map(r => `
@@ -8183,6 +8212,58 @@ pygame.time.Clock().tick(60)</textarea>
     await window.b90Refresh();
   };
 
+  // ---------------- v11.1: troca discreta de perfil (VTuber <-> Trabalho) ----------------
+  const b90ProfileNames = { pessoal: 'VTuber', trabalho: 'Trabalho' };
+  let b90ProfileArmed = null;
+  let b90ProfileSwitching = false;
+
+  function b90RenderProfileSwitch(st) {
+    const box = document.getElementById('b90-profile-switch');
+    if (!box || st.profile_switch_available === undefined) return;
+    box.style.display = st.profile_switch_available ? '' : 'none';
+    if (b90ProfileSwitching) return;
+    box.querySelectorAll('button').forEach(b => {
+      b.classList.toggle('active', b.dataset.profile === (st.profile || 'pessoal'));
+      if (b90ProfileArmed !== b.dataset.profile) b.innerText = b90ProfileNames[b.dataset.profile];
+    });
+  }
+
+  window.b90SwitchProfile = async function(target, btn) {
+    const current = (b90State && b90State.profile) || 'pessoal';
+    const msg = document.getElementById('b90-profile-msg');
+    if (target === current || b90ProfileSwitching) return;
+    if (b90ProfileArmed !== target) {              // 1º clique só arma: evita trocar por engano
+      b90ProfileArmed = target;
+      btn.innerText = 'Confirmar?';
+      setTimeout(() => { if (b90ProfileArmed === target) { b90ProfileArmed = null; btn.innerText = b90ProfileNames[target]; } }, 4000);
+      return;
+    }
+    b90ProfileArmed = null;
+    b90ProfileSwitching = true;
+    msg.innerText = '';
+    document.querySelectorAll('#b90-profile-switch button').forEach(b => b.disabled = true);
+    btn.innerText = 'Trocando...';
+    const inColab = !!(window.google && google.colab && google.colab.kernel);
+    const res = await b90Call('switch_profile', { profile: target, want_html: inColab });
+    if (res.error || res.profile !== target) {
+      b90ProfileSwitching = false;
+      document.querySelectorAll('#b90-profile-switch button').forEach(b => b.disabled = false);
+      btn.innerText = b90ProfileNames[target];
+      msg.innerText = `Não foi possível trocar: ${res.error || 'resposta inesperada'}`;
+      return;
+    }
+    // Para este painel antes de desenhar o novo: nada do perfil anterior continua consultando o servidor.
+    b90Disconnected = true;
+    clearInterval(window.b90HeartbeatId);
+    if (b90PollTimer) { clearInterval(b90PollTimer); b90PollTimer = null; }
+    if (b90ClockId) { clearInterval(b90ClockId); b90ClockId = null; }
+    if (inColab && res.html) {
+      document.open(); document.write(res.html); document.close();   // painel novo, já com o tema do perfil
+    } else {
+      location.reload();                                             // modo servidor: a página vem com o tema novo
+    }
+  };
+
   // ---------------- v11.0: perfil de trabalho ----------------
   let b90WorkFilesKey = '';
   function b90RenderWork(work) {
@@ -8270,7 +8351,7 @@ pygame.time.Clock().tick(60)</textarea>
   window.b90DelMem = async function(id) { await b90Call('del_memory', { memory_id: id }); await window.b90Refresh(); };
 
   // Heartbeat a cada 4s para atualizar agenda extraída em background e iniciativas proativas
-  setInterval(async () => {
+  window.b90HeartbeatId = setInterval(async () => {
     const poll = await b90Call('poll_proactive', {}, true);
     if (poll && !poll.error) {
       if (poll.llm) b90RenderState({
@@ -8506,6 +8587,47 @@ class ByteOmniServer:
 byte_service: Optional[ByteEcosystemService] = None
 
 
+LLM_SETTINGS_CARRIED = ("active_provider", "active_model", "last_working_model", "temperature", "num_ctx", "num_predict",
+                        "auto_effort_routing", "native_tools_enabled", "force_oom_override")
+
+
+def transfer_runtime(old_service: "ByteEcosystemService", new_service: "ByteEcosystemService", servers: Any = ()) -> None:
+    """v11.1 — põe `new_service` no lugar de `old_service` sem reiniciar o processo: mantém modelo, parâmetros e
+    chaves de API; aponta servidores HTTP e pontes do Telegram para o serviço novo; e encerra o antigo depois de
+    uma pequena folga, para uma requisição em andamento terminar."""
+    old_llm, new_llm = old_service.llm, new_service.llm
+    for attr in LLM_SETTINGS_CARRIED:
+        if hasattr(old_llm, attr):
+            setattr(new_llm, attr, getattr(old_llm, attr))
+    new_llm.api_keys = dict(old_llm.api_keys)
+    new_service.profile_switcher = old_service.profile_switcher
+    for server in servers or ():
+        if server is not None:
+            server.service = new_service
+    for bridge in list(getattr(sys, "_byte_telegram_bridges", {}).values()):
+        if getattr(bridge, "service", None) is old_service:
+            bridge.service = new_service
+    if getattr(sys, "_byte_v90_active_service", None) is old_service:
+        setattr(sys, "_byte_v90_active_service", new_service)
+    old_service.proactive_engine.stop()           # o antigo para de agir na hora; banco e terminal fecham em seguida
+
+    def _close_later() -> None:
+        time.sleep(2.0)
+        try:
+            old_service.shutdown()
+        except Exception:
+            pass
+
+    threading.Thread(target=_close_later, daemon=True, name="ByteOldServiceShutdown").start()
+
+
+def start_llm_like(previous: "ByteEcosystemService", new_service: "ByteEcosystemService") -> None:
+    if previous.llm.connection_mode == "offline":
+        new_service.llm.set_connection_mode("offline")
+    else:
+        new_service.llm.start_online_setup_async()
+
+
 def _read_secret(names: Tuple[str, ...]) -> str:
     """Primeiro valor não vazio entre os nomes dados, procurando nos Segredos do Colab e nas variáveis de ambiente.
     Segredo inexistente ou sem acesso liberado ao notebook conta como ausente."""
@@ -8559,52 +8681,12 @@ def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: A
     return bridge
 
 
-def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True, telegram: bool = True,
-                 perfil: str = "pessoal", dados_perfil: Optional[Dict[str, Any]] = None) -> None:
-    """
-    COMANDO ÚNICO DE INICIALIZAÇÃO DO ECOSSISTEMA BYTE v10.1 (Hardware-Aware & Unrestricted Registry Edition):
-    0. Tags do Ollama respeitadas sem alias, telemetria real de GPU/VRAM/RAM, validador de alocação em
-       3 níveis e busca ao vivo com download, aquecimento e ativação de qualquer modelo gratuito.
-    1. Embeddings Reais (/api/embed) + Resumo Episódico Automático da Janela.
-    2. Metacognição Arquitetural no System Prompt + Perfil JSON Estruturado.
-    3. Tool Calling Autônomo no Chat (Python, Pygame, Bash e E-mail).
-    4. Extração de Agenda e Memórias em Background Assíncrono (Zero atraso no chat).
-    5. Cadeia de Auditoria Criptográfica SHA-256 + Filtro de Segurança Shell.
-    6. Botão 1-Clique "Enviar e Rodar no Terminal" nos blocos de código do Chat.
-    7. Calibração Dinâmica do Auto-Router via Feedback do Usuário (routing_feedback).
-    """
-    global byte_service
-    t0 = time.perf_counter()
-    profile_info = apply_profile(perfil, dados_perfil)
-    is_work = profile_info["profile"] == "trabalho"
-
-    # Reexecutar a célula não pode deixar o daemon antigo vivo escrevendo no mesmo arquivo SQLite.
-    # v10.4.2: as pontes do Telegram da execução anterior param ANTES de o banco antigo ser fechado.
-    for _old_bridge in [getattr(sys, "_byte_v90_active_telegram", None)] + list(getattr(sys, "_byte_telegram_bridges", {}).values()):
-        if _old_bridge is not None:
-            try:
-                _old_bridge.stop()
-            except Exception:
-                pass
-    _prev_service = getattr(sys, "_byte_v90_active_service", None)
-    if _prev_service is not None:
-        try:
-            _prev_service.shutdown()
-        except Exception:
-            pass
-        setattr(sys, "_byte_v90_active_service", None)
-
-    drive_mount = Path("/content/drive")
-    mydrive = drive_mount / "MyDrive"
-    if modo_conexao.strip().lower() == "online" and montar_drive_automatico and not mydrive.is_dir():
-        try:
-            from google.colab import drive as colab_drive  # type: ignore
-            print("[SETUP ONLINE] Montando Google Drive (/content/drive)...", flush=True)
-            colab_drive.mount(str(drive_mount), force_remount=False)
-        except Exception:
-            pass
-
-    # v11.0: o perfil de trabalho tem pasta e banco PRÓPRIOS; nada se mistura com a Byte pessoal.
+def _build_colab_service(perfil: str, dados_perfil: Optional[Dict[str, Any]] = None) -> Tuple["ByteEcosystemService", Path]:
+    """Cria banco, roteador e serviço de UM perfil (Colab ou script local). Não inicia servidor, Telegram nem interface.
+    Os dados do perfil de trabalho ficam em <pasta do perfil>/perfil.json, para a troca de perfil reaproveitá-los."""
+    name = normalize_profile_name(perfil)
+    is_work = name == "trabalho"
+    mydrive = Path("/content/drive") / "MyDrive"
     drive_root = mydrive / ("byte-trabalho" if is_work else "agente-pessoal-evolutivo")
     active_root = drive_root if mydrive.is_dir() else Path("./byte_trabalho_local" if is_work else "./agente_pessoal_evolutivo_local")
     active_root.mkdir(parents=True, exist_ok=True)
@@ -8612,6 +8694,22 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     local_fast_db = Path("/tmp/byte_trabalho_runtime.db" if is_work else "/tmp/byte_v90_metacognitive_runtime.db")
     drive_backup_db = active_root / "data" / "database" / "byte_v90_omni_backup.db"
     workspace_dir = active_root / "workspace_projects"
+
+    profile_file = active_root / "perfil.json"
+    profile_data: Dict[str, Any] = {}
+    if is_work and isinstance(dados_perfil, dict) and dados_perfil:
+        profile_data = dict(dados_perfil)
+        try:
+            profile_file.write_text(json.dumps(profile_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+    elif is_work and profile_file.is_file():
+        try:
+            loaded = json.loads(profile_file.read_text(encoding="utf-8"))
+            profile_data = loaded if isinstance(loaded, dict) else {}
+        except (OSError, ValueError):
+            profile_data = {}
+    apply_profile(name, profile_data)
 
     vec = VectorEngine()
     db = UnifiedDatabase(local_fast_db, vec, drive_backup_path=drive_backup_db)
@@ -8645,16 +8743,68 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     if is_work:
         llm.drive_project_root = active_root                 # o backup do Drive vai para a pasta do perfil de trabalho
         db.update_drive_backup_path(drive_backup_db)
-    byte_service = ByteEcosystemService(db, llm, email_client, terminal)
-    setattr(sys, "_byte_v90_active_service", byte_service)
+    service = ByteEcosystemService(db, llm, email_client, terminal)
     if is_work:
-        byte_service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem ativos
+        service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem ativos
         try:
             from byte_agent.work import WorkAssistant
-            WorkAssistant(byte_service, active_root).install()
+            WorkAssistant(service, active_root, profile_data).install()
             print(f"[TRABALHO] Perfil de trabalho ativo. Coloque planilhas em: {active_root / 'arquivos'} | entregas em: {active_root / 'entregas'}", flush=True)
         except Exception as work_err:
             print(f"[TRABALHO] Ferramentas de trabalho não carregadas: {type(work_err).__name__}: {work_err}", flush=True)
+
+    return service, active_root
+
+
+def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True, telegram: bool = True,
+                 perfil: str = "pessoal", dados_perfil: Optional[Dict[str, Any]] = None) -> None:
+    """
+    COMANDO ÚNICO DE INICIALIZAÇÃO DO ECOSSISTEMA BYTE v10.1 (Hardware-Aware & Unrestricted Registry Edition):
+    0. Tags do Ollama respeitadas sem alias, telemetria real de GPU/VRAM/RAM, validador de alocação em
+       3 níveis e busca ao vivo com download, aquecimento e ativação de qualquer modelo gratuito.
+    1. Embeddings Reais (/api/embed) + Resumo Episódico Automático da Janela.
+    2. Metacognição Arquitetural no System Prompt + Perfil JSON Estruturado.
+    3. Tool Calling Autônomo no Chat (Python, Pygame, Bash e E-mail).
+    4. Extração de Agenda e Memórias em Background Assíncrono (Zero atraso no chat).
+    5. Cadeia de Auditoria Criptográfica SHA-256 + Filtro de Segurança Shell.
+    6. Botão 1-Clique "Enviar e Rodar no Terminal" nos blocos de código do Chat.
+    7. Calibração Dinâmica do Auto-Router via Feedback do Usuário (routing_feedback).
+    """
+    global byte_service
+    t0 = time.perf_counter()
+    normalize_profile_name(perfil)               # valida antes de derrubar a execução anterior
+
+    # Reexecutar a célula não pode deixar o daemon antigo vivo escrevendo no mesmo arquivo SQLite.
+    # v10.4.2: as pontes do Telegram da execução anterior param ANTES de o banco antigo ser fechado.
+    for _old_bridge in [getattr(sys, "_byte_v90_active_telegram", None)] + list(getattr(sys, "_byte_telegram_bridges", {}).values()):
+        if _old_bridge is not None:
+            try:
+                _old_bridge.stop()
+            except Exception:
+                pass
+    _prev_service = getattr(sys, "_byte_v90_active_service", None)
+    if _prev_service is not None:
+        try:
+            _prev_service.shutdown()
+        except Exception:
+            pass
+        setattr(sys, "_byte_v90_active_service", None)
+
+    drive_mount = Path("/content/drive")
+    mydrive = drive_mount / "MyDrive"
+    if modo_conexao.strip().lower() == "online" and montar_drive_automatico and not mydrive.is_dir():
+        try:
+            from google.colab import drive as colab_drive  # type: ignore
+            print("[SETUP ONLINE] Montando Google Drive (/content/drive)...", flush=True)
+            colab_drive.mount(str(drive_mount), force_remount=False)
+        except Exception:
+            pass
+
+    # v11.0: o perfil de trabalho tem pasta e banco PRÓPRIOS; nada se mistura com a Byte pessoal.
+    byte_service, active_root = _build_colab_service(perfil, dados_perfil)
+    setattr(sys, "_byte_v90_active_service", byte_service)
+    llm = byte_service.llm
+    db = byte_service.db
 
     if modo_conexao.strip().lower() == "offline":
         llm.set_connection_mode("offline")
@@ -8663,6 +8813,29 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
 
     server = ByteOmniServer(byte_service)
     port = server.start()
+
+    def _switch_profile(target: str, want_html: bool = False) -> Dict[str, Any]:
+        """v11.1 — troca VTuber (pessoal) <-> Trabalho dentro da mesma sessão, sem rodar a célula de novo."""
+        global byte_service
+        current = byte_service
+        target_name = normalize_profile_name(target)
+        if target_name != ACTIVE_PROFILE:
+            previous = (ACTIVE_PROFILE, dict(ACTIVE_PROFILE_DATA))
+            try:
+                new_service, _ = _build_colab_service(target_name)
+            except Exception:
+                apply_profile(*previous)         # falhou: o perfil anterior continua valendo
+                raise
+            transfer_runtime(current, new_service, servers=[server])
+            byte_service = new_service
+            start_llm_like(current, new_service)
+            print(f"[BYTE] Perfil trocado para: {PROFILE_LABELS[target_name]}.", flush=True)
+        st = byte_service.dispatch_request("status", {})
+        if want_html:
+            st["html"] = build_v90_web_ui(st)
+        return st
+
+    byte_service.profile_switcher = _switch_profile
 
     if telegram:
         start_telegram_if_configured(byte_service)

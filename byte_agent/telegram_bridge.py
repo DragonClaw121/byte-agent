@@ -34,6 +34,7 @@ HELP_TEXT = (
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
     "/rotina <HH:MM> <instrução> — todo dia, a Byte executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
+    "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil vtuber — troca de perfil\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
@@ -388,7 +389,7 @@ class TelegramBridge:
         elif cmd == "/live":
             director = self.stream_director
             if director is None:
-                self.send(chat_id, "A live não está configurada nesta execução (defina BYTE_TWITCH_CHANNEL).")
+                self.send(chat_id, "A live não está ativa: ela só roda no perfil VTuber e exige BYTE_TWITCH_CHANNEL configurado.")
                 return
             if arg.lower() in {"on", "off"}:
                 director.set_paused(arg.lower() == "off")
@@ -401,6 +402,21 @@ class TelegramBridge:
                 f"Respostas: {st['stats'].get('replied', 0)} | bloqueadas: {st['stats'].get('blocked_input', 0) + st['stats'].get('blocked_output', 0)}",
                 f"Última fala: {(st.get('last_reply') or {}).get('text', '—')}",
             ]))
+        elif cmd == "/perfil":
+            names = {"pessoal": "VTuber (pessoal)", "trabalho": "Trabalho"}
+            wanted = {"vtuber": "pessoal", "pessoal": "pessoal", "personal": "pessoal",
+                      "trabalho": "trabalho", "work": "trabalho"}.get(arg.lower().strip())
+            if not arg:
+                current = self._dispatch("status").get("profile", "pessoal")
+                self.send(chat_id, f"Perfil ativo: {names.get(current, current)}. Para trocar: /perfil trabalho ou /perfil vtuber")
+                return
+            if wanted is None:
+                self.send(chat_id, "Use: /perfil trabalho ou /perfil vtuber")
+                return
+            self.send(chat_id, "Trocando de perfil...")
+            st = self._dispatch("switch_profile", {"profile": wanted})
+            self.send(chat_id, f"Perfil ativo: {names.get(st.get('profile'), st.get('profile'))}. "
+                               "Cada perfil guarda a própria conversa, agenda e memórias.")
         elif cmd == "/arquivos":
             if "work_status" not in getattr(self.service, "extra_actions", {}):
                 self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
