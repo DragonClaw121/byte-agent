@@ -72,6 +72,7 @@ class FakeService:
         if action == "status":
             return {"llm": {"active_provider": "ollama", "active_model": "qwen2.5:3b", "ollama_online": True,
                             "ollama_loaded_vram": ["qwen2.5:3b"], "gpu_hardware": {"gpu_name": "Tesla T4"}, "provision_state": {}},
+                    "version": "9.9.9",
                     "tasks": [{"priority": 5, "title": "Validar EVFI", "scheduled_slot": "Hoje"}], "memories": []}
         if action == "approve_action":
             return {"approved": True}
@@ -129,6 +130,7 @@ def test_commands(env):
     bridge.poll_once()
     texts = [m["text"] for m in tg.sent]
     assert "Tesla T4" in texts[0] and "Validar EVFI" in texts[1] and "download iniciado" in texts[2]
+    assert texts[0].startswith("Byte v9.9.9")
     assert ("configure_llm", {"provider": "ollama", "model_name": "qwen2.5-coder:14b", "pull_model_async": True}) in svc.calls
     assert ("add_task", {"title": "comprar pão", "priority": 4}) in svc.calls
 

@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "10.4.2"
+BYTE_VERSION = "10.4.3"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -8105,7 +8105,7 @@ def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: A
     bridge.start()
     setattr(sys, "_byte_v90_active_telegram", bridge)
     if chat_ids:
-        print(f"[TELEGRAM] Ponte ativa para o(s) chat(s) {chat_ids}. Envie /ajuda ao seu bot.", flush=True)
+        print(f"[TELEGRAM] Ponte ativa (Byte v{BYTE_VERSION}) para o(s) chat(s) {chat_ids}. Envie /status ao seu bot.", flush=True)
     else:
         print("[TELEGRAM] Ponte ativa em modo privado (sem chat_id). Envie uma mensagem ao bot para ele informar o seu "
               "chat_id, salve-o no segredo TELEGRAM_CHAT_ID e rode a célula de novo.", flush=True)

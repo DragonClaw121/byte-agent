@@ -256,10 +256,12 @@ class TelegramBridge:
         if cmd in {"/start", "/ajuda", "/help"}:
             self.send(chat_id, HELP_TEXT)
         elif cmd == "/status":
-            llm = self._dispatch("status")["llm"]
+            full = self._dispatch("status")
+            llm = full["llm"]
             hw = llm.get("gpu_hardware") or {}
             prov = llm.get("provision_state") or {}
             self.send(chat_id, "\n".join([
+                f"Byte v{full.get('version', '?')}",
                 f"Modelo: {llm.get('active_provider')}:{llm.get('active_model')}",
                 f"Ollama: {'online' if llm.get('ollama_online') else 'offline'} | carregado: {', '.join(llm.get('ollama_loaded_vram') or []) or 'nada'}",
                 f"GPU: {hw.get('gpu_name')} | VRAM livre {hw.get('vram_free_gb')}/{hw.get('vram_total_gb')} GB | RAM livre {hw.get('ram_free_gb')} GB",
