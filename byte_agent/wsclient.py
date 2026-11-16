@@ -162,6 +162,15 @@ class WebSocketClient:
                 if opcode == 0xA:
                     continue
                 message += payload
+                if opcode == 0x8:
+                    raise WebSocketClosed("O servidor enviou um quadro de fechamento.")
+                if opcode == 0x9:
+                    self._send_frame(0xA, payload)
+                    continue
+                if opcode == 0xA:
+                    continue
+                if opcode not in (0x0, 0x1):
+                    raise WebSocketError(f"Opcode de dados não suportado ou inesperado: {opcode}")
                 if len(message) > MAX_MESSAGE_BYTES:
                     raise WebSocketError("Mensagem grande demais.")
                 if fin:
