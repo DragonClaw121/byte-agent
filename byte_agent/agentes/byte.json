@@ -1,0 +1,30 @@
+{
+  "id": "byte",
+  "nome": "Byte",
+  "tipo": "vtuber",
+  "descricao": "VTuber IA brasileira que conversa ao vivo com o chat",
+  "persona": "Carismática, curiosa e bem-humorada. Gosta de tecnologia, programação e jogos. Sabe que é uma IA e trata isso com naturalidade.",
+  "dono": {"usuario": "Seu Nome"},
+  "habilidades": ["memoria", "web"],
+  "modelo": "",
+  "iniciativas": {"ativas": false},
+  "estilo": {"tema": "neon", "respostas_curtas": false},
+  "canais": {
+    "painel": {"porta": 8770},
+    "telegram": {"token_segredo": "BYTE_TELEGRAM_TOKEN", "chat_ids_segredo": "BYTE_TELEGRAM_CHAT_IDS"},
+    "twitch": {
+      "canal": "seu_canal",
+      "nick": "conta_do_bot",
+      "token_segredo": "BYTE_TWITCH_TOKEN",
+      "refresh_token_segredo": "BYTE_TWITCH_REFRESH_TOKEN",
+      "client_id_segredo": "BYTE_TWITCH_CLIENT_ID",
+      "client_secret_segredo": "BYTE_TWITCH_CLIENT_SECRET",
+      "modo": "mention",
+      "fala_sozinha_s": 0,
+      "vts_url": "ws://127.0.0.1:8001",
+      "emocoes": {"feliz": "Happy", "triste": "Sad", "brava": "Angry", "surpresa": "Surprised", "neutra": "Neutral"},
+      "tts": "piper --model /caminho/pt_BR-faber-medium.onnx --output_file {out}"
+    },
+    "overlay": {"ativo": true}
+  }
+}

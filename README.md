@@ -15,6 +15,12 @@ byte_agent/
   work.py              perfil de trabalho: triagem de e-mails, análises e apresentações
   work_data.py         leitura de CSV/XLSX, estatística, relatório HTML, apresentação HTML/PPTX
   web.py               busca, leitura segura de páginas e pesquisa profunda com fontes
+  agents.py            núcleo replicável: manifestos de agentes (identidade, habilidades, canais)
+  agentes/             agentes de exemplo: byte (VTuber), bit (trabalho), kronus (relógio/celular)
+  integrations.py      Asana, Notion, Teams e push pelo ntfy (escrita sempre com aprovação)
+  evaluate.py          placar comparando modelos em casos fixos
+agents/                seus manifestos (têm prioridade sobre os exemplos)
+clients/               cliente de referência da API para dispositivos leves
 tests/                 pytest (Ollama, nvidia-smi, ollama.com e Telegram simulados)
 deploy/                Dockerfile, docker-compose.yml e unidade systemd
 ```
@@ -119,6 +125,18 @@ python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 Com uma única instância, o seletor **VTuber · Trabalho** no título do painel (ou `/perfil` no Telegram) troca de
 perfil sem reiniciar nada; cada perfil mantém seus próprios dados.
 
+## Vários agentes, o mesmo núcleo
+
+Cada agente é um manifesto JSON em `agents/`: nome, personalidade, dono, habilidades e canais (painel, Telegram, API
+para relógio/celular, Twitch, legenda do OBS). Guia completo: [docs/agentes.md](docs/agentes.md).
+
+```bash
+python -m byte_agent --agent kronus
+```
+
+Integrações de trabalho (Asana, Notion, Teams, push no celular, documentos e planilhas):
+[docs/integracoes.md](docs/integracoes.md).
+
 ## E-mail com várias contas
 
 Uma conta por provedor (Gmail e Outlook), cada uma com o seu segredo. A Byte procura a senha, nesta ordem: a digitada
@@ -150,6 +168,15 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 | Pesquisa na web (busca, leitura, pesquisa profunda) | feito, só leitura ([docs/internet.md](docs/internet.md)) |
 | Microsoft Graph (e-mail corporativo com login da empresa) | pendente: depende de app registrado pela TI |
 | Vários usuários na mesma Byte | pendente |
+| Núcleo replicável (manifestos de agentes) | feito; um agente por processo |
+| API para relógio/celular | feito (pull de notificações; push pendente) |
+| Legenda da VTuber no OBS | feito |
+| Asana, Notion, Teams (escrita com aprovação), push via ntfy | feito |
+| Planilha XLSX com fórmulas, leitura de DOCX/PDF | feito |
+| Avaliação de modelos (`avaliar`) | feito |
+| Menu de agentes para testes | feito |
+| Vários agentes num único processo | pendente |
+| Fala da VTuber enquanto gera (TTS por frase) | pendente |
 | 6. Sandbox de execução e permissões por ferramenta | pendente |
 | 7. Cliente leve em cada máquina | pendente |
 

@@ -99,6 +99,9 @@ class StreamConfig:
         cfg.reply_in_chat = env.get("BYTE_STREAM_REPLY_IN_CHAT", "1").strip() != "0"
         cfg.model = env.get("BYTE_STREAM_MODEL", "").strip()
         cfg.mouth_parameter = env.get("BYTE_VTS_MOUTH_PARAM", cfg.mouth_parameter).strip() or cfg.mouth_parameter
+        persona_inline = env.get("BYTE_STREAM_PERSONA", "").strip()
+        if persona_inline:
+            cfg.persona = persona_inline[:4000]
         persona_file = env.get("BYTE_STREAM_PERSONA_FILE", "").strip()
         if persona_file:
             cfg.persona = Path(persona_file).expanduser().read_text(encoding="utf-8").strip()[:4000] or DEFAULT_PERSONA
@@ -279,7 +282,7 @@ class StreamDirector:
 
     # ---------------- ações ----------------
     def _perform(self, emotion: str, text: str, mention: Optional[str], to_chat: bool) -> Dict[str, Any]:
-        outcome: Dict[str, Any] = {"emotion": emotion, "text": text, "chat": False, "hotkey": None, "spoken": False}
+        outcome: Dict[str, Any] = {"emotion": emotion, "text": text, "chat": False, "hotkey": None, "spoken": False, "at": time.time()}
         hotkey = self.cfg.emotion_hotkeys.get(emotion)
         if self.vts is not None and hotkey:
             outcome["hotkey"] = hotkey if self.vts.trigger_hotkey(hotkey) else None

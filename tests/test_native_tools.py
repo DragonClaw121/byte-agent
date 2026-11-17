@@ -16,6 +16,7 @@ class FakeOllama:
     def __init__(self):
         self.script = []          # respostas do /api/chat com tools: dict (mensagem) ou int (código HTTP de erro)
         self.stream_reply = "Resposta em modo texto, tudo certo por aqui."
+        self.stream_queue = []     # respostas de stream em ordem; vazia = stream_reply
         self.json_replies = []     # respostas para chamadas com format=json (triagem, roteiros)
         self.requests = []
         self.loaded = {}
@@ -59,7 +60,8 @@ class FakeOllama:
                     else:
                         self.send_response(200)
                         self.end_headers()
-                        self.wfile.write(json.dumps({"message": {"content": outer.stream_reply}, "done": False}).encode() + b"\n")
+                        content = outer.stream_queue.pop(0) if outer.stream_queue else outer.stream_reply
+                        self.wfile.write(json.dumps({"message": {"content": content}, "done": False}).encode() + b"\n")
                         self.wfile.write(json.dumps({"message": {"content": ""}, "done": True, "done_reason": "stop"}).encode() + b"\n")
                 else:
                     outer.loaded.pop(body.get("model"), None)

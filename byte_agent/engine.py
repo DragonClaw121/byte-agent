@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "11.2"
+BYTE_VERSION = "12.1"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1392,7 +1392,13 @@ class UnifiedDatabase:
                 (trigger_type, brain_used, message.strip(), now)
             )
             pid = cur.lastrowid
-        return {"id": pid, "trigger_type": trigger_type, "brain_used": brain_used, "message": message.strip(), "created_at": now}
+        item = {"id": pid, "trigger_type": trigger_type, "brain_used": brain_used, "message": message.strip(), "created_at": now}
+        for listener in list(getattr(self, "proactive_listeners", [])):     # v12.1: ex.: push pelo ntfy
+            try:
+                listener(item)
+            except Exception:
+                pass
+        return item
 
     def pop_undelivered_proactive_messages(self) -> List[Dict[str, Any]]:
         with self.connection() as conn:
@@ -1639,6 +1645,8 @@ ACTIVE_PROFILE_DATA: Dict[str, Any] = {}
 UI_THEME = "neon"
 OWNER_NAME = "Gabriel"
 PROFILE_LABELS = {"pessoal": "VTuber (pessoal)", "trabalho": "Trabalho"}
+AGENT_NAME = "Byte"                                  # v12.0: nome do agente (manifesto); "Byte" sem manifesto
+ACTIVE_AGENT: Optional[Dict[str, Any]] = None        # v12.0: manifesto ativo (byte_agent/agents.py) ou None
 
 
 def normalize_profile_name(profile: Any) -> str:
@@ -1665,7 +1673,7 @@ def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = N
     role = f", {data['cargo']}" if data.get("cargo") else ""
     company = f" na empresa {data['empresa']}" if data.get("empresa") else ""
     return (
-        f"Você é Byte, assistente de trabalho de {owner}{role}{company}. "
+        f"Você é {AGENT_NAME}, assistente de trabalho de {owner}{role}{company}. "
         "Você ajuda com e-mails, análises de dados, relatórios, apresentações, agenda e lembretes.\n\n"
         "1. PERFIL PROFISSIONAL DO USUÁRIO:\n"
         f"{json.dumps(data, ensure_ascii=False) if data else '(não informado)'}\n\n"
@@ -1676,7 +1684,8 @@ def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = N
 def apply_profile(profile: str = "pessoal", profile_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Ativa um perfil para ESTE processo (rode uma instância por perfil, cada uma com sua pasta de dados)."""
     global ACTIVE_PROFILE, ACTIVE_PROFILE_DATA, UI_THEME, OWNER_NAME, USER_PROFILE_FIXED_JSON, SYSTEM_PROMPT_V100, SYSTEM_PROMPT_V90
-    global SYSTEM_PROMPT_TOOLS_TEXT_BLOCK
+    global SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, AGENT_NAME, ACTIVE_AGENT
+    AGENT_NAME, ACTIVE_AGENT = "Byte", None          # um manifesto, se houver, é aplicado depois (agents.apply_identity)
     name = normalize_profile_name(profile)
     data = dict(profile_data or {}) if isinstance(profile_data, dict) else {}
     ACTIVE_PROFILE = name
@@ -3973,6 +3982,7 @@ class TrueLLMAutonomousRouter:
         reference_anchor: Optional[str] = None,
         tools_schema: Optional[List[Dict[str, Any]]] = None,
         tool_runner: Optional[Any] = None,
+        extra_directive: Optional[str] = None,
     ) -> Dict[str, Any]:
         t0 = time.perf_counter()
         tool_mode = "text"          # "native" quando o modelo tem a capacidade tools e o laço nativo respondeu
@@ -4043,6 +4053,8 @@ class TrueLLMAutonomousRouter:
         sys_prompt = SYSTEM_PROMPT_V90 + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
         if self.custom_user_directive:
             sys_prompt += f"\nDIRETRIZ PRIORITÁRIA DO USUÁRIO: {self.custom_user_directive}"
+        if extra_directive:
+            sys_prompt += f"\nFORMATO DESTA RESPOSTA: {extra_directive}"
         if relevant_memories:
             mem_summary = " | ".join(m["content"] for m in relevant_memories[:4])
             sys_prompt += f"\nMEMÓRIAS RELEVANTES RECUPERADAS: {mem_summary}"
@@ -4482,7 +4494,7 @@ class ProactiveAutonomyEngine:
         last_topic = last_out["content"][:280] if last_out else "Início da sessão de trabalho."
 
         autonomy_sys_prompt = (
-f"Você é Byte (v{BYTE_VERSION}), agente pessoal autônoma de inteligência artificial de {OWNER_NAME}. "
+f"Você é {AGENT_NAME} (v{BYTE_VERSION}), agente pessoal autônoma de inteligência artificial de {OWNER_NAME}. "
             "Neste momento você está tomando a INICIATIVA ESPONTÂNEA de puxar assunto com ele no chat (sem ele ter enviado um prompt). "
             "Seja natural, parceira, inteligente e concisa (2 a 4 frases). "
             "Escolha autonomamente entre: comentar um compromisso prioritário da agenda dele propondo um próximo passo prático, "
@@ -5900,7 +5912,12 @@ class ByteEcosystemService:
         self.status_providers: Dict[str, Any] = {}                 # chave no status -> função() -> valor
         self.file_provider: Optional[Any] = None                   # nome de arquivo -> Path servível em /files/<nome>
         self.profile_switcher: Optional[Any] = None                # v11.1: (perfil, want_html) -> status do serviço novo
+        self.agent_switcher: Optional[Any] = None                  # v12.1: (agente, want_html) -> status; só no menu de testes
+        self.disabled_tools: set = set()                           # v12.0: ferramentas de habilidades desligadas no manifesto
+        self.agent_manifest: Optional[Dict[str, Any]] = None
         self.closed = False
+        # v12.1 — executores de ações externas que exigem aprovação (Asana, Notion, Teams...): tipo -> função(dados)
+        self.action_executors: Dict[str, Any] = {}
         self.realtime_telemetry_feed: List[Dict[str, Any]] = []
 
         now = self.db.now_iso()
@@ -5957,7 +5974,18 @@ class ByteEcosystemService:
     @staticmethod
     def _neutralize_reserved_blocks(llm_text: str) -> str:
         """Só o orquestrador pode emitir cartões de aprovação: um bloco ```byte-email vindo da LLM vira texto comum."""
-        return re.sub(r"```\s*byte-email", "```text", str(llm_text or ""), flags=re.IGNORECASE)
+        return re.sub(r"```\s*byte-(email|action)", "```text", str(llm_text or ""), flags=re.IGNORECASE)
+
+    def propose_action(self, kind: str, title: str, details: str, data: Dict[str, Any]) -> Tuple[str, str]:
+        """v12.1 — registra uma ação externa PENDENTE (criar tarefa no Asana, página no Notion, mensagem no Teams...)
+        e devolve (id, cartão). Só é executada se o usuário aprovar o cartão exatamente como foi exibido."""
+        if kind not in self.action_executors:
+            raise ValueError(f"Ação sem executor: {kind}")
+        preview = {"title": " ".join(str(title).split())[:200], "details": str(details).strip()[:4000]}
+        action_id = self._register_pending_action(kind, {"payload": data, "preview": preview})
+        self.db.record_audit("tool_proposed", kind, "pending_approval", {"title": preview["title"]})
+        card = json.dumps({"id": action_id, "kind": kind, **preview}, ensure_ascii=False).replace("`", "\\u0060")
+        return action_id, f"```byte-action\n{card}\n```"
 
     def approve_pending_action(self, action_id: str, shown: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Executa uma ação pendente. `shown` é o conteúdo que a interface exibiu ao usuário: se ele não
@@ -5985,6 +6013,17 @@ class ByteEcosystemService:
                 brain_used="FERRAMENTA email_send",
             )
             return {"approved": True, "kind": "email_send", "result": result}
+        executor = self.action_executors.get(item["kind"])
+        if executor is not None:
+            preview = item["data"]["preview"]
+            seen = shown if isinstance(shown, dict) else {}
+            if str(seen.get("title", "")).strip() != preview["title"] or str(seen.get("details", "")).strip() != preview["details"]:
+                self.db.record_audit("tool_rejected", item["kind"], "mismatch", {})
+                raise PermissionError("O conteúdo exibido não confere com a ação guardada. Nada foi feito.")
+            result = executor(item["data"]["payload"])
+            self.db.record_audit("tool_approved", item["kind"], "success", {"title": preview["title"]})
+            self.context_manager.record_turn(None, f"✅ Ação aprovada e executada: {preview['title']}", brain_used=f"FERRAMENTA {item['kind']}")
+            return {"approved": True, "kind": item["kind"], "result": result}
         raise ValueError(f"Tipo de ação desconhecido: {item['kind']}")
 
     def reject_pending_action(self, action_id: str) -> Dict[str, Any]:
@@ -6100,6 +6139,7 @@ class ByteEcosystemService:
             intent = extra_spec.get("intent")
             if intent is not None and intent.search(folded):
                 names.append(extra_name)
+        names = [n for n in names if n not in self.disabled_tools]
         return self.agent_tools_schema(names) if names else []
 
     # v11.2 — ferramentas que gravam dados sem aprovação. Depois que o pedido leu conteúdo da internet ("tainted"),
@@ -6112,6 +6152,8 @@ class ByteEcosystemService:
         spec = self.all_tools().get(name)
         if spec is None:
             return f"ERRO: ferramenta desconhecida '{name}'."
+        if name in self.disabled_tools:
+            return f"ERRO: a habilidade de '{name}' está desligada para {AGENT_NAME}. Responda sem ela."
         allowed = turn.get("allowed")
         if allowed is not None and name not in allowed:
             return f"ERRO: a ferramenta '{name}' não está disponível para este pedido. Responda diretamente."
@@ -6311,6 +6353,12 @@ class ByteEcosystemService:
                 if not isinstance(call_data, dict):
                     raise ValueError("tool_call deve ser um objeto JSON")
                 t_name = str(call_data.get("tool", "")).lower().strip()
+                native_name = {"python": "run_python", "shell": "run_shell"}.get(t_name, t_name)
+                if native_name in self.disabled_tools:
+                    # v12.0: modelos sem ferramentas nativas também respeitam as habilidades do manifesto
+                    tool_results.append({"tool": t_name, "status": "disabled"})
+                    appended_blocks.append(f"⚠️ A habilidade pedida ({t_name}) está desligada para {AGENT_NAME}; nada foi preparado.")
+                    continue
                 if t_name in {"python", "shell"}:
                     payload_str = str(call_data.get("code" if t_name == "python" else "command", ""))
                     digest = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
@@ -6419,6 +6467,7 @@ class ByteEcosystemService:
         num_ctx: Optional[int] = None,
         temperature: Optional[float] = None,
         complexity: str = "auto",
+        extra_directive: Optional[str] = None,
     ) -> Dict[str, Any]:
         t_start = time.perf_counter()
         clean_msg = user_message.strip()
@@ -6479,6 +6528,7 @@ class ByteEcosystemService:
             last_proactive_text=last_proactive,
             reference_anchor=(reference.get("anchor_text") if reference.get("is_reference") and not last_proactive else None),
             tools_schema=offered_tools or None,
+            extra_directive=extra_directive,
             tool_runner=lambda tool_name, tool_args: self.run_agent_tool(tool_name, tool_args, agent_turn),
         )
         t_llm_ms = gen["llm_latency_ms"]
@@ -6581,7 +6631,15 @@ class ByteEcosystemService:
                     "version": BYTE_VERSION,
                     "profile": ACTIVE_PROFILE,
                     "profile_switch_available": callable(self.profile_switcher),
+                    "agent_name": AGENT_NAME,
+                    "agent": ({k: ACTIVE_AGENT[k] for k in ("id", "nome", "tipo", "habilidades")} if ACTIVE_AGENT else None),
                 }
+                if callable(self.agent_switcher):
+                    try:
+                        from byte_agent import agents as _agents
+                        res["agent_menu"] = _agents.catalog()
+                    except Exception:
+                        res["agent_menu"] = []
                 for provider_key, provider in self.status_providers.items():
                     try:
                         res[provider_key] = provider()
@@ -6761,6 +6819,10 @@ class ByteEcosystemService:
                 res = {"cancelled": self.db.cancel_reminder(int(payload["reminder_id"]))}
             elif action == "del_memory":
                 res = {"deleted": self.db.delete_memory(int(payload["memory_id"]))}
+            elif action == "switch_agent":
+                if not callable(self.agent_switcher):
+                    raise RuntimeError("O menu de agentes está desligado (ative com --agent-menu ou iniciar_byte(menu_agentes=True)).")
+                res = self.agent_switcher(str(payload.get("agent", "")), bool(payload.get("want_html", False)))
             elif action == "switch_profile":
                 if not callable(self.profile_switcher):
                     raise RuntimeError("A troca de perfil não está disponível nesta execução.")
@@ -6857,6 +6919,10 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">VTuber</button>
         <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
       </div>
+      <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Somente para testes: troca o agente em execução">
+        <select id="b90-agent-menu" class="b90-select" style="width:auto; font-size:0.7rem; padding:2px 6px;" onchange="window.b90AgentArm()"></select>
+        <button type="button" id="b90-agent-go" class="b90-btn-sec" style="display:none; font-size:0.68rem; padding:2px 8px;" onclick="window.b90SwitchAgent()">Confirmar troca</button>
+      </span>
       <span id="b90-profile-msg" class="b90-profile-msg"></span>
     </div>
     <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
@@ -7403,6 +7469,25 @@ pygame.time.Clock().tick(60)</textarea>
     </div>`;
   }
 
+  // v12.1: ação externa aguardando aprovação (Asana, Notion, Teams...)
+  function b90RenderActionProposal(jsonText) {
+    let d = null;
+    try { d = JSON.parse(jsonText); } catch (e) { d = null; }
+    if (!d || !d.id) return `<div class="b90-code-card"><pre style="margin:0;white-space:pre-wrap;">${b90EscapeHtml(jsonText)}</pre></div>`;
+    window.b90EmailCards = window.b90EmailCards || {};
+    window.b90EmailCards[d.id] = { title: String(d.title || ''), details: String(d.details || '') };
+    return `<div class="b90-code-card" style="border-color:#f59e0b;white-space:normal;">
+      <div style="color:#f59e0b;font-weight:700;margin-bottom:6px;">Ação aguardando sua aprovação</div>
+      <div><b>${b90EscapeHtml(d.title)}</b></div>
+      <pre style="margin:6px 0;white-space:pre-wrap;">${b90EscapeHtml(d.details)}</pre>
+      <div style="display:flex;gap:6px;">
+        <button class="b90-btn-ok" onclick="window.b90DecideAction(${b90JsArg(d.id)}, true, this)">Aprovar</button>
+        <button class="b90-btn-del" onclick="window.b90DecideAction(${b90JsArg(d.id)}, false, this)">Descartar</button>
+      </div>
+      <div class="b90-action-result" style="font-size:0.76rem;margin-top:6px;color:#94a3b8;"></div>
+    </div>`;
+  }
+
   window.b90DecideAction = async function(actionId, approve, btnEl) {
     const card = btnEl ? btnEl.closest('.b90-code-card') : null;
     if (card) card.querySelectorAll('button').forEach(b => b.disabled = true);
@@ -7411,7 +7496,8 @@ pygame.time.Clock().tick(60)</textarea>
     const out = card ? card.querySelector('.b90-action-result') : null;
     if (!out) return;
     if (res.error) out.innerText = `Não enviado: ${res.error}`;
-    else if (approve && res.result) out.innerText = `${res.result.status} — resposta do servidor: ${res.result.smtp_code} ${res.result.smtp_reply}`;
+    else if (approve && res.result && res.kind === 'email_send') out.innerText = `${res.result.status} — resposta do servidor: ${res.result.smtp_code} ${res.result.smtp_reply}`;
+    else if (approve && res.result) out.innerText = `Feito: ${res.result.summary || 'ação executada'}${res.result.url ? ' — ' + res.result.url : ''}`;
     else out.innerText = 'Descartado. Nada foi enviado.';
   };
 
@@ -7424,6 +7510,7 @@ pygame.time.Clock().tick(60)</textarea>
         const lang = (parts[i + 1] || 'python').toLowerCase();
         const codeContent = (parts[i + 2] || '').trim();
         if (lang === 'byte-email') { htmlOut += b90RenderEmailProposal(codeContent); continue; }
+        if (lang === 'byte-action') { htmlOut += b90RenderActionProposal(codeContent); continue; }
         const mode = (lang === 'bash' || lang === 'sh' || lang === 'shell') ? 'shell' : 'python';
         const idx = window.b90CodeSnippets.length;
         window.b90CodeSnippets.push(codeContent);
@@ -7728,8 +7815,12 @@ pygame.time.Clock().tick(60)</textarea>
   function b90RenderState(st) {
     if (!st || !st.llm) return;
     b90RenderV10Extras(st);
-    if (st.version) document.getElementById('b90-title').innerText =
-      st.profile === 'trabalho' ? `Byte ${st.version} · Assistente de trabalho` : `⚡ Byte v${st.version} — agente pessoal`;
+    if (st.version) {
+      const agentName = st.agent_name || 'Byte';
+      document.getElementById('b90-title').innerText = st.agent
+        ? `${st.profile === 'trabalho' ? '' : '⚡ '}${agentName} ${st.version} · ${({assistente: 'assistente pessoal', trabalho: 'assistente de trabalho', vtuber: 'VTuber'})[st.agent.tipo] || st.agent.tipo}`
+        : (st.profile === 'trabalho' ? `${agentName} ${st.version} · Assistente de trabalho` : `⚡ ${agentName} v${st.version} — agente pessoal`);
+    }
     b90State = { ...st, version: st.version || b90State.version };
     b90Catalog = st.llm.provider_catalog || {};
 
@@ -7848,6 +7939,7 @@ pygame.time.Clock().tick(60)</textarea>
       if (note) note.innerText = `Buscador: ${st.web.backends[0]}. A Byte faz várias buscas, lê as melhores fontes e entrega um relatório com cada afirmação ligada à fonte.`;
     }
     b90RenderProfileSwitch(st);
+    b90RenderAgentMenu(st);
 
     if (st.reminders) {
       document.getElementById('b90-reminders-list').innerHTML = st.reminders.map(r => `
@@ -8393,6 +8485,45 @@ pygame.time.Clock().tick(60)</textarea>
       msg.innerText = `Não foi possível trocar: ${res.error || 'resposta inesperada'}`;
       return;
     }
+    b90FinishSwitch(res, inColab);
+  };
+
+  // ---------------- v12.1: menu de agentes (SOMENTE PARA TESTES) ----------------
+  let b90AgentMenuKey = '';
+  function b90RenderAgentMenu(st) {
+    const box = document.getElementById('b90-agent-box');
+    if (!box) return;
+    if (!st.agent_menu) { box.style.display = 'none'; return; }
+    box.style.display = 'inline-flex';
+    const current = (st.agent && st.agent.id) || '';
+    const key = JSON.stringify(st.agent_menu) + '|' + current;
+    if (key === b90AgentMenuKey) return;
+    b90AgentMenuKey = key;
+    const sel = document.getElementById('b90-agent-menu');
+    const opts = [{ id: '', nome: 'Byte padrão', tipo: 'perfis' }].concat(st.agent_menu);
+    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>Teste: ${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.tipo)})</option>`).join('');
+    document.getElementById('b90-agent-go').style.display = 'none';
+  }
+  window.b90AgentArm = function() {
+    const current = (b90State.agent && b90State.agent.id) || '';
+    document.getElementById('b90-agent-go').style.display = document.getElementById('b90-agent-menu').value === current ? 'none' : '';
+  };
+  window.b90SwitchAgent = async function() {
+    const target = document.getElementById('b90-agent-menu').value;
+    const btn = document.getElementById('b90-agent-go');
+    const msg = document.getElementById('b90-profile-msg');
+    btn.disabled = true; btn.innerText = 'Trocando...'; msg.innerText = '';
+    const inColab = !!(window.google && google.colab && google.colab.kernel);
+    const res = await b90Call('switch_agent', { agent: target, want_html: inColab });
+    if (res.error || ((res.agent && res.agent.id) || '') !== target) {
+      btn.disabled = false; btn.innerText = 'Confirmar troca';
+      msg.innerText = `Não foi possível trocar: ${res.error || 'resposta inesperada'}`;
+      return;
+    }
+    b90FinishSwitch(res, inColab);
+  };
+
+  function b90FinishSwitch(res, inColab) {
     // Para este painel antes de desenhar o novo: nada do perfil anterior continua consultando o servidor.
     b90Disconnected = true;
     clearInterval(window.b90HeartbeatId);
@@ -8409,7 +8540,7 @@ pygame.time.Clock().tick(60)</textarea>
     } else {
       location.reload();                                             // modo servidor: a página vem com o tema novo
     }
-  };
+  }
 
   // v11.1.1: NÃO usar document.write no Colab. Ele substitui a página inteira da célula de saída, inclusive os
   // scripts do próprio Colab que dimensionam e exibem a saída, e o painel some. Aqui trocamos apenas o estilo,
@@ -8620,12 +8751,51 @@ def build_v90_web_ui(initial_state: Dict[str, Any], token: str = "", theme: Opti
 # 10. SERVIDOR HTTP E COMANDO ÚNICO DE INICIALIZAÇÃO: iniciar_byte()
 # =====================================================================
 
+OVERLAY_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Legenda</title>
+<style>
+  html,body{margin:0;height:100%;background:transparent;overflow:hidden;font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  #cap{position:absolute;left:5%;right:5%;bottom:6%;text-align:center;font-size:46px;line-height:1.25;font-weight:700;color:#fff;
+       text-shadow:0 0 6px #000,0 0 3px #000,2px 2px 0 #000,-2px -2px 0 #000,2px -2px 0 #000,-2px 2px 0 #000;
+       opacity:0;transition:opacity .35s}
+  #cap.on{opacity:1}
+</style></head><body><div id="cap"></div>
+<script>
+  // Fonte de navegador do OBS: mostra o que a VTuber está falando. Só lê; o token desta página não serve para mais nada.
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const cap = document.getElementById('cap');
+  let shownAt = 0;
+  async function tick() {
+    try {
+      const r = await fetch('/api/v1/overlay?token=' + encodeURIComponent(token), { cache: 'no-store' });
+      const st = await r.json();
+      const now = Date.now() / 1000;
+      if (st.text && st.at && now - st.at < Math.max(6, st.text.length / 14)) {
+        if (st.at !== shownAt) { cap.textContent = st.text; shownAt = st.at; }
+        cap.classList.add('on');
+      } else { cap.classList.remove('on'); }
+    } catch (e) { cap.classList.remove('on'); }
+  }
+  setInterval(tick, 700); tick();
+</script></body></html>"""
+
+_CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
+
+
 class ByteOmniServer:
-    def __init__(self, service: ByteEcosystemService, host: str = "127.0.0.1", port: int = 0):
+    def __init__(self, service: ByteEcosystemService, host: str = "127.0.0.1", port: int = 0,
+                 api_token: Optional[str] = None, api_requests_per_minute: int = 20,
+                 overlay_token: Optional[str] = None, overlay_provider: Optional[Any] = None):
         self.service = service
         self.host = host
         self.port = port
         self.token = secrets.token_urlsafe(32)
+        # v12.0 — tokens de escopo reduzido: a API só conversa e lê notificações; a legenda só lê a fala atual.
+        self.api_token = api_token or None
+        self.api_requests_per_minute = max(1, int(api_requests_per_minute))
+        self._api_calls: Deque[float] = collections.deque()
+        self._api_lock = threading.Lock()
+        self.overlay_token = overlay_token or None
+        self.overlay_provider = overlay_provider
         self.max_body_bytes = 2 * 1024 * 1024
         self._httpd: Optional[socketserver.TCPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -8676,8 +8846,107 @@ class ByteOmniServer:
                     return False
                 return hmac.compare_digest(str(candidate).encode("utf-8"), outer.token.encode("utf-8"))
 
+            # ---------------- v12.0: API para clientes leves e legenda do OBS ----------------
+            @staticmethod
+            def _same(candidate: Optional[str], expected: Optional[str]) -> bool:
+                return bool(candidate and expected) and hmac.compare_digest(str(candidate).encode("utf-8"), str(expected).encode("utf-8"))
+
+            def _bearer(self) -> str:
+                raw = (self.headers.get("Authorization") or "").strip()
+                return raw[7:].strip() if raw.lower().startswith("bearer ") else ""
+
+            def _read_json(self) -> Optional[Dict[str, Any]]:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    return None
+                if length < 0 or length > 64 * 1024:
+                    return None
+                try:
+                    data = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+                except Exception:
+                    return None
+                return data if isinstance(data, dict) else None
+
+            def _public(self, parsed: urllib.parse.SplitResult, method: str) -> bool:
+                """Rotas /api/v1 e /overlay. Não exigem Host local: quem chama prova acesso pelo token próprio
+                (um site malicioso não tem o token, então "DNS rebinding" não serve de nada aqui)."""
+                path = parsed.path
+                if path == "/overlay" or path == "/api/v1/overlay":
+                    token = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+                    if method != "GET" or not self._same(token, outer.overlay_token):
+                        self._send_json(404 if not outer.overlay_token else 401, {"error": "Legenda indisponível ou token inválido"})
+                        return True
+                    if path == "/overlay":
+                        self._send_html(OVERLAY_HTML)
+                        return True
+                    provider = outer.overlay_provider
+                    state = provider() if callable(provider) else {}
+                    self._send_json(200, {"text": str((state or {}).get("text") or ""), "emotion": (state or {}).get("emotion"),
+                                          "at": (state or {}).get("at")})
+                    return True
+                if not path.startswith("/api/v1/"):
+                    return False
+                if not outer.api_token:
+                    self._send_json(404, {"error": "API desligada (configure canais.api no manifesto do agente)"})
+                    return True
+                if not self._same(self._bearer(), outer.api_token):
+                    self._send_json(401, {"error": "Token da API ausente ou inválido"})
+                    return True
+                service = outer.service
+                if method == "GET" and path == "/api/v1/status":
+                    llm = service.llm
+                    self._send_json(200, {"agent": AGENT_NAME, "version": BYTE_VERSION, "profile": ACTIVE_PROFILE,
+                                          "online": bool(llm.ollama_online), "model": f"{llm.active_provider}:{llm.active_model}"})
+                    return True
+                if method == "GET" and path == "/api/v1/notifications":
+                    items = service.db.pop_undelivered_proactive_messages()
+                    self._send_json(200, {"agent": AGENT_NAME, "notifications": [
+                        {"text": _CODE_FENCE_RE.sub("", str(i.get("message") or "")).strip(), "type": i.get("trigger_type"),
+                         "created_at": i.get("created_at")} for i in items]})
+                    return True
+                if method == "POST" and path == "/api/v1/message":
+                    now = time.monotonic()
+                    with outer._api_lock:
+                        while outer._api_calls and now - outer._api_calls[0] > 60.0:
+                            outer._api_calls.popleft()
+                        if len(outer._api_calls) >= outer.api_requests_per_minute:
+                            self._send_json(429, {"error": "Muitas mensagens por minuto; tente de novo em instantes"})
+                            return True
+                        outer._api_calls.append(now)
+                    data = self._read_json()
+                    text = str((data or {}).get("text") or "").strip()[:2000]
+                    if data is None or not text:
+                        self._send_json(400, {"error": 'Envie JSON {"text": "sua mensagem"}'})
+                        return True
+                    short = bool(data.get("curto", (ACTIVE_AGENT or {}).get("estilo", {}).get("respostas_curtas", False)))
+                    from_watch = ("Responda em no máximo 2 frases curtas, sem listas, sem markdown e sem blocos de código: "
+                                  "a resposta será lida numa tela pequena ou falada em voz alta.") if short else None
+                    try:
+                        res = service.interact(text, extra_directive=from_watch)
+                    except ValueError as err:
+                        self._send_json(400, {"error": str(err)})
+                        return True
+                    except Exception as err:
+                        self._send_json(503, {"error": f"{type(err).__name__}: {str(err)[:200]}"})
+                        return True
+                    reply = str(res.get("response") or "")
+                    pending = reply.count("```byte-email") + reply.count("NÃO executada")
+                    clean = _CODE_FENCE_RE.sub("", reply)
+                    clean = re.sub(r"🛡️[^\n]*\n?", "", clean).strip()
+                    speech = re.sub(r"https?://\S+", " ", clean)
+                    speech = " ".join(re.sub(r"[*_`#>|~\[\]]+", " ", speech).split())[:600]
+                    self._send_json(200, {"agent": AGENT_NAME, "reply": clean or "(sem texto)", "speech": speech,
+                                          "pending_approvals": pending,
+                                          "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
+                    return True
+                self._send_json(404, {"error": "Rota desconhecida"})
+                return True
+
             def do_GET(self) -> None:
                 parsed = urllib.parse.urlsplit(self.path)
+                if self._public(parsed, "GET"):
+                    return
                 if not self._host_ok():
                     self._send_json(403, {"error": "Host não permitido"})
                     return
@@ -8717,6 +8986,8 @@ class ByteOmniServer:
                 self._send_html(build_v90_web_ui(st, token=outer.token))
 
             def do_POST(self) -> None:
+                if self._public(urllib.parse.urlsplit(self.path), "POST"):
+                    return
                 if not self._host_ok():
                     self._send_json(403, {"error": "Host não permitido"})
                     return
@@ -8783,6 +9054,7 @@ def transfer_runtime(old_service: "ByteEcosystemService", new_service: "ByteEcos
             setattr(new_llm, attr, getattr(old_llm, attr))
     new_llm.api_keys = dict(old_llm.api_keys)
     new_service.profile_switcher = old_service.profile_switcher
+    new_service.agent_switcher = getattr(old_service, "agent_switcher", None)
     for server in servers or ():
         if server is not None:
             server.service = new_service
@@ -8827,7 +9099,9 @@ def _read_secret(names: Tuple[str, ...]) -> str:
     return ""
 
 
-def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: Any = _read_secret) -> Optional[Any]:
+def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: Any = _read_secret,
+                                 token_names: Tuple[str, ...] = ("TELEGRAM_TOKEN", "BYTE_TELEGRAM_TOKEN"),
+                                 chat_names: Tuple[str, ...] = ("TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_IDS", "BYTE_TELEGRAM_CHAT_IDS")) -> Optional[Any]:
     """v10.4.1 — liga a ponte do Telegram junto com a Byte quando o token existir.
     Segredos aceitos: TELEGRAM_TOKEN (ou BYTE_TELEGRAM_TOKEN) e TELEGRAM_CHAT_ID (ou BYTE_TELEGRAM_CHAT_IDS).
     Sem o chat_id a ponte sobe em modo privado: recusa todo mundo e só informa o chat_id de quem escrever."""
@@ -8838,7 +9112,7 @@ def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: A
         except Exception:
             pass
         setattr(sys, "_byte_v90_active_telegram", None)
-    token = read_secret(("TELEGRAM_TOKEN", "BYTE_TELEGRAM_TOKEN"))
+    token = read_secret(tuple(token_names))
     if not token:
         return None
     try:
@@ -8847,7 +9121,7 @@ def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: A
         print("[TELEGRAM] Token encontrado, mas o pacote byte_agent não está instalado (script colado em célula). "
               "Instale com pip a partir do GitHub para usar o Telegram.", flush=True)
         return None
-    chat_ids = [int(x) for x in re.findall(r"-?\d+", read_secret(("TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_IDS", "BYTE_TELEGRAM_CHAT_IDS")))]
+    chat_ids = [int(x) for x in re.findall(r"-?\d+", read_secret(tuple(chat_names)))]
     try:
         bridge = TelegramBridge(service, token, chat_ids)
     except ValueError as err:
@@ -8863,17 +9137,25 @@ def start_telegram_if_configured(service: "ByteEcosystemService", read_secret: A
     return bridge
 
 
-def _build_colab_service(perfil: str, dados_perfil: Optional[Dict[str, Any]] = None) -> Tuple["ByteEcosystemService", Path]:
+def _build_colab_service(perfil: str, dados_perfil: Optional[Dict[str, Any]] = None,
+                         manifest: Optional[Dict[str, Any]] = None) -> Tuple["ByteEcosystemService", Path]:
     """Cria banco, roteador e serviço de UM perfil (Colab ou script local). Não inicia servidor, Telegram nem interface.
     Os dados do perfil de trabalho ficam em <pasta do perfil>/perfil.json, para a troca de perfil reaproveitá-los."""
     name = normalize_profile_name(perfil)
     is_work = name == "trabalho"
     mydrive = Path("/content/drive") / "MyDrive"
-    drive_root = mydrive / ("byte-trabalho" if is_work else "agente-pessoal-evolutivo")
-    active_root = drive_root if mydrive.is_dir() else Path("./byte_trabalho_local" if is_work else "./agente_pessoal_evolutivo_local")
+    if manifest is not None:                         # v12.0: cada agente do manifesto tem a própria pasta e o próprio banco
+        drive_root = mydrive / "byte-agents" / manifest["id"]
+        active_root = drive_root if mydrive.is_dir() else Path("./byte_agents_local") / manifest["id"]
+    else:
+        drive_root = mydrive / ("byte-trabalho" if is_work else "agente-pessoal-evolutivo")
+        active_root = drive_root if mydrive.is_dir() else Path("./byte_trabalho_local" if is_work else "./agente_pessoal_evolutivo_local")
     active_root.mkdir(parents=True, exist_ok=True)
 
-    local_fast_db = Path("/tmp/byte_trabalho_runtime.db" if is_work else "/tmp/byte_v90_metacognitive_runtime.db")
+    if manifest is not None:
+        local_fast_db = Path(f"/tmp/byte_agent_{manifest['id']}.db")
+    else:
+        local_fast_db = Path("/tmp/byte_trabalho_runtime.db" if is_work else "/tmp/byte_v90_metacognitive_runtime.db")
     drive_backup_db = active_root / "data" / "database" / "byte_v90_omni_backup.db"
     workspace_dir = active_root / "workspace_projects"
 
@@ -8905,13 +9187,13 @@ def _build_colab_service(perfil: str, dados_perfil: Optional[Dict[str, Any]] = N
             )
             print(f"[AVISO] Restauração do Drive falhou; backup preservado e push bloqueado: {_pull_res}", flush=True)
 
-    if not is_work and not db.list_memories():
+    if manifest is None and not is_work and not db.list_memories():
         db.add_memory_direct(
             "Gabriel utiliza Arch Linux com Hyprland, programa em Python, C#, Java e SQL e cursa Engenharia da Computação na FESA.",
             category="perfil_tecnico",
             importance=5
         )
-    if not is_work and not db.list_tasks():
+    if manifest is None and not is_work and not db.list_tasks():
         db.add_task(
             "Validar arquitetura do projeto EVFI",
             category="engenharia",
@@ -8936,7 +9218,24 @@ def _build_colab_service(perfil: str, dados_perfil: Optional[Dict[str, Any]] = N
             print(f"[TRABALHO] Ferramentas de trabalho não carregadas: {type(work_err).__name__}: {work_err}", flush=True)
 
     install_web_access(service, active_root)
+    install_integrations_and_push(service)
+    if manifest is not None:
+        from byte_agent import agents as _agents
+        _agents.apply_identity(manifest)
+        _agents.apply_to_service(service, manifest)
     return service, active_root
+
+
+def install_integrations_and_push(service: "ByteEcosystemService") -> Dict[str, Any]:
+    """v12.1 — liga Asana, Notion, Teams e o push do ntfy cujos segredos existirem (nada é ligado sem segredo)."""
+    out: Dict[str, Any] = {}
+    try:
+        from byte_agent.integrations import install_integrations, install_ntfy
+        out["integrations"] = sorted(install_integrations(service, _read_secret))
+        out["ntfy"] = install_ntfy(service, _read_secret) is not None
+    except Exception as err:
+        print(f"[INTEGRAÇÕES] Não carregadas: {type(err).__name__}: {err}", flush=True)
+    return out
 
 
 def install_web_access(service: "ByteEcosystemService", data_dir: Path) -> Optional[Any]:
@@ -8952,7 +9251,8 @@ def install_web_access(service: "ByteEcosystemService", data_dir: Path) -> Optio
 
 
 def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True, telegram: bool = True,
-                 perfil: str = "pessoal", dados_perfil: Optional[Dict[str, Any]] = None) -> None:
+                 perfil: str = "pessoal", dados_perfil: Optional[Dict[str, Any]] = None, agente: Any = None,
+                 menu_agentes: bool = False) -> None:
     """
     COMANDO ÚNICO DE INICIALIZAÇÃO DO ECOSSISTEMA BYTE v10.1 (Hardware-Aware & Unrestricted Registry Edition):
     0. Tags do Ollama respeitadas sem alias, telemetria real de GPU/VRAM/RAM, validador de alocação em
@@ -8967,6 +9267,11 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     """
     global byte_service
     t0 = time.perf_counter()
+    manifest: Optional[Dict[str, Any]] = None
+    if agente is not None:                       # v12.0: agente definido por manifesto (caminho do JSON ou dicionário)
+        from byte_agent import agents as _agents
+        manifest = _agents.resolve_agent(agente)
+        perfil, dados_perfil = _agents.profile_of(manifest), manifest["dono"]
     normalize_profile_name(perfil)               # valida antes de derrubar a execução anterior
 
     # Reexecutar a célula não pode deixar o daemon antigo vivo escrevendo no mesmo arquivo SQLite.
@@ -8996,7 +9301,7 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
             pass
 
     # v11.0: o perfil de trabalho tem pasta e banco PRÓPRIOS; nada se mistura com a Byte pessoal.
-    byte_service, active_root = _build_colab_service(perfil, dados_perfil)
+    byte_service, active_root = _build_colab_service(perfil, dados_perfil, manifest)
     setattr(sys, "_byte_v90_active_service", byte_service)
     llm = byte_service.llm
     db = byte_service.db
@@ -9030,9 +9335,48 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
             st["html"] = build_v90_web_ui(st)
         return st
 
-    byte_service.profile_switcher = _switch_profile
+    def _switch_agent(target: str, want_html: bool = False) -> Dict[str, Any]:
+        """v12.1 — SOMENTE PARA TESTES: troca o agente da sessão (target="" volta para a Byte padrão)."""
+        global byte_service
+        from byte_agent import agents as _agents
+        current = byte_service
+        new_manifest = _agents.resolve_agent(target) if str(target or "").strip() else None
+        current_id = (ACTIVE_AGENT or {}).get("id", "")
+        if (new_manifest or {}).get("id", "") != current_id:
+            previous = (ACTIVE_PROFILE, dict(ACTIVE_PROFILE_DATA), ACTIVE_AGENT)
+            try:
+                if new_manifest is not None:
+                    new_service, _ = _build_colab_service(_agents.profile_of(new_manifest), new_manifest["dono"], new_manifest)
+                else:
+                    new_service, _ = _build_colab_service("pessoal")
+            except Exception:
+                apply_profile(previous[0], previous[1])
+                if previous[2]:
+                    _agents.apply_identity(previous[2])
+                raise
+            transfer_runtime(current, new_service, servers=[server])
+            new_service.profile_switcher = None if new_manifest is not None else _switch_profile
+            new_service.agent_switcher = _switch_agent
+            if new_manifest is not None and new_manifest["modelo"]:
+                new_service.llm.active_model = new_service.llm._require_valid_tag(new_manifest["modelo"])[0]
+            byte_service = new_service
+            start_llm_like(current, new_service)
+            print(f"[BYTE] Agente de teste ativo: {AGENT_NAME}.", flush=True)
+        st = byte_service.dispatch_request("status", {})
+        if want_html:
+            st["html"] = build_v90_web_ui(st)
+        return st
 
-    if telegram:
+    if manifest is None:
+        byte_service.profile_switcher = _switch_profile
+    if menu_agentes:
+        byte_service.agent_switcher = _switch_agent
+
+    if telegram and manifest is not None:
+        tg = manifest["canais"].get("telegram")
+        if tg:
+            start_telegram_if_configured(byte_service, token_names=(tg["token_segredo"],), chat_names=(tg["chat_ids_segredo"],))
+    elif telegram:
         start_telegram_if_configured(byte_service)
 
     initial_state = byte_service.dispatch_request("status", {})

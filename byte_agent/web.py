@@ -119,22 +119,18 @@ class SafeFetcher:
               body: Optional[bytes]) -> http.client.HTTPResponse:
         host = parts.hostname
         port = parts.port or (443 if parts.scheme == "https" else 80)
-        sock = socket.create_connection((ip, port), timeout=self.timeout_s)
-        try:
-            if parts.scheme == "https":
-                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
-            conn = http.client.HTTPConnection(host, port, timeout=self.timeout_s)
-            conn.sock = sock
-            path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
-            all_headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.1",
-                           "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7", "Accept-Encoding": "identity", "Connection": "close"}
-            all_headers.update(headers or {})
-            all_headers["Host"] = parts.netloc.split("@")[-1]
-            conn.request(method, path, body=body, headers=all_headers)
-            return conn.getresponse()
-        except Exception:
-            sock.close()
-            raise
+        sock = socket.create_connection((ip, port), timeout=self.timeout_s)     # conecta no IP JÁ verificado
+        if parts.scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        conn = http.client.HTTPConnection(host, port, timeout=self.timeout_s)
+        conn.sock = sock
+        path = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
+        all_headers = {"User-Agent": USER_AGENT, "Accept": "text/html,application/json;q=0.9,text/plain;q=0.8,*/*;q=0.1",
+                       "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7", "Accept-Encoding": "identity", "Connection": "close"}
+        all_headers.update(headers or {})
+        all_headers["Host"] = parts.netloc.split("@")[-1]
+        conn.request(method, path, body=body, headers=all_headers)
+        return conn.getresponse()
 
     def request(self, url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None, body: Optional[bytes] = None,
                 text_only: bool = True) -> FetchResult:
@@ -364,8 +360,7 @@ def backends_from_config(read: Callable[[Tuple[str, ...]], str]) -> List[SearchB
     brave = read(("BRAVE_API_KEY", "BYTE_BRAVE_API_KEY"))
     if brave:
         backends.append(BraveBackend(brave))
-    backends.append(WikipediaBackend("pt"))
-    backends.append(WikipediaBackend("en"))
+    backends.append(WikipediaBackend())
     return backends
 
 

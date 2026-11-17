@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional
 
-EMAIL_CARD_RE = re.compile(r"```byte-email\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+EMAIL_CARD_RE = re.compile(r"```byte-(?:email|action)\s*\n(\{.*?\})\s*\n```", re.DOTALL)
 MAX_MSG = 3900          # o limite do Telegram é 4096 caracteres por mensagem
 
 HELP_TEXT = (
@@ -36,6 +36,7 @@ HELP_TEXT = (
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil vtuber — troca de perfil\n"
+    "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
@@ -131,13 +132,18 @@ class TelegramBridge:
         self.send(chat_id, (prefix + body) if body else (prefix + "(sem texto)"))
         for card in cards:
             action_id = str(card.get("id", ""))
-            shown = {"to": str(card.get("to", "")), "subject": str(card.get("subject", "")), "body": str(card.get("body", ""))}
+            if "kind" in card:            # v12.1: ação externa genérica (Asana, Notion, Teams...)
+                shown = {"title": str(card.get("title", "")), "details": str(card.get("details", ""))}
+                text_card, approve_label = f"🛡️ Ação preparada — NÃO executada\n{shown['title']}\n\n{shown['details']}", "✅ Aprovar"
+            else:
+                shown = {"to": str(card.get("to", "")), "subject": str(card.get("subject", "")), "body": str(card.get("body", ""))}
+                text_card = f"✉️ E-mail preparado — NÃO enviado\nPara: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}"
+                approve_label = "✅ Aprovar e enviar"
             self._pending_cards[action_id] = shown
             self.send(
-                chat_id,
-                f"✉️ E-mail preparado — NÃO enviado\nPara: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}",
+                chat_id, text_card,
                 reply_markup={"inline_keyboard": [[
-                    {"text": "✅ Aprovar e enviar", "callback_data": f"ok:{action_id}"},
+                    {"text": approve_label, "callback_data": f"ok:{action_id}"},
                     {"text": "❌ Descartar", "callback_data": f"no:{action_id}"},
                 ]]},
             )
@@ -321,7 +327,13 @@ class TelegramBridge:
                 self.send(chat_id, "Esta aprovação expirou ou já foi usada.")
                 return
             res = self._dispatch("approve_action", {"action_id": action_id, "shown": shown})
-            self.send(chat_id, "📤 E-mail enviado." if res.get("approved") else "Nada foi enviado.")
+            if not res.get("approved"):
+                self.send(chat_id, "Nada foi feito.")
+            elif res.get("kind") == "email_send":
+                self.send(chat_id, "📤 E-mail enviado.")
+            else:
+                result = res.get("result") or {}
+                self.send(chat_id, f"✅ Feito: {result.get('summary', 'ação executada')}" + (f"\n{result['url']}" if result.get("url") else ""))
         elif verb == "no":
             self.service.dispatch_request("reject_action", {"action_id": action_id})
             self.send(chat_id, "🗑️ Rascunho descartado.")
@@ -419,6 +431,12 @@ class TelegramBridge:
             st = self._dispatch("switch_profile", {"profile": wanted})
             self.send(chat_id, f"Perfil ativo: {names.get(st.get('profile'), st.get('profile'))}. "
                                "Cada perfil guarda a própria conversa, agenda e memórias.")
+        elif cmd == "/ler":
+            name, _, question = arg.partition(" ")
+            if not name:
+                self.send(chat_id, "Use: /ler <arquivo> [pergunta]. Envie o documento antes, como arquivo.")
+                return
+            self._work(chat_id, "work_read_document", {"file": name, "question": question.strip()}, f"Lendo {name}...")
         elif cmd == "/pesquisar":
             if not arg:
                 self.send(chat_id, "Use: /pesquisar <pergunta>")

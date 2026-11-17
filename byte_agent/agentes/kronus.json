@@ -1,0 +1,17 @@
+{
+  "id": "kronus",
+  "nome": "Kronus",
+  "tipo": "assistente",
+  "descricao": "Assistente pessoal de bolso, pensado para relógio e celular",
+  "persona": "Calmo, direto e atencioso. Fala pouco e vai direto ao ponto.",
+  "dono": {"usuario": "Seu Nome"},
+  "habilidades": ["agenda", "memoria", "lembretes", "web"],
+  "modelo": "",
+  "iniciativas": {"ativas": false},
+  "estilo": {"tema": "neon", "respostas_curtas": true},
+  "canais": {
+    "painel": {"porta": 8772},
+    "api": {"token_segredo": "KRONUS_API_TOKEN", "requisicoes_por_minuto": 20},
+    "telegram": {"token_segredo": "KRONUS_TELEGRAM_TOKEN", "chat_ids_segredo": "KRONUS_TELEGRAM_CHAT_IDS"}
+  }
+}

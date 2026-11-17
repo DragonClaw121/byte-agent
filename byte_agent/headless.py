@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import engine
+from . import agents, engine
 from .speech import SpeechEngine
 from .stream import StreamConfig, StreamDirector
 from .telegram_bridge import TelegramBridge
@@ -38,14 +38,15 @@ def load_profile_data(data_dir: Path) -> dict:
 
 
 def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None, profile: Optional[str] = None,
-                  web: Optional[bool] = None) -> Any:
+                  web: Optional[bool] = None, profile_data: Optional[dict] = None) -> Any:
     """Monta banco, roteador, e-mail, terminal e serviço usando `data_dir` como armazenamento persistente.
     Com profile="trabalho" ativa o prompt profissional e instala as ferramentas de trabalho (uma instância por perfil)."""
     data_dir = Path(data_dir).expanduser()
     (data_dir / "database").mkdir(parents=True, exist_ok=True)
     if web is None:
         web = bool(profile)              # o modo servidor liga a web; chamadas diretas (testes) escolhem
-    profile_data = load_profile_data(data_dir) if profile else {}
+    if profile_data is None:
+        profile_data = load_profile_data(data_dir) if profile else {}
     if profile:
         engine.apply_profile(profile, profile_data)
     vec = engine.VectorEngine()
@@ -63,6 +64,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         WorkAssistant(service, data_dir, profile_data).install()
     if web:
         engine.install_web_access(service, data_dir)
+    if profile:
+        engine.install_integrations_and_push(service)
     return service
 
 
@@ -152,7 +155,31 @@ class Runtime:
     def __init__(self, args: argparse.Namespace, env: Any = None):
         self.args = args
         self.env = os.environ if env is None else env
-        self.dirs = profile_data_dirs(Path(args.data_dir), args.profile, self.env)
+        self.base_env = dict(self.env)
+        # v12.1: menu de agentes para TESTES (--agent-menu / BYTE_AGENT_MENU=1). Desligado no uso normal.
+        self.agent_menu = bool(getattr(args, "agent_menu", False))
+        self.default_data_dir = Path.home() / ".byte-agent"
+        # v12.0: com --agent, o manifesto define perfil, pasta, porta e canais; não há troca de perfil.
+        self.manifest: Optional[dict] = agents.resolve_agent(args.agent) if getattr(args, "agent", None) else None
+        if self.manifest is not None:
+            args.profile = agents.profile_of(self.manifest)
+            data_dir = Path(args.data_dir).expanduser() if getattr(args, "data_dir", None) else agents.default_data_dir(self.manifest)
+            self.dirs = {args.profile: data_dir}
+            self.agents_base = data_dir.parent
+            self.default_dirs = profile_data_dirs(self.default_data_dir, "pessoal", self.base_env)
+            merged = dict(self.env)
+            merged.update(agents.stream_env(self.manifest))
+            self.env = merged
+            if not getattr(args, "port", None):
+                args.port = self.manifest["canais"]["painel"]["porta"] or 0
+        else:
+            if not getattr(args, "data_dir", None):
+                args.data_dir = str(Path.home() / ".byte-agent")
+            if getattr(args, "port", None) is None:
+                args.port = 8765
+            self.dirs = profile_data_dirs(Path(args.data_dir), args.profile, self.env)
+            self.default_dirs = dict(self.dirs)
+            self.agents_base = Path(self.base_env.get("BYTE_AGENTS_DIR") or (Path(args.data_dir).expanduser().parent / ".byte-agents"))
         self.service: Any = None
         self.server: Any = None
         self.bridge: Optional[TelegramBridge] = None
@@ -165,14 +192,28 @@ class Runtime:
         return self.dirs[engine.ACTIVE_PROFILE]
 
     def _build(self, profile: str, model: Optional[str]) -> Any:
-        service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
+        if self.manifest is not None:
+            service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile,
+                                    web="web" in self.manifest["habilidades"], profile_data=self.manifest["dono"])
+            agents.apply_identity(self.manifest)
+            agents.apply_to_service(service, self.manifest)
+            if model:
+                service.llm.active_model = model
+        else:
+            service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
+            service.profile_switcher = self.switch
+        if self.agent_menu:
+            service.agent_switcher = self.switch_agent
         if self.args.no_autonomy:
             service.proactive_engine.autonomous_mode_enabled = False
-        service.profile_switcher = self.switch
         return service
 
     def _announce(self) -> None:
-        print(f"[BYTE v{engine.BYTE_VERSION}] Perfil ativo: {engine.PROFILE_LABELS[engine.ACTIVE_PROFILE]} | dados em {self.data_dir}", flush=True)
+        if self.manifest is not None:
+            print(f"[{self.manifest['nome'].upper()} | Byte v{engine.BYTE_VERSION}] Agente '{self.manifest['id']}' ({self.manifest['tipo']}) | "
+                  f"habilidades: {', '.join(self.manifest['habilidades']) or 'nenhuma'} | dados em {self.data_dir}", flush=True)
+        else:
+            print(f"[BYTE v{engine.BYTE_VERSION}] Perfil ativo: {engine.PROFILE_LABELS[engine.ACTIVE_PROFILE]} | dados em {self.data_dir}", flush=True)
         if engine.ACTIVE_PROFILE == "trabalho":
             print(f"[BYTE] Planilhas em {self.data_dir / 'arquivos'} | entregas em {self.data_dir / 'entregas'}", flush=True)
 
@@ -181,7 +222,11 @@ class Runtime:
             if self.env.get("BYTE_TWITCH_CHANNEL", "").strip():
                 print("[BYTE] Live desligada no perfil de trabalho (troque para VTuber para ligá-la).", flush=True)
             return
-        director = build_stream(self.service, self.env, self.dirs["pessoal"])
+        try:
+            director = build_stream(self.service, self.env, self.data_dir)
+        except (ValueError, OSError) as err:          # ex.: token da Twitch ausente: o agente sobe sem a live
+            print(f"[AVISO] Live não iniciada: {err}", flush=True)
+            director = None
         if director is None:
             return
         director.chat.start()
@@ -203,10 +248,40 @@ class Runtime:
             if director.vts is not None:
                 director.vts.close()
 
+    def _channel_settings(self) -> Dict[str, Any]:
+        """Tokens e opções de canal: do manifesto (pelos NOMES dos segredos) ou dos argumentos de linha de comando."""
+        out: Dict[str, Any] = {"telegram_token": self.args.telegram_token, "telegram_chat_ids": self.args.telegram_chat_ids,
+                               "api_token": "", "api_rpm": 20, "overlay_token": ""}
+        if self.manifest is None:
+            return out
+        channels = self.manifest["canais"]
+        if "telegram" in channels:
+            out["telegram_token"] = agents.read_named_secret(channels["telegram"]["token_segredo"])
+            out["telegram_chat_ids"] = agents.read_named_secret(channels["telegram"]["chat_ids_segredo"])
+            if not out["telegram_token"]:
+                print(f"[AVISO] Telegram configurado, mas o segredo {channels['telegram']['token_segredo']} está vazio.", flush=True)
+        if "api" in channels:
+            out["api_token"] = agents.read_named_secret(channels["api"]["token_segredo"])
+            out["api_rpm"] = channels["api"]["requisicoes_por_minuto"]
+            if out["api_token"] and len(out["api_token"]) < 24:
+                raise SystemExit(f"O token da API ({channels['api']['token_segredo']}) precisa ter 24+ caracteres.")
+            if not out["api_token"]:
+                print(f"[AVISO] API configurada, mas o segredo {channels['api']['token_segredo']} está vazio: API desligada.", flush=True)
+        if "overlay" in channels:
+            out["overlay_token"] = agents.persistent_token(self.data_dir / "overlay_token.txt")
+        return out
+
+    def _overlay_state(self) -> Optional[Dict[str, Any]]:
+        director = self.director
+        return director.last_reply if director is not None else None
+
     def start(self) -> "Runtime":
         self.service = self._build(engine.normalize_profile_name(self.args.profile), self.args.model or None)
         self.service.llm.start_online_setup_async()
-        self.server = engine.ByteOmniServer(self.service, host=self.args.host, port=self.args.port)
+        channels = self._channel_settings()
+        self.server = engine.ByteOmniServer(self.service, host=self.args.host, port=self.args.port,
+                                            api_token=channels["api_token"] or None, api_requests_per_minute=channels["api_rpm"],
+                                            overlay_token=channels["overlay_token"] or None, overlay_provider=self._overlay_state)
         if self.args.ui_token:
             if not re.fullmatch(r"[A-Za-z0-9_-]{24,}", self.args.ui_token):
                 raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
@@ -214,8 +289,12 @@ class Runtime:
         port = self.port = self.server.start()
         print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{self.args.host}:{port}/ui?token={self.server.token}", flush=True)
         self._announce()
-        if self.args.telegram_token:
-            self.bridge = TelegramBridge(self.service, self.args.telegram_token, parse_chat_ids(self.args.telegram_chat_ids))
+        if channels["api_token"]:
+            print(f"[BYTE] API para clientes leves: POST http://{self.args.host}:{port}/api/v1/message (Authorization: Bearer <token>)", flush=True)
+        if channels["overlay_token"]:
+            print(f"[BYTE] Legenda para o OBS (fonte de navegador): http://127.0.0.1:{port}/overlay?token={channels['overlay_token']}", flush=True)
+        if channels["telegram_token"]:
+            self.bridge = TelegramBridge(self.service, channels["telegram_token"], parse_chat_ids(channels["telegram_chat_ids"]))
             self.bridge.start()
             if self.bridge.allowed:
                 print(f"[BYTE] Telegram ativo para os chats: {sorted(self.bridge.allowed)}", flush=True)
@@ -251,6 +330,56 @@ class Runtime:
             st["html"] = engine.build_v90_web_ui(st, token=self.server.token)
         return st
 
+    def switch_agent(self, target: str, want_html: bool = False) -> Dict[str, Any]:
+        """SOMENTE PARA TESTES: troca o agente em execução (Byte VTuber, Bit, Kronus... ou a Byte padrão, target="").
+        Cada agente usa a própria pasta de dados. O Telegram continua no bot iniciado; a API e a legenda passam a usar
+        os tokens do agente novo."""
+        with self._lock:
+            new_manifest = agents.resolve_agent(target) if str(target or "").strip() else None
+            current_id = (self.manifest or {}).get("id", "")
+            if (new_manifest or {}).get("id", "") != current_id:
+                old = self.service
+                previous = (engine.ACTIVE_PROFILE, dict(engine.ACTIVE_PROFILE_DATA), engine.ACTIVE_AGENT)
+                old_state = (self.manifest, self.dirs, self.env)
+                self.manifest = new_manifest
+                if new_manifest is not None:
+                    profile = agents.profile_of(new_manifest)
+                    self.dirs = {profile: self.agents_base / new_manifest["id"]}
+                    self.env = dict(self.base_env)
+                    self.env.update(agents.stream_env(new_manifest))
+                else:
+                    profile = "pessoal"
+                    self.dirs = dict(self.default_dirs)
+                    self.env = dict(self.base_env)
+                try:
+                    new = self._build(profile, None)
+                except Exception:
+                    self.manifest, self.dirs, self.env = old_state
+                    engine.apply_profile(previous[0], previous[1])
+                    if previous[2]:
+                        agents.apply_identity(previous[2])
+                    raise
+                self._stop_live()
+                engine.transfer_runtime(old, new, servers=[self.server])
+                new.profile_switcher = None if new_manifest is not None else self.switch      # transfer copia; corrige
+                new.agent_switcher = self.switch_agent
+                if new_manifest is not None and new_manifest["modelo"]:
+                    new.llm.active_model = new.llm._require_valid_tag(new_manifest["modelo"])[0]
+                self.service = new
+                if self.bridge is not None:
+                    self.bridge.service = new
+                channels = self._channel_settings()
+                self.server.api_token = channels["api_token"] or None
+                self.server.api_requests_per_minute = channels["api_rpm"]
+                self.server.overlay_token = channels["overlay_token"] or None
+                engine.start_llm_like(old, new)
+                self._announce()
+                self._start_live()
+            st = self.service.dispatch_request("status", {})
+        if want_html:
+            st["html"] = engine.build_v90_web_ui(st, token=self.server.token)
+        return st
+
     def stop(self) -> None:
         self._stop_live()
         if self.bridge is not None:
@@ -267,17 +396,69 @@ def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBrid
     return runtime.service, runtime.server, runtime.bridge, runtime.director
 
 
+def agent_commands(argv: List[str]) -> int:
+    """novo-agente <id> [--tipo T] [--nome N] [--pasta agents] | validar-agente <arquivo.json>"""
+    if argv[0] == "novo-agente":
+        parser = argparse.ArgumentParser(prog="byte_agent novo-agente", description="Cria o manifesto de um novo agente.")
+        parser.add_argument("id")
+        parser.add_argument("--tipo", default="assistente", choices=sorted(agents.AGENT_TYPES))
+        parser.add_argument("--nome", default=None)
+        parser.add_argument("--pasta", default="agents")
+        args = parser.parse_args(argv[1:])
+        try:
+            data = agents.template(args.id.lower(), args.tipo, args.nome)
+        except agents.ManifestError as err:
+            print(f"Erro: {err}")
+            return 2
+        target = Path(args.pasta) / f"{data['id']}.json"
+        if target.exists():
+            print(f"Erro: {target} já existe; não vou sobrescrever.")
+            return 2
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"Manifesto criado: {target}\nEdite nome, persona e dono, crie os segredos listados e rode:\n"
+              f"  python -m byte_agent validar-agente {target}\n  python -m byte_agent --agent {target}")
+        return 0
+    if len(argv) < 2:
+        print("Use: python -m byte_agent validar-agente <arquivo.json>")
+        return 2
+    try:
+        manifest = agents.load_manifest(argv[1])
+    except agents.ManifestError as err:
+        print(f"Manifesto inválido: {err}")
+        return 1
+    print(f"OK: {manifest['nome']} ({manifest['tipo']}) | habilidades: {', '.join(manifest['habilidades']) or 'nenhuma'}")
+    print(f"Dados em: {agents.default_data_dir(manifest)} | canais: {', '.join(manifest['canais']) or 'painel'}")
+    names = []
+    for channel in manifest["canais"].values():
+        names += [v for k, v in channel.items() if k.endswith("_segredo") and v]
+    missing = [n for n in names if not agents.read_named_secret(n)]
+    for name in names:
+        print(f"  segredo {name}: {'FALTANDO' if name in missing else 'ok'}")
+    return 1 if missing else 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     env = os.environ
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in {"novo-agente", "validar-agente"}:
+        return agent_commands(argv)
+    if argv and argv[0] == "avaliar":
+        from .evaluate import main as evaluate_main
+        return evaluate_main(argv[1:])
     parser = argparse.ArgumentParser(prog="byte_agent", description="Byte em modo servidor (sem Colab).")
-    parser.add_argument("--data-dir", default=env.get("BYTE_DATA_DIR", str(Path.home() / ".byte-agent")))
+    parser.add_argument("--agent", default=env.get("BYTE_AGENT", ""),
+                        help="manifesto JSON do agente (ex.: agents/kronus.json). Define perfil, pasta, porta e canais.")
+    parser.add_argument("--data-dir", default=env.get("BYTE_DATA_DIR") or None)
+    parser.add_argument("--agent-menu", action="store_true", default=env.get("BYTE_AGENT_MENU", "") == "1",
+                        help="mostra no painel o menu de troca de agentes (SOMENTE PARA TESTES).")
     parser.add_argument("--profile", default=env.get("BYTE_PROFILE", "pessoal"), choices=["pessoal", "trabalho"],
                         help="perfil inicial; dá para trocar depois pelo painel ou por /perfil no Telegram.")
     parser.add_argument("--ollama-url", default=env.get("OLLAMA_URL", ""))
     parser.add_argument("--model", default=env.get("BYTE_MODEL", ""))
     parser.add_argument("--host", default=env.get("BYTE_HOST", "127.0.0.1"),
                         help="Padrão 127.0.0.1. O painel permite executar código: não exponha à internet.")
-    parser.add_argument("--port", type=int, default=int(env.get("BYTE_PORT", "8765")))
+    parser.add_argument("--port", type=int, default=int(env["BYTE_PORT"]) if env.get("BYTE_PORT") else None)
     parser.add_argument("--ui-token", default=env.get("BYTE_UI_TOKEN", ""))
     parser.add_argument("--telegram-token", default=env.get("BYTE_TELEGRAM_TOKEN", ""))
     parser.add_argument("--telegram-chat-ids", default=env.get("BYTE_TELEGRAM_CHAT_IDS", ""))
@@ -287,7 +468,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.vts_hotkeys or args.say:
-        return run_avatar_check(os.environ, Path(args.data_dir), args.say, args.vts_hotkeys)
+        avatar_env = dict(os.environ)
+        if args.agent:
+            avatar_env.update(agents.stream_env(agents.load_manifest(args.agent)))
+        return run_avatar_check(avatar_env, Path(args.data_dir or (Path.home() / ".byte-agent")), args.say, args.vts_hotkeys)
 
     runtime = Runtime(args).start()
     stop = threading.Event()

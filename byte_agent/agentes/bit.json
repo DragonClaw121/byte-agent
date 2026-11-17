@@ -1,0 +1,16 @@
+{
+  "id": "bit",
+  "nome": "Bit",
+  "tipo": "trabalho",
+  "descricao": "Assistente de trabalho para e-mails, planilhas, apresentações e pesquisa",
+  "persona": "Profissional, objetivo e cordial. Separa fatos de interpretações e diz o que precisa ser conferido.",
+  "dono": {"usuario": "Seu Nome", "cargo": "Seu cargo", "empresa": "Sua empresa", "assinatura": "Atenciosamente,\nSeu Nome"},
+  "habilidades": ["agenda", "memoria", "lembretes", "web", "email", "dados", "apresentacoes"],
+  "modelo": "",
+  "iniciativas": {"ativas": false},
+  "estilo": {"tema": "pro", "respostas_curtas": false},
+  "canais": {
+    "painel": {"porta": 8771},
+    "telegram": {"token_segredo": "BIT_TELEGRAM_TOKEN", "chat_ids_segredo": "BIT_TELEGRAM_CHAT_IDS"}
+  }
+}

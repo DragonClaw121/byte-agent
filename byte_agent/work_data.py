@@ -695,3 +695,96 @@ def write_pptx(path: Path, title: str, slides: Sequence[Dict[str, Any]]) -> bool
     path.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(path))
     return True
+
+
+def write_xlsx(path: Path, table: "Table", analysis: Dict[str, Any]) -> bool:
+    """Planilha auditável: aba Dados (valores tipados), aba Resumo (fatos) e uma aba por corte com FÓRMULAS
+    (SOMASES/CONT.SES/MÉDIASES) apontando para a aba Dados — quem recebe confere cada número no próprio Excel.
+    False se openpyxl não estiver instalado."""
+    try:
+        import openpyxl  # type: ignore
+        from openpyxl.styles import Font  # type: ignore
+        from openpyxl.utils import get_column_letter  # type: ignore
+    except ImportError:
+        return False
+    book = openpyxl.Workbook()
+    summary = book.active
+    summary.title = "Resumo"
+    summary.append(["Fatos calculados", f"Fonte: {analysis['source']}"])
+    summary["A1"].font = Font(bold=True)
+    for idx, fact in enumerate(analysis["facts"], start=1):
+        summary.append([idx, fact])
+    summary.column_dimensions["B"].width = 120
+
+    data = book.create_sheet("Dados")
+    data.append(table.headers)
+    for cell in data[1]:
+        cell.font = Font(bold=True)
+    cols = analysis["columns"]
+    for r_idx in range(len(table.rows)):
+        row: List[Any] = []
+        for col in cols:
+            value = col["values"][r_idx] if col["kind"] in {"numero", "data"} else table.rows[r_idx][col["index"]]
+            row.append("" if value is None else value)
+        data.append(row)
+    last = len(table.rows) + 1
+    letter = {c["name"]: get_column_letter(c["index"] + 1) for c in cols}
+    measure = analysis.get("measure")
+    for cut in analysis["breakdowns"]:
+        sheet = book.create_sheet(_short(f"Por {cut['by']}", 31).replace("/", "-"))
+        sheet.append([cut["by"], f"Soma de {measure}", "Participação", "Registros", "Média"])
+        for cell in sheet[1]:
+            cell.font = Font(bold=True)
+        cat, val = letter[cut["by"]], letter[measure]
+        rng_c, rng_v = f"Dados!${cat}$2:${cat}${last}", f"Dados!${val}$2:${val}${last}"
+        n = len(cut["groups"])
+        for i, group in enumerate(cut["groups"], start=2):
+            sheet.append([group["label"], f"=SUMIFS({rng_v},{rng_c},A{i})", f"=B{i}/SUM({rng_v})",
+                          f"=COUNTIFS({rng_c},A{i},{rng_v},\"<>\")", f"=AVERAGEIFS({rng_v},{rng_c},A{i})"])
+            sheet[f"C{i}"].number_format = "0.0%"
+            for col_l in ("B", "E"):
+                sheet[f"{col_l}{i}"].number_format = "#,##0.00"
+        sheet.column_dimensions["A"].width = 28
+        if cut["group_count"] > n:
+            sheet.append([f"(exibindo os {n} maiores de {cut['group_count']} grupos)"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    book.save(str(path))
+    return True
+
+
+def read_document_text(path: Path, max_chars: int = 200_000) -> str:
+    """Texto de .txt, .md, .csv, .docx (biblioteca padrão) e .pdf (se pypdf estiver instalado)."""
+    suffix = path.suffix.lower()
+    if suffix in {".txt", ".md", ".csv", ".tsv"}:
+        raw = path.read_bytes()[: max_chars * 4]
+        try:
+            return raw.decode("utf-8-sig")[:max_chars]
+        except UnicodeDecodeError:
+            return raw.decode("cp1252", errors="replace")[:max_chars]
+    if suffix == ".docx":
+        import zipfile
+        import xml.etree.ElementTree as ET
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        with zipfile.ZipFile(path) as zf:
+            info = zf.getinfo("word/document.xml")
+            if info.file_size > 50 * 1024 * 1024:
+                raise ValueError("Documento grande demais.")
+            root = ET.fromstring(zf.read(info))
+        paragraphs = ["".join(t.text or "" for t in p.iter(f"{ns}t")) for p in root.iter(f"{ns}p")]
+        return "\n\n".join(p for p in paragraphs if p.strip())[:max_chars]
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader  # type: ignore
+        except ImportError as err:
+            raise RuntimeError("Para ler PDF instale o pacote pypdf (pip install pypdf).") from err
+        reader = PdfReader(str(path))
+        parts: List[str] = []
+        total = 0
+        for page in reader.pages[:200]:
+            text = page.extract_text() or ""
+            parts.append(text)
+            total += len(text)
+            if total >= max_chars:
+                break
+        return "\n\n".join(parts)[:max_chars]
+    raise ValueError("Formato de documento não suportado (use .docx, .pdf, .txt ou .md).")
