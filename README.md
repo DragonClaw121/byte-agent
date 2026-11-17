@@ -139,6 +139,12 @@ python -m byte_agent --agent kronus
 Integrações de trabalho (Asana, Notion, Teams, push no celular, documentos e planilhas):
 [docs/integracoes.md](docs/integracoes.md).
 
+## Comando de voz
+
+Todos os agentes atendem por voz: botão 🎙️ no painel, notas de voz no Telegram e a página `/voz` para celular e
+relógio (a peça central do Kronus, com modo mãos livres: "Kronus, ..."). A Byte só obedece à voz do dono e, com a
+live ligada, responde em voz alta na própria live. Guia: [docs/voz.md](docs/voz.md).
+
 ## E-mail com várias contas
 
 Uma conta por provedor (Gmail e Outlook), cada uma com o seu segredo. A Byte procura a senha, nesta ordem: a digitada
@@ -176,7 +182,8 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 | Asana, Notion, Teams (escrita com aprovação), push via ntfy | feito |
 | Planilha XLSX com fórmulas, leitura de DOCX/PDF | feito |
 | Avaliação de modelos (`avaliar`) | feito |
-| Menu de agentes para testes | feito |
+| Troca de agentes pelo painel e pelo Telegram (`/agente`) | feito |
+| Comando de voz (painel, Telegram, página /voz, live da Byte) | feito (transcrição e fala dependem de serviço configurado) |
 | Vários agentes num único processo | pendente |
 | Fala da VTuber enquanto gera (TTS por frase) | pendente |
 | 6. Sandbox de execução e permissões por ferramenta | pendente |

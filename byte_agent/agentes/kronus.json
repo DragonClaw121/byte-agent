@@ -33,5 +33,15 @@
       "token_segredo": "KRONUS_TELEGRAM_TOKEN",
       "chat_ids_segredo": "KRONUS_TELEGRAM_CHAT_IDS"
     }
+  },
+  "voz": {
+    "responder_com_voz": "sempre",
+    "palavras_chave": [
+      "kronus",
+      "cronus",
+      "cronos",
+      "kronos",
+      "crono"
+    ]
   }
 }

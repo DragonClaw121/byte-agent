@@ -105,13 +105,13 @@ def test_telegram_follows_the_switch(tmp_path, fake):
         tg.text(4, OWNER, "/perfil gamer")
         bridge.poll_once()
         texts = [m["text"] for m in tg.sent]
-        assert texts[0].startswith("Perfil ativo: Matrix (padrão)")
-        assert texts[2].startswith("Perfil ativo: Trabalho") and bridge.service is runtime.service
+        assert texts[0].startswith("Agente ativo: Matrix (padrão)")
+        assert texts[2].startswith("Agente ativo: Matrix, perfil de trabalho") and bridge.service is runtime.service
         assert "vendas_exemplo.csv" in texts[3]                                                   # já atende como perfil de trabalho
-        assert texts[4] == "Use: /perfil trabalho ou /perfil matrix"
+        assert "Não conheço 'gamer'" in texts[5]
         tg.text(5, OWNER, "/perfil matrix")
         bridge.poll_once()
-        assert tg.sent[-1]["text"].startswith("Perfil ativo: Matrix") and engine.ACTIVE_PROFILE == "pessoal"
+        assert tg.sent[-1]["text"].startswith("Agente ativo: Matrix (padrão)") and engine.ACTIVE_PROFILE == "pessoal"
     finally:
         sys.__dict__.get("_byte_telegram_bridges", {}).pop("teste", None)
         runtime.stop()

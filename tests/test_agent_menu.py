@@ -1,4 +1,4 @@
-"""Menu de agentes (somente para testes): troca Matrix (padrão) <-> Byte VTuber <-> Bit <-> Kronus no mesmo processo."""
+"""Menu de agentes: troca Matrix (padrão) <-> Byte VTuber <-> Bit <-> Kronus no mesmo processo."""
 import argparse
 import json
 import urllib.request
@@ -19,14 +19,14 @@ def fake():
     engine.apply_profile("pessoal")
 
 
-def start(tmp_path, fake, monkeypatch, menu=True, agent=""):
+def start(tmp_path, fake, monkeypatch, menu=True, agent="", env=None):
     monkeypatch.setenv("KRONUS_API_TOKEN", KRONUS_TOKEN)
     monkeypatch.setenv("BYTE_WEB", "0")
     monkeypatch.chdir(tmp_path)                                   # ./agents vazio: só os exemplos do pacote
     args = argparse.Namespace(agent=agent, agent_menu=menu, data_dir=str(tmp_path / "byte-agent"), profile="pessoal",
                               ollama_url=fake.url, model=TOOL_MODEL, host="127.0.0.1", port=0, ui_token="",
                               telegram_token="", telegram_chat_ids="", no_autonomy=True)
-    return headless.Runtime(args, env={"KRONUS_API_TOKEN": KRONUS_TOKEN}).start()
+    return headless.Runtime(args, env={"KRONUS_API_TOKEN": KRONUS_TOKEN, **(env or {})}).start()
 
 
 def api_status(rt, token):
@@ -59,7 +59,7 @@ def test_menu_switches_agents_and_keeps_data_apart(tmp_path, fake, monkeypatch):
         rt.service.db.add_memory_direct("Memória da Matrix", importance=5)
 
         st = rt.service.dispatch_request("switch_agent", {"agent": "kronus", "want_html": True})
-        assert st["agent"]["id"] == "kronus" and engine.AGENT_NAME == "Kronus" and st["profile_switch_available"] is False
+        assert st["agent"]["id"] == "kronus" and engine.AGENT_NAME == "Kronus" and st["profile_switch_available"] is True
         assert rt.data_dir == tmp_path / ".byte-agents" / "kronus" and "agent_menu" in st and st["html"].startswith("<!DOCTYPE html>")
         assert all("Matrix" not in m["content"] for m in rt.service.db.list_memories())
         assert api_status(rt, KRONUS_TOKEN)[1]["agent"] == "Kronus"                         # API passa a usar o token do Kronus
@@ -79,15 +79,61 @@ def test_menu_switches_agents_and_keeps_data_apart(tmp_path, fake, monkeypatch):
         rt.stop()
 
 
-def test_menu_is_off_by_default(tmp_path, fake, monkeypatch):
+def test_menu_is_on_by_default_and_can_be_turned_off(tmp_path, fake, monkeypatch):
     rt = start(tmp_path, fake, monkeypatch, menu=False)
+    try:
+        assert rt.service.dispatch_request("status", {}).get("agent_menu")            # v12.3: ligado por padrão
+    finally:
+        rt.stop()
+    rt = start(tmp_path, fake, monkeypatch, menu=False, env={"BYTE_AGENT_MENU": "0"})
     try:
         st = rt.service.dispatch_request("status", {})
         assert "agent_menu" not in st
         assert "desligado" in rt.service.dispatch_request("switch_agent", {"agent": "kronus"})["error"]
+        assert "desligada" in rt.service.dispatch_request("switch_to", {"target": "kronus"})["error"]
         assert 'id="b90-agent-box" style="display:none' in engine.build_v90_web_ui(st)
     finally:
         rt.stop()
+
+
+def test_switch_targets_by_one_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert engine.resolve_switch_target("Matrix") == ("profile", "pessoal")
+    assert engine.resolve_switch_target("padrão") == ("profile", "pessoal")
+    assert engine.resolve_switch_target("trabalho") == ("profile", "trabalho")
+    assert engine.resolve_switch_target("vtuber") == ("agent", "byte")                 # a VTuber agora é a Byte
+    assert engine.resolve_switch_target("KRONUS") == ("agent", "kronus")
+    with pytest.raises(ValueError, match="Opções: matrix, trabalho, bit, byte, kronus"):
+        engine.resolve_switch_target("matric")
+
+
+def test_telegram_switches_agents_by_itself(tmp_path, fake, monkeypatch):
+    """O cenário do print: Kronus ativo, /perfil dizia 'Matrix' e /perfil matrix dava erro."""
+    import sys
+    from byte_agent.telegram_bridge import TelegramBridge
+    from test_telegram_bridge import OWNER, TOKEN, FakeTelegram
+    tg = FakeTelegram()
+    rt = start(tmp_path, fake, monkeypatch, menu=False)
+    try:
+        bridge = TelegramBridge(rt.service, TOKEN, [OWNER], api_base=tg.url, poll_timeout_s=0)
+        sys.__dict__.setdefault("_byte_telegram_bridges", {})["teste"] = bridge
+        rt.bridge = bridge
+        rt.service.dispatch_request("switch_agent", {"agent": "kronus"})
+        for i, text in enumerate(["/perfil", "/perfil matrix", "/perfil vtuber", "/agente bit", "/agente trabalho", "/perfil matric"], 1):
+            tg.text(i, OWNER, text)
+            bridge.poll_once()
+        texts = [m["text"] for m in tg.sent]
+        assert texts[0].startswith("Agente ativo: Kronus (assistente).") and "/agente matrix | trabalho | bit | byte | kronus" in texts[0]
+        done = [t for t in texts if t.startswith("Agente ativo") or "Erro" in t or "Não conheço" in t][1:]
+        assert done[0].startswith("Agente ativo: Matrix (padrão).")
+        assert done[1].startswith("Agente ativo: Byte (vtuber).")
+        assert done[2].startswith("Agente ativo: Bit (trabalho).")
+        assert done[3].startswith("Agente ativo: Matrix, perfil de trabalho.") and engine.ACTIVE_PROFILE == "trabalho"
+        assert "Não conheço 'matric'" in done[4] and engine.ACTIVE_AGENT is None
+    finally:
+        sys.__dict__.get("_byte_telegram_bridges", {}).pop("teste", None)
+        rt.stop()
+        tg.httpd.shutdown()
 
 
 def test_starting_from_an_agent_by_id(tmp_path, fake, monkeypatch):

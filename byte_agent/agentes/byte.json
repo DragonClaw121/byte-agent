@@ -49,5 +49,15 @@
     "overlay": {
       "ativo": true
     }
+  },
+  "voz": {
+    "somente_dono": true,
+    "na_live": true,
+    "responder_com_voz": "auto",
+    "palavras_chave": [
+      "byte",
+      "bait",
+      "baite"
+    ]
   }
 }

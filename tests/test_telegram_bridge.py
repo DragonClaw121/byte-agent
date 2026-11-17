@@ -31,8 +31,9 @@ class FakeTelegram:
             def do_POST(self):
                 raw_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 method = self.path.rsplit("/", 1)[-1]
-                if method == "sendDocument":
+                if method in ("sendDocument", "sendVoice", "sendAudio"):
                     outer.documents.append(raw_body)
+                    outer.calls.append((method, {}))
                     raw = json.dumps({"ok": True, "result": True}).encode()
                     self.send_response(200)
                     self.send_header("Content-Length", str(len(raw)))

@@ -29,13 +29,22 @@ passe `dados_perfil={...}` no Colab.
 Os exemplos ficam dentro do pacote (`byte_agent/agentes/`) e podem ser usados pelo nome: `--agent kronus`. Os seus
 manifestos vão em `./agents/`; um arquivo seu com o mesmo id tem prioridade sobre o exemplo.
 
-## Menu de agentes (somente para testes)
+## Trocar de agente (painel e Telegram)
 
-Para comparar os agentes sem reiniciar: `python -m byte_agent --agent-menu` (ou `BYTE_AGENT_MENU=1`), ou no Colab
-`iniciar_byte(menu_agentes=True)`. Aparece um seletor discreto ao lado do título do painel ("Teste: Kronus...") com
-um botão "Confirmar troca". Cada agente continua com a própria pasta de dados; o Telegram segue no bot que foi
-iniciado, e a API e a legenda passam a usar os tokens do agente escolhido. No uso do dia a dia, deixe desligado e
-rode cada agente no seu próprio processo.
+A troca vem ligada: seletor ao lado do título do painel ou, no Telegram, um comando só:
+
+| Comando | Resultado |
+|---|---|
+| `/agente` (ou `/perfil`) | mostra quem está ativo e as opções |
+| `/agente matrix` | volta para a Matrix, o perfil padrão |
+| `/agente trabalho` | Matrix no perfil de trabalho |
+| `/agente byte` (ou `vtuber`) | Byte, a VTuber |
+| `/agente bit` / `/agente kronus` | Bit / Kronus |
+
+Cada agente continua com a própria pasta de dados; o Telegram segue no bot que foi iniciado, e a API e a legenda
+passam a usar os tokens do agente escolhido. Para desligar a troca: `iniciar_byte(menu_agentes=False)` ou
+`BYTE_AGENT_MENU=0`. Um processo iniciado com `--agent kronus` (servidor dedicado a um agente) só troca com
+`--agent-menu`.
 
 ## Avaliar modelos
 
@@ -85,7 +94,8 @@ manifesto). Os dados ficam em `MyDrive/byte-agents/<id>`.
     "painel": {"porta": 8772},
     "api": {"token_segredo": "KRONUS_API_TOKEN"},
     "telegram": {"token_segredo": "KRONUS_TELEGRAM_TOKEN", "chat_ids_segredo": "KRONUS_TELEGRAM_CHAT_IDS"}
-  }
+  },
+  "voz": {"responder_com_voz": "sempre", "palavras_chave": ["kronus", "cronos", "cronus"]}
 }
 ```
 
@@ -94,7 +104,10 @@ manifesto). Os dados ficam em `MyDrive/byte-agents/<id>`.
   na lista não é oferecido ao modelo e é recusado se ele tentar usar, inclusive em modelos sem ferramentas nativas.
 - **segredos:** o manifesto guarda só o NOME do segredo (Colab Secrets ou variável de ambiente), nunca o token. O
   validador recusa algo que pareça um token colado no lugar do nome.
-- Sem `--agent`, tudo funciona como antes (perfis VTuber/Trabalho com o seletor no painel).
+- **voz:** `ativo`, `responder_com_voz` (`auto` = responde em áudio quando a pergunta veio em áudio, `sempre`,
+  `nunca`), `palavras_chave` (nomes que ativam o modo mãos livres), `somente_dono` e `na_live` (só `vtuber`).
+  Detalhes em [voz.md](voz.md).
+- Sem `--agent`, quem responde é a Matrix (perfis Matrix/Trabalho com o seletor no painel).
 
 ## Vários agentes ao mesmo tempo
 

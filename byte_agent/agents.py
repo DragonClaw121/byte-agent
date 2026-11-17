@@ -54,7 +54,7 @@ DEFAULT_SKILLS = {
 
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
 SECRET_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-_TOP_KEYS = {"id", "nome", "tipo", "descricao", "persona", "dono", "habilidades", "modelo", "iniciativas", "estilo", "canais"}
+_TOP_KEYS = {"id", "nome", "tipo", "descricao", "persona", "dono", "habilidades", "modelo", "iniciativas", "estilo", "canais", "voz"}
 _CHANNEL_KEYS = {"painel", "telegram", "api", "twitch", "overlay"}
 
 
@@ -90,6 +90,11 @@ def validate_manifest(raw: Any) -> Dict[str, Any]:
     m["tipo"] = kind
     m["descricao"] = str(m.get("descricao") or AGENT_TYPES[kind])[:300]
     m["persona"] = str(m.get("persona") or "").strip()[:4000]
+    try:                                         # v12.3: comando de voz (quem pode falar, palavra de ativação, resposta falada)
+        from .voice import validate_voice
+        m["voz"] = validate_voice(m.get("voz"), kind, m["nome"])
+    except ValueError as err:
+        raise ManifestError(str(err)) from None
     owner = m.get("dono") or {}
     if not isinstance(owner, dict):
         raise ManifestError("'dono' deve ser um objeto (usuario, cargo, empresa, assinatura...).")

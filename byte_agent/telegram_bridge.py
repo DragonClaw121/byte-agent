@@ -35,13 +35,14 @@ HELP_TEXT = (
     "/rotina <HH:MM> <instrução> — todo dia, o agente executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
-    "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil matrix — troca de perfil\n"
+    "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
     "/limpar — limpa a janela de contexto da conversa\n"
     "/iniciativas on|off — liga/desliga mensagens espontâneas\n"
+    "🎙️ Nota de voz: o agente transcreve e responde (e responde em áudio, se a voz estiver configurada)\n"
     "Qualquer outro texto é enviado ao chat do agente."
 )
 
@@ -105,20 +106,32 @@ class TelegramBridge:
 
     def send_document(self, chat_id: int, path: Any, caption: str = "") -> None:
         """Envia um arquivo (multipart/form-data montado à mão; limite do Telegram para bots: 50 MB)."""
-        data = open(str(path), "rb").read()
+        name = str(getattr(path, "name", None) or str(path).rsplit("/", 1)[-1])
+        self._send_file("sendDocument", "document", chat_id, open(str(path), "rb").read(), name, "application/octet-stream", caption)
+
+    def _send_file(self, method: str, field: str, chat_id: int, data: bytes, name: str, mime: str, caption: str = "") -> None:
         boundary = "----byte" + uuid.uuid4().hex
-        name = str(getattr(path, "name", None) or str(path).rsplit("/", 1)[-1]).replace('"', "")
+        name = name.replace('"', "")
         parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n{chat_id}\r\n'.encode("utf-8")]
         if caption:
             parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n{caption[:900]}\r\n'.encode("utf-8"))
-        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{name}"\r\n'
-                     f'Content-Type: application/octet-stream\r\n\r\n'.encode("utf-8") + data + b"\r\n")
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; filename="{name}"\r\n'
+                     f'Content-Type: {mime}\r\n\r\n'.encode("utf-8") + data + b"\r\n")
         parts.append(f"--{boundary}--\r\n".encode("utf-8"))
-        req = urllib.request.Request(f"{self.api_base}/bot{self._token}/sendDocument", data=b"".join(parts),
+        req = urllib.request.Request(f"{self.api_base}/bot{self._token}/{method}", data=b"".join(parts),
                                      headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         with urllib.request.urlopen(req, timeout=120.0) as resp:
             if not json.loads(resp.read().decode("utf-8")).get("ok"):
                 raise RuntimeError("Telegram recusou o envio do arquivo.")
+
+    def send_voice(self, chat_id: int, audio: bytes, mime: str) -> None:
+        """v12.3: resposta falada. OGG/Opus vira nota de voz; MP3 vai como áudio; outros formatos, como arquivo."""
+        if mime == "audio/ogg":
+            self._send_file("sendVoice", "voice", chat_id, audio, "resposta.ogg", mime)
+        elif mime == "audio/mpeg":
+            self._send_file("sendAudio", "audio", chat_id, audio, "resposta.mp3", mime)
+        else:
+            self._send_file("sendDocument", "document", chat_id, audio, "resposta.wav", mime)
 
     def send_with_cards(self, chat_id: int, text: str, prefix: str = "") -> int:
         """Envia um texto e transforma cada bloco de e-mail pendente em uma mensagem com botões Aprovar/Descartar."""
@@ -217,7 +230,10 @@ class TelegramBridge:
             except Exception as err:
                 chat_id = self._chat_of(upd)
                 if chat_id in self.allowed:
-                    self.send(chat_id, f"⚠️ Erro ao processar: {type(err).__name__}: {str(err)[:300]}")
+                    detail = str(err)[:300]
+                    if not re.match(r"^[A-Z]\w*(Error|Exception): ", detail):     # erro do serviço já vem com o tipo
+                        detail = f"{type(err).__name__}: {detail}"
+                    self.send(chat_id, f"⚠️ {re.sub(r'^(RuntimeError|ValueError|VoiceError): ', '', detail)}")
         return len(updates)
 
     def push_proactive(self) -> int:
@@ -249,13 +265,18 @@ class TelegramBridge:
         if "callback_query" in upd:
             self._handle_callback(chat_id, upd["callback_query"])
             return
-        document = (upd.get("message") or {}).get("document")
+        message = upd.get("message") or {}
+        spoken = message.get("voice") or message.get("audio") or message.get("video_note")
+        if isinstance(spoken, dict):                         # v12.3: comando de voz
+            self._handle_voice(chat_id, spoken, private=(message.get("chat") or {}).get("type") == "private")
+            return
+        document = message.get("document")
         if isinstance(document, dict):
             self._handle_document(chat_id, document)
             return
         text = str((upd.get("message") or {}).get("text") or "").strip()
         if not text:
-            self.send(chat_id, "Por enquanto só entendo mensagens de texto.")
+            self.send(chat_id, "Entendo texto, áudios (notas de voz) e planilhas/documentos.")
             return
         if text.startswith("/"):
             self._handle_command(chat_id, text)
@@ -285,6 +306,51 @@ class TelegramBridge:
         generated = re.findall(r"Arquivos gerados em entregas/: ([^\n]+)", reply)
         if generated:
             self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
+
+    def _download(self, file_id: Any, limit: int) -> bytes:
+        info = self._api("getFile", {"file_id": file_id}).get("result") or {}
+        file_path = str(info.get("file_path") or "")
+        if not file_path or ".." in file_path:
+            raise RuntimeError("Não consegui obter o arquivo no Telegram.")
+        with urllib.request.urlopen(f"{self.api_base}/file/bot{self._token}/{file_path}", timeout=60.0) as resp:
+            data = resp.read(limit + 1)
+        if len(data) > limit:
+            raise RuntimeError("Arquivo grande demais.")
+        return data
+
+    def _handle_voice(self, chat_id: int, media: Dict[str, Any], private: bool) -> None:
+        """Nota de voz -> transcrição -> resposta do agente (texto, cartões de aprovação e, se configurado, áudio).
+        "owner" só vale no chat PRIVADO com um id autorizado: agentes 'somente_dono' (a Byte) ignoram áudio de grupos."""
+        if int(media.get("file_size") or 0) > 15 * 1024 * 1024:
+            self.send(chat_id, "Áudio acima de 15 MB.")
+            return
+        try:
+            self._api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+        except Exception:
+            pass
+        audio = self._download(media.get("file_id"), 15 * 1024 * 1024)
+        res = self.service.dispatch_request("voice_command", {
+            "audio_b64": base64.b64encode(audio).decode("ascii"), "mime": str(media.get("mime_type") or "audio/ogg"),
+            "source": "telegram", "owner": bool(private)})
+        if res.get("error"):
+            self.send(chat_id, f"⚠️ {res['error']}")
+            return
+        heard = str(res.get("heard") or "")
+        if res.get("ignored") or not heard:
+            self.send(chat_id, "🎙️ Não consegui entender o áudio.")
+            return
+        self.send(chat_id, f"🎙️ Ouvi: “{heard}”")
+        if res.get("live"):
+            self.send(chat_id, f"🔴 {res.get('response') or 'Respondendo na live.'}")
+            return
+        self.send_with_cards(chat_id, str(res.get("response") or ""))
+        if res.get("audio_b64"):
+            try:
+                self.send_voice(chat_id, base64.b64decode(res["audio_b64"]), str(res.get("audio_mime") or "audio/ogg"))
+            except Exception as err:
+                self.last_error = f"voz: {type(err).__name__}"
+        elif res.get("audio_error"):
+            self.last_error = f"voz: {res['audio_error']}"
 
     def _handle_document(self, chat_id: int, doc: Dict[str, Any]) -> None:
         """Planilha enviada como documento -> pasta de arquivos do perfil de trabalho."""
@@ -337,6 +403,13 @@ class TelegramBridge:
         elif verb == "no":
             self.service.dispatch_request("reject_action", {"action_id": action_id})
             self.send(chat_id, "🗑️ Rascunho descartado.")
+
+    @staticmethod
+    def _who_text(st: Dict[str, Any]) -> str:
+        agent = st.get("agent") or {}
+        if agent:
+            return f"Agente ativo: {agent.get('nome')} ({agent.get('tipo')})."
+        return "Agente ativo: Matrix (padrão)." if st.get("profile") != "trabalho" else "Agente ativo: Matrix, perfil de trabalho."
 
     def _handle_command(self, chat_id: int, text: str) -> None:
         cmd, _, arg = text.partition(" ")
@@ -416,21 +489,17 @@ class TelegramBridge:
                 f"Respostas: {st['stats'].get('replied', 0)} | bloqueadas: {st['stats'].get('blocked_input', 0) + st['stats'].get('blocked_output', 0)}",
                 f"Última fala: {(st.get('last_reply') or {}).get('text', '—')}",
             ]))
-        elif cmd == "/perfil":
-            names = {"pessoal": "Matrix (padrão)", "trabalho": "Trabalho"}
-            wanted = {"matrix": "pessoal", "padrao": "pessoal", "padrão": "pessoal", "pessoal": "pessoal", "personal": "pessoal",
-                      "trabalho": "trabalho", "work": "trabalho"}.get(arg.lower().strip())
+        elif cmd in {"/perfil", "/agente", "/agentes"}:
+            # v12.3: um comando só para trocar de agente ou perfil: matrix, trabalho, byte (ou vtuber), bit, kronus...
+            st = self._dispatch("status")
             if not arg:
-                current = self._dispatch("status").get("profile", "pessoal")
-                self.send(chat_id, f"Perfil ativo: {names.get(current, current)}. Para trocar: /perfil trabalho ou /perfil matrix")
+                self.send(chat_id, self._who_text(st) + "\nPara trocar: /agente matrix | trabalho | " +
+                          " | ".join(a["id"] for a in (st.get("agent_menu") or [])) if st.get("agent_menu")
+                          else self._who_text(st) + "\nPara trocar: /perfil trabalho ou /perfil matrix")
                 return
-            if wanted is None:
-                self.send(chat_id, "Use: /perfil trabalho ou /perfil matrix")
-                return
-            self.send(chat_id, "Trocando de perfil...")
-            st = self._dispatch("switch_profile", {"profile": wanted})
-            self.send(chat_id, f"Perfil ativo: {names.get(st.get('profile'), st.get('profile'))}. "
-                               "Cada perfil guarda a própria conversa, agenda e memórias.")
+            self.send(chat_id, "Trocando...")
+            new = self._dispatch("switch_to", {"target": arg})
+            self.send(chat_id, self._who_text(new) + "\nCada agente e perfil guarda a própria conversa, agenda e memórias.")
         elif cmd == "/ler":
             name, _, question = arg.partition(" ")
             if not name:

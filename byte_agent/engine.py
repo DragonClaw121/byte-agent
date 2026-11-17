@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "12.2"
+BYTE_VERSION = "12.3"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1513,7 +1513,7 @@ class SlidingWindowContextManager:
                 return msg
         return None
 
-    PROACTIVE_TURN_MARKER = "[Sem mensagem do usuário neste ponto: a fala seguinte da Byte foi por iniciativa própria, não resposta a uma pergunta.]"
+    PROACTIVE_TURN_MARKER = "[Sem mensagem do usuário neste ponto: a fala seguinte do assistente foi por iniciativa própria, não resposta a uma pergunta.]"
 
     @_ctx_synchronized
     def last_proactive_message(self) -> Optional[str]:
@@ -1594,7 +1594,7 @@ USER_PROFILE_FIXED_JSON = json.dumps({
     "formacao": "Engenharia da Computação (Faculdade Engenheiro Salvador Arena - FESA)",
     "sistema_operacional": "Arch Linux (Hyprland / COSMIC)",
     "linguagens_principais": ["Python", "C#", "Java", "T-SQL"],
-    "projetos_ativos": ["Byte v9.0 Autonomous Workstation", "Projeto EVFI"],
+    "projetos_ativos": ["Ecossistema de agentes de IA (Matrix, Byte, Bit e Kronus)", "Projeto EVFI"],
 }, ensure_ascii=False)
 
 MATRIX_PERSONA = (
@@ -1675,6 +1675,36 @@ WORK_GUIDELINES = (
     "\n- E-mails nunca são enviados por você: você prepara o rascunho e o usuário aprova."
     "\n- Ao entregar uma análise, separe fatos calculados de interpretações e diga o que precisa ser conferido."
 )
+
+
+KNOWN_AGENT_NAMES = ("Matrix", "Byte", "Bit", "Kronus")
+_PROFILE_WORDS = {"matrix", "padrao", "pessoal", "personal", "trabalho", "work"}
+
+
+def resolve_switch_target(text: str) -> Tuple[str, str]:
+    """v12.3: um único nome para trocar tudo: ('profile', 'pessoal'|'trabalho') ou ('agent', id).
+    "vtuber" agora significa a Byte (a VTuber); "matrix"/"padrão" é o perfil padrão."""
+    key = " ".join(str(text or "").lower().translate(TRANSLATION_TABLE).split())
+    if key in {"vtuber", "a vtuber"}:
+        key = "byte"
+    if key in _PROFILE_WORDS:
+        return "profile", normalize_profile_name(key)
+    from byte_agent import agents as _agents
+    options = _agents.catalog()
+    for item in options:
+        if key in {item["id"].lower(), str(item["nome"]).lower().translate(TRANSLATION_TABLE)}:
+            return "agent", item["id"]
+    names = ["matrix", "trabalho"] + [item["id"] for item in options]
+    raise ValueError(f"Não conheço '{text}'. Opções: {', '.join(names)}.")
+
+
+def identity_guard() -> str:
+    """v12.3: o banco do perfil padrão vem da Byte antiga; histórico, memórias e resumos ainda trazem falas como
+    "Sou a Byte v10.1". Sem esta regra o modelo imita o histórico e se apresenta com o nome errado."""
+    others = [n for n in KNOWN_AGENT_NAMES if n.lower() != AGENT_NAME.lower()]
+    return (f"\nIDENTIDADE (prioridade máxima): seu nome é {AGENT_NAME}. O histórico, as memórias e os resumos podem conter "
+            f"falas de versões antigas deste sistema ou de outros agentes ({', '.join(others)}, 'Byte v10.1'...); elas não "
+            f"definem quem você é. Ao se apresentar, diga que é {AGENT_NAME}, sem número de versão, e mantenha sua personalidade.")
 
 
 def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = None) -> str:
@@ -4062,7 +4092,7 @@ class TrueLLMAutonomousRouter:
                 "Clique no botão '📴 MODO OFFLINE' no topo da tela para voltar ao Modo Online e usar a LLM real."
             )
 
-        sys_prompt = SYSTEM_PROMPT_V90 + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
+        sys_prompt = SYSTEM_PROMPT_V90 + identity_guard() + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
         if self.custom_user_directive:
             sys_prompt += f"\nDIRETRIZ PRIORITÁRIA DO USUÁRIO: {self.custom_user_directive}"
         if extra_directive:
@@ -4280,7 +4310,7 @@ class TrueLLMAutonomousRouter:
         max_tokens: Optional[int] = None
     ) -> Dict[str, Any]:
         t0 = time.perf_counter()
-        sys_p = SYSTEM_PROMPT_V90
+        sys_p = SYSTEM_PROMPT_V90 + identity_guard()
         # v10.2: orçamento próprio da Arena (padrão 4096). Com 1024, modelos de raciocínio gastavam tudo
         # pensando e "perdiam" para modelos menores que respondem curto.
         tokens_budget = int(max_tokens) if (max_tokens is not None and int(max_tokens) > 0) else 4096
@@ -5924,7 +5954,9 @@ class ByteEcosystemService:
         self.status_providers: Dict[str, Any] = {}                 # chave no status -> função() -> valor
         self.file_provider: Optional[Any] = None                   # nome de arquivo -> Path servível em /files/<nome>
         self.profile_switcher: Optional[Any] = None                # v11.1: (perfil, want_html) -> status do serviço novo
-        self.agent_switcher: Optional[Any] = None                  # v12.1: (agente, want_html) -> status; só no menu de testes
+        self.agent_switcher: Optional[Any] = None                  # v12.1: (agente, want_html) -> status
+        self.live_owner_sink: Optional[Any] = None                 # v12.3: voz do dono vira fala da VTuber na live (modo servidor)
+        self.voice_kit: Optional[Any] = None                       # v12.3: transcrição e fala (byte_agent.voice), criado sob demanda
         self.disabled_tools: set = set()                           # v12.0: ferramentas de habilidades desligadas no manifesto
         self.agent_manifest: Optional[Dict[str, Any]] = None
         self.closed = False
@@ -6069,7 +6101,7 @@ class ByteEcosystemService:
                            "content": {"type": "string"}, "importance": {"type": "integer", "description": "1 a 5"}}}},
         "schedule_reminder": {
             "auto": True,
-            "description": ("Agenda um lembrete para o usuário em um horário futuro. Com run_as_task=true, no horário a Byte "
+            "description": ("Agenda um lembrete para o usuário em um horário futuro. Com run_as_task=true, no horário você "
                             "executa a instrução em `text` com as ferramentas de leitura e envia o resultado (ex.: rotina diária)."),
             "parameters": {"type": "object", "required": ["text"], "properties": {
                 "text": {"type": "string", "description": "O lembrete, ou a instrução a executar no horário"},
@@ -6171,7 +6203,7 @@ class ByteEcosystemService:
             return f"ERRO: a ferramenta '{name}' não está disponível para este pedido. Responda diretamente."
         if turn.get("tainted") and name in self.TAINT_BLOCKED_TOOLS:
             self.db.record_audit("tool_blocked", "agent_tool", "tainted", {"tool": name})
-            return ("BLOQUEADO: este pedido leu conteúdo da internet, então a Byte não grava tarefas, memórias ou lembretes "
+            return ("BLOQUEADO: este pedido leu conteúdo da internet, então você não grava tarefas, memórias ou lembretes "
                     "automaticamente nele (proteção contra instruções escondidas em páginas). Diga ao usuário o que gravaria e "
                     "peça que ele confirme em uma nova mensagem.")
         if name in self.extra_tools:
@@ -6470,6 +6502,24 @@ class ByteEcosystemService:
 
         threading.Thread(target=_bg_worker, daemon=True, name="ByteV90AsyncExtractor").start()
 
+    def get_voice_kit(self) -> Any:
+        if self.voice_kit is None:
+            from byte_agent import voice as _voice
+            self.voice_kit = _voice.VoiceKit.from_env(read_secret=_read_secret)
+        return self.voice_kit
+
+    def voice_status(self) -> Dict[str, Any]:
+        """O que o painel e os clientes precisam saber sobre voz: regras do agente e o que o servidor oferece."""
+        try:
+            from byte_agent import voice as _voice
+            policy = _voice.policy_for(ACTIVE_AGENT)
+            kit = self.get_voice_kit().status()
+        except Exception as err:
+            return {"error": f"{type(err).__name__}: {str(err)[:120]}"}
+        return {"enabled": policy["ativo"], "wake_words": policy["palavras_chave"], "owner_only": policy["somente_dono"],
+                "reply_with_voice": policy["responder_com_voz"], "live": bool(policy.get("na_live") and callable(self.live_owner_sink)),
+                "kind": policy["tipo"], "stt": kit["stt"], "tts": kit["tts"]}
+
     def interact(
         self,
         user_message: str,
@@ -6644,6 +6694,7 @@ class ByteEcosystemService:
                     "profile": ACTIVE_PROFILE,
                     "profile_switch_available": callable(self.profile_switcher),
                     "agent_name": AGENT_NAME,
+                    "voice": self.voice_status(),
                     "agent": ({k: ACTIVE_AGENT[k] for k in ("id", "nome", "tipo", "habilidades")} if ACTIVE_AGENT else None),
                 }
                 if callable(self.agent_switcher):
@@ -6694,8 +6745,7 @@ class ByteEcosystemService:
                     "auto_effort_routing": self.llm.auto_effort_routing,
                 }
             elif action == "chat":
-                res = self.interact(
-                    user_message=payload.get("message", ""),
+                chat_kwargs = dict(
                     mode=payload.get("mode", "geral"),
                     custom_directive=payload.get("custom_directive"),
                     max_tokens=payload.get("max_tokens"),
@@ -6703,6 +6753,21 @@ class ByteEcosystemService:
                     temperature=payload.get("temperature"),
                     complexity=payload.get("complexity", "auto"),
                 )
+                if payload.get("voice"):                 # v12.3: fala reconhecida no navegador (o painel é do dono)
+                    from byte_agent import voice as _voice
+                    res = _voice.handle_command(self, {"text": payload.get("message", ""), "source": "painel", "owner": True,
+                                                       "hands_free": bool(payload.get("hands_free")), "audio_reply": False},
+                                                self.get_voice_kit(), interact_kwargs=chat_kwargs)
+                else:
+                    res = self.interact(user_message=payload.get("message", ""), **chat_kwargs)
+            elif action == "voice_command":
+                # v12.3: comando de voz vindo do Telegram ou da API; o canal informa se é o dono
+                from byte_agent import voice as _voice
+                res = _voice.handle_command(self, payload, self.get_voice_kit())
+            elif action == "voice_transcribe":
+                from byte_agent import voice as _voice
+                audio, mime = _voice._decode_audio(payload)
+                res = {"text": self.get_voice_kit().transcriber.transcribe(audio, mime)}
             elif action == "clear_context":
                 res = self.context_manager.clear_window()
             elif action == "search_models":
@@ -6835,6 +6900,18 @@ class ByteEcosystemService:
                 if not callable(self.agent_switcher):
                     raise RuntimeError("O menu de agentes está desligado (ative com --agent-menu ou iniciar_byte(menu_agentes=True)).")
                 res = self.agent_switcher(str(payload.get("agent", "")), bool(payload.get("want_html", False)))
+            elif action == "switch_to":
+                # v12.3: troca por um nome só (matrix, trabalho, byte, bit, kronus...), usada pelo Telegram.
+                kind, name = resolve_switch_target(str(payload.get("target", "")))
+                want_html = bool(payload.get("want_html", False))
+                if kind == "agent":
+                    if not callable(self.agent_switcher):
+                        raise RuntimeError("A troca de agentes está desligada nesta execução (iniciar_byte(menu_agentes=True) ou --agent-menu).")
+                    res = self.agent_switcher(name, want_html)
+                else:
+                    if not callable(self.profile_switcher):
+                        raise RuntimeError("A troca de perfil não está disponível nesta execução.")
+                    res = self.profile_switcher(name, want_html)
             elif action == "switch_profile":
                 if not callable(self.profile_switcher):
                     raise RuntimeError("A troca de perfil não está disponível nesta execução.")
@@ -6931,7 +7008,7 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">Matrix</button>
         <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
       </div>
-      <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Somente para testes: troca o agente em execução">
+      <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Troca o agente em execução; cada um guarda os próprios dados">
         <select id="b90-agent-menu" class="b90-select" style="width:auto; font-size:0.7rem; padding:2px 6px;" onchange="window.b90AgentArm()"></select>
         <button type="button" id="b90-agent-go" class="b90-btn-sec" style="display:none; font-size:0.68rem; padding:2px 8px;" onclick="window.b90SwitchAgent()">Confirmar troca</button>
       </span>
@@ -7059,6 +7136,12 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         <div style="display:flex; gap:6px; flex-wrap:wrap;">
           <input id="b90-chat-in" class="b90-input" style="flex:1; min-width:240px;" placeholder="Peça para ela avaliar a própria arquitetura, rodar um código Python/Bash ou agendar algo..." onkeydown="if(event.key==='Enter')window.b90SendChat()" />
           <button id="b90-send-btn" class="b90-btn-pri" style="margin-top:0; white-space:nowrap;" onclick="window.b90SendChat()">Enviar</button>
+          <button id="b90-mic-btn" class="b90-btn-sec" style="margin-top:0; white-space:nowrap;" title="Comando de voz: toque, fale e solte a frase" onclick="window.b90Mic()">🎙️ Falar</button>
+        </div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.74rem; color:var(--muted); margin-top:6px;">
+          <label style="display:flex; align-items:center; gap:4px;" title="Microfone aberto: só reage quando você chama o agente pelo nome"><input type="checkbox" id="b90-voice-hands" onchange="window.b90HandsFree()"> Mãos livres <span id="b90-voice-wake"></span></label>
+          <label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" id="b90-voice-speak" checked> Ler as respostas de voz em voz alta</label>
+          <span id="b90-voice-msg"></span>
           <button class="b90-btn-sec" style="white-space:nowrap;" onclick="window.b90ContinueLast()">➕ Continuar</button>
           <button class="b90-btn-purple" style="white-space:nowrap;" onclick="window.b90TriggerProactiveNow()">🤖 Iniciativa LLM</button>
         </div>
@@ -7832,6 +7915,8 @@ pygame.time.Clock().tick(60)</textarea>
     b90RenderV10Extras(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
+      const wakeEl = document.getElementById('b90-voice-wake');
+      if (wakeEl) wakeEl.innerText = `(“${agentName}, …”)`;
       document.getElementById('b90-title').innerText = st.agent
         ? `${st.profile === 'trabalho' ? '' : '⚡ '}${agentName} ${st.version} · ${({assistente: 'assistente pessoal', trabalho: 'assistente de trabalho', vtuber: 'VTuber'})[st.agent.tipo] || st.agent.tipo}`
         : (st.profile === 'trabalho' ? `${agentName} ${st.version} · assistente de trabalho` : `⚡ ${agentName} ${st.version} · núcleo padrão`);
@@ -7979,7 +8064,88 @@ pygame.time.Clock().tick(60)</textarea>
     if (!st.error) b90RenderState(st);
   };
 
-  window.b90SendChat = async function() {
+  // v12.3: comando de voz no painel. O navegador reconhece a fala (Web Speech API); sem isso, grava e o servidor transcreve.
+  let b90VoiceRec = null, b90VoiceOn = false, b90VoiceRecorder = null, b90VoiceAwait = 0, b90VoiceSpeaking = false;
+  function b90VoiceMsg(t) { const el = document.getElementById('b90-voice-msg'); if (el) el.innerText = t || ''; }
+  function b90Fold(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function b90VoiceWake(text) {
+    const words = String(text).trim().split(/\s+/), wake = ((b90State.voice || {}).wake_words || []);
+    for (let i = 0; i < Math.min(4, words.length); i++) {
+      if (wake.includes(b90Fold(words[i]).replace(/[^\w]/g, ''))) return [true, words.slice(i + 1).join(' ').replace(/^[\s,.:;!?-]+/, '')];
+    }
+    return [false, text];
+  }
+  function b90VoiceHeard(text) {
+    text = String(text || '').trim();
+    if (!text || b90VoiceSpeaking) return;
+    const hands = document.getElementById('b90-voice-hands').checked;
+    if (hands && Date.now() > b90VoiceAwait) {
+      const [called, cmd] = b90VoiceWake(text);
+      if (!called) return;
+      if (!cmd) { b90VoiceAwait = Date.now() + 8000; b90VoiceMsg('🎙️ Pode falar.'); return; }
+      text = cmd;
+    }
+    b90VoiceAwait = 0;
+    document.getElementById('b90-chat-in').value = text;
+    window.b90SendChat({ voice: true });
+  }
+  function b90VoiceStop() {
+    b90VoiceOn = false;
+    if (b90VoiceRec) { try { b90VoiceRec.stop(); } catch (e) {} b90VoiceRec = null; }
+    if (b90VoiceRecorder && b90VoiceRecorder.state === 'recording') b90VoiceRecorder.stop();
+    const btn = document.getElementById('b90-mic-btn'); if (btn) btn.innerText = '🎙️ Falar';
+  }
+  window.b90HandsFree = function() { if (b90VoiceOn) { b90VoiceStop(); window.b90Mic(); } };
+  window.b90Mic = async function() {
+    if (b90VoiceOn) { b90VoiceStop(); b90VoiceMsg(''); return; }
+    const v = b90State.voice || {};
+    if (v.enabled === false) { b90VoiceMsg('Comando de voz desligado para este agente.'); return; }
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const btn = document.getElementById('b90-mic-btn');
+    const hands = document.getElementById('b90-voice-hands').checked;
+    if (Ctor) {
+      b90VoiceRec = new Ctor(); b90VoiceRec.lang = 'pt-BR'; b90VoiceRec.interimResults = false; b90VoiceRec.continuous = hands;
+      b90VoiceRec.onresult = e => b90VoiceHeard(e.results[e.results.length - 1][0].transcript);
+      b90VoiceRec.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') b90VoiceMsg('⚠️ Microfone: ' + e.error); };
+      b90VoiceRec.onend = () => { if (b90VoiceOn && document.getElementById('b90-voice-hands').checked) { try { b90VoiceRec.start(); } catch (e) {} } else b90VoiceStop(); };
+      try { b90VoiceRec.start(); b90VoiceOn = true; btn.innerText = '⏹️ Parar'; b90VoiceMsg(hands ? '🎙️ Ouvindo… chame pelo nome.' : '🎙️ Ouvindo…'); }
+      catch (e) { b90VoiceMsg('⚠️ ' + e.message); }
+      return;
+    }
+    if (!v.stt) { b90VoiceMsg('Este navegador não reconhece fala e o servidor não tem transcrição (veja docs/voz.md).'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      b90VoiceRecorder = new MediaRecorder(stream);
+      b90VoiceRecorder.ondataavailable = e => chunks.push(e.data);
+      b90VoiceRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: b90VoiceRecorder.mimeType || 'audio/webm' });
+        const b64 = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.readAsDataURL(blob); });
+        b90VoiceMsg('Transcrevendo…');
+        const res = await b90Call('voice_transcribe', { audio_b64: b64, mime: blob.type });
+        if (res.error) { b90VoiceMsg('⚠️ ' + res.error); return; }
+        b90VoiceMsg(''); b90VoiceHeard(res.text);
+      };
+      b90VoiceRecorder.start(); b90VoiceOn = true; btn.innerText = '⏹️ Enviar áudio'; b90VoiceMsg('🎙️ Gravando…');
+    } catch (e) { b90VoiceMsg('⚠️ Sem acesso ao microfone: ' + e.message); }
+  };
+  function b90VoiceSpeak(res) {
+    if (!document.getElementById('b90-voice-speak').checked) return;
+    const done = () => { b90VoiceSpeaking = false; };
+    b90VoiceSpeaking = true;
+    if (res.audio_b64) {
+      const a = new Audio('data:' + (res.audio_mime || 'audio/ogg') + ';base64,' + res.audio_b64);
+      a.onended = a.onerror = done; a.play().catch(done); return;
+    }
+    if (!('speechSynthesis' in window) || !(res.speech || res.response)) { done(); return; }
+    const u = new SpeechSynthesisUtterance(res.speech || res.response); u.lang = 'pt-BR';
+    const voice = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang)); if (voice) u.voice = voice;
+    u.onend = u.onerror = done; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+
+  window.b90SendChat = async function(opts) {
+    opts = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
     const inp = document.getElementById('b90-chat-in');
     const btn = document.getElementById('b90-send-btn');
     const text = inp.value.trim();
@@ -7995,10 +8161,11 @@ pygame.time.Clock().tick(60)</textarea>
     const numCtx = parseInt(document.getElementById('b90-chat-ctx').value || '8192');
 
     const log = document.getElementById('b90-chat-log');
-    log.innerHTML += `<div class="b90-msg-u"><b>VOCÊ:</b> ${b90EscapeHtml(text)}</div>`;
+    log.innerHTML += `<div class="b90-msg-u"><b>${opts.voice ? '🎙️ VOCÊ (voz)' : 'VOCÊ'}:</b> ${b90EscapeHtml(text)}</div>`;
     log.scrollTop = log.scrollHeight;
 
     const res = await b90Call('chat', {
+      voice: !!opts.voice,
       message: text,
       mode: mode,
       custom_directive: dir,
@@ -8015,6 +8182,12 @@ pygame.time.Clock().tick(60)</textarea>
       return;
     }
 
+    if (opts.voice) setTimeout(() => { try { b90VoiceSpeak(res); } catch (e) { b90VoiceSpeaking = false; b90VoiceMsg('⚠️ Voz: ' + e.message); } }, 0);
+    if (res.live) {
+      log.innerHTML += `<div class="b90-msg-b"><b>${b90AgentLabel()} [LIVE]:</b> 🎙️ ${b90EscapeHtml(res.response || 'Respondendo na live.')}</div>`;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
     const b = res.breakdown_ms || { total_ms: res.latency_ms, memory_ms: 0, llm_ms: 0, db_ms: 0 };
     const eff = res.effort_routing || { tier_label: 'Padrão', effort_tier: 'STANDARD', effort_score: 0.3 };
     const b90Reason = String(res.done_reason || '');
@@ -8516,7 +8689,7 @@ pygame.time.Clock().tick(60)</textarea>
     b90AgentMenuKey = key;
     const sel = document.getElementById('b90-agent-menu');
     const opts = [{ id: '', nome: 'Matrix', tipo: 'padrão' }].concat(st.agent_menu);
-    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>Teste: ${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.tipo)})</option>`).join('');
+    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.tipo)})</option>`).join('');
     document.getElementById('b90-agent-go').style.display = 'none';
   }
   window.b90AgentArm = function() {
@@ -8793,6 +8966,201 @@ OVERLAY_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"
   setInterval(tick, 700); tick();
 </script></body></html>"""
 
+# v12.3: página de comando de voz para celular e relógio (principal canal do Kronus). Não guarda segredos:
+# o token da API fica no aparelho (localStorage) e cada chamada à API é autenticada.
+VOICE_PAGE_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0f17"><meta name="referrer" content="no-referrer">
+<title>Comando de voz</title>
+<style>
+:root{--bg:#f6f7f9;--card:#ffffff;--ink:#0b0f17;--muted:#5b6372;--line:#dde1e7;--accent:#2563eb;--accent-ink:#ffffff;--live:#dc2626;--ok:#16a34a}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0f17;--card:#141a24;--ink:#eef2f7;--muted:#97a1b2;--line:#263041;--accent:#3b82f6;--accent-ink:#ffffff;--live:#f87171;--ok:#4ade80}}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;
+  padding:max(12px,env(safe-area-inset-top)) 16px max(12px,env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+h1{font-size:1.15rem;margin:0}#dot{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block;margin-right:6px}
+#dot.on{background:var(--ok)}
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;min-height:0}
+#mic{width:min(52vmin,220px);height:min(52vmin,220px);border-radius:50%;border:0;background:var(--accent);color:var(--accent-ink);
+  font-size:min(16vmin,64px);cursor:pointer;box-shadow:0 8px 30px rgba(37,99,235,.35);transition:transform .15s;flex-shrink:0;aspect-ratio:1/1}
+#mic:active{transform:scale(.96)}#mic.listening{background:var(--live);animation:pulse 1.2s infinite}
+#mic.busy{opacity:.6}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}70%{box-shadow:0 0 0 22px rgba(220,38,38,0)}100%{box-shadow:0 0 0 0 rgba(220,38,38,0)}}
+#state{color:var(--muted);font-size:.95rem;text-align:center;min-height:1.4em}
+#log{width:100%;max-width:560px;overflow:auto;max-height:34vh;display:flex;flex-direction:column;gap:8px}
+.u,.a{padding:8px 12px;border-radius:12px;max-width:92%;overflow-wrap:anywhere}
+.u{align-self:flex-end;background:var(--accent);color:var(--accent-ink)}.a{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.opts{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:center;font-size:.9rem;color:var(--muted)}
+.opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
+#setup{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;width:100%;max-width:560px}
+#setup input{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;margin:8px 0}
+button.small{padding:8px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+@media (max-width:300px){body{padding:8px}.opts{font-size:.8rem}#log{max-height:26vh}h1{font-size:.95rem}
+  button.small{padding:3px 8px;font-size:.72rem}#mic{width:42vmin;height:42vmin}main{gap:8px}}
+</style></head><body>
+<header><h1><span id="dot"></span><span id="name">Comando de voz</span></h1><button class="small" id="forget" hidden>Trocar token</button></header>
+<main>
+  <section id="setup" hidden>
+    <b>Conectar</b>
+    <div style="color:var(--muted);font-size:.9rem">Cole o token da API do agente (o mesmo do relógio/celular). Ele fica salvo só neste aparelho.</div>
+    <input id="tok" type="password" autocomplete="off" placeholder="token da API">
+    <button class="small primary" id="save">Conectar</button>
+  </section>
+  <button id="mic" aria-label="Falar" hidden>🎙️</button>
+  <div id="state"></div>
+  <div class="opts" id="opts" hidden>
+    <label><input type="checkbox" id="hands"> Mãos livres <span id="wake"></span></label>
+    <label><input type="checkbox" id="speak" checked> Responder em voz alta</label>
+    <label><input type="checkbox" id="notif"> Ler avisos</label>
+  </div>
+  <div id="log" aria-live="polite"></div>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const store = { get(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+                  set(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} } };
+  let token = '', wakeWords = [], agent = 'Agente', rec = null, listening = false, awaitingCommand = 0, speaking = false, busy = false;
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  const hash = new URLSearchParams(location.hash.slice(1));
+  if (hash.get('token')) { store.set('byte_voice_token', hash.get('token')); history.replaceState(null, '', location.pathname); }
+  token = store.get('byte_voice_token');
+
+  function state(text) { $('state').textContent = text; }
+  function add(cls, text) {
+    const d = document.createElement('div'); d.className = cls; d.textContent = text; $('log').appendChild(d);
+    while ($('log').children.length > 12) $('log').removeChild($('log').firstChild);
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+  async function api(path, opts) {
+    const r = await fetch(path, Object.assign({ cache: 'no-store' }, opts || {}, {
+      headers: Object.assign({ 'Authorization': 'Bearer ' + token }, (opts || {}).headers || {}) }));
+    let data = {}; try { data = await r.json(); } catch (e) {}
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    return data;
+  }
+  function fold(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+  function wakeSplit(text) {
+    const words = String(text).trim().split(/\s+/);
+    for (let i = 0; i < Math.min(4, words.length); i++) {
+      if (wakeWords.includes(fold(words[i]).replace(/[^\w]/g, ''))) return [true, words.slice(i + 1).join(' ').replace(/^[\s,.:;!?-]+/, '')];
+    }
+    return [false, text];
+  }
+  function beep() {
+    try { const c = new (window.AudioContext || window.webkitAudioContext)(); const o = c.createOscillator(), g = c.createGain();
+      o.frequency.value = 880; g.gain.value = 0.08; o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + 0.12); } catch (e) {}
+  }
+  function speak(res) {
+    if (!$('speak').checked) return Promise.resolve();
+    return new Promise(done => {
+      speaking = true; const finish = () => { speaking = false; done(); };
+      if (res.audio_b64) {
+        const a = new Audio('data:' + (res.audio_mime || 'audio/ogg') + ';base64,' + res.audio_b64);
+        a.onended = finish; a.onerror = () => { speaking = false; browserSpeak(res.speech || res.reply, done); }; a.play().catch(a.onerror);
+      } else browserSpeak(res.speech || res.reply, done);
+    });
+  }
+  function browserSpeak(text, done) {
+    if (!('speechSynthesis' in window) || !text) { speaking = false; done(); return; }
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'pt-BR';
+    const v = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang)); if (v) u.voice = v;
+    u.onend = u.onerror = () => { speaking = false; done(); };
+    speaking = true; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+
+  async function send(body, isAudio) {
+    busy = true; $('mic').classList.add('busy'); state('Pensando…');
+    try {
+      const res = isAudio
+        ? await api('/api/v1/voice', { method: 'POST', headers: { 'Content-Type': body.type || 'audio/webm' }, body })
+        : await api('/api/v1/voice', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.heard && isAudio) add('u', res.heard);
+      if (res.ignored) { state(res.heard ? 'Não era comigo.' : 'Não entendi.'); return; }
+      if (res.wake_only) { beep(); awaitingCommand = Date.now() + 8000; state('Pode falar.'); return; }
+      add('a', res.reply || (res.live ? 'Respondendo na live.' : '(sem texto)'));
+      if (res.note) add('a', res.note);
+      state(''); await speak(res);
+    } catch (e) { state('⚠️ ' + e.message); }
+    finally { busy = false; $('mic').classList.remove('busy'); }
+  }
+
+  function handleHeard(text) {
+    text = String(text || '').trim(); if (!text || speaking || busy) return;
+    if ($('hands').checked && Date.now() > awaitingCommand) {
+      const [called, cmd] = wakeSplit(text);
+      if (!called) return;
+      if (!cmd) { beep(); awaitingCommand = Date.now() + 8000; state('Pode falar.'); return; }
+      text = cmd;
+    }
+    awaitingCommand = 0; add('u', text); send({ text: text }, false);
+  }
+
+  function startRec() {
+    if (!Rec) return startRecorder();
+    rec = new Rec(); rec.lang = 'pt-BR'; rec.interimResults = false; rec.continuous = $('hands').checked;
+    rec.onresult = e => handleHeard(e.results[e.results.length - 1][0].transcript);
+    rec.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') state('⚠️ Microfone: ' + e.error); };
+    rec.onend = () => { if (listening && $('hands').checked) { try { rec.start(); } catch (e) {} } else stopUi(); };
+    try { rec.start(); listening = true; $('mic').classList.add('listening'); state($('hands').checked ? 'Ouvindo… chame pelo nome.' : 'Ouvindo…'); }
+    catch (e) { state('⚠️ ' + e.message); }
+  }
+  let recorder = null, chunks = [];
+  async function startRecorder() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorder = new MediaRecorder(stream); chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = () => { stream.getTracks().forEach(t => t.stop()); stopUi();
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }); if (blob.size) send(blob, true); };
+      recorder.start(); listening = true; $('mic').classList.add('listening'); state('Gravando… toque de novo para enviar.');
+    } catch (e) { state('⚠️ Sem acesso ao microfone: ' + e.message); }
+  }
+  function stopUi() { listening = false; $('mic').classList.remove('listening'); if (!busy) state(''); }
+  function stop() {
+    listening = false;
+    if (rec) { try { rec.stop(); } catch (e) {} rec = null; }
+    if (recorder && recorder.state === 'recording') recorder.stop();
+    stopUi();
+  }
+  $('mic').onclick = () => { if (busy) return; listening ? stop() : startRec(); };
+  $('hands').onchange = () => { if (listening) { stop(); startRec(); } };
+
+  let notifTimer = null;
+  $('notif').onchange = () => {
+    clearInterval(notifTimer);
+    if (!$('notif').checked) return;
+    notifTimer = setInterval(async () => {
+      try { const n = await api('/api/v1/notifications');
+        for (const item of n.notifications || []) { add('a', '🔔 ' + item.text); await speak({ reply: item.text }); } } catch (e) {}
+    }, 30000);
+  };
+
+  async function connect() {
+    if (!token) { $('setup').hidden = false; return; }
+    try {
+      const st = await api('/api/v1/status');
+      agent = st.agent || agent; $('name').textContent = agent; document.title = agent + ' · voz';
+      $('dot').classList.toggle('on', !!st.online);
+      const v = st.voice || {};
+      wakeWords = (v.wake_words || [fold(agent)]).map(fold);
+      $('wake').textContent = '(“' + agent + ', …”)';
+      $('setup').hidden = true; $('mic').hidden = false; $('opts').hidden = false; $('forget').hidden = false;
+      if (v.enabled === false) { $('mic').hidden = true; state('O comando de voz está desligado para ' + agent + '.'); return; }
+      if (!Rec && !v.stt) state('Este navegador não reconhece fala e o servidor não tem transcrição configurada.');
+      else state('Toque para falar com ' + agent + '.');
+    } catch (e) { $('setup').hidden = false; state('⚠️ ' + e.message); }
+  }
+  $('save').onclick = () => { token = $('tok').value.trim(); store.set('byte_voice_token', token); connect(); };
+  $('forget').onclick = () => { stop(); token = ''; store.set('byte_voice_token', ''); $('mic').hidden = true; $('opts').hidden = true; $('forget').hidden = true; connect(); };
+  connect();
+})();
+</script></body></html>"""
+
 _CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
 
 
@@ -8883,6 +9251,17 @@ class ByteOmniServer:
                     return None
                 return data if isinstance(data, dict) else None
 
+            def _rate_ok(self) -> bool:
+                now = time.monotonic()
+                with outer._api_lock:
+                    while outer._api_calls and now - outer._api_calls[0] > 60.0:
+                        outer._api_calls.popleft()
+                    if len(outer._api_calls) >= outer.api_requests_per_minute:
+                        self._send_json(429, {"error": "Muitas mensagens por minuto; tente de novo em instantes"})
+                        return False
+                    outer._api_calls.append(now)
+                return True
+
             def _public(self, parsed: urllib.parse.SplitResult, method: str) -> bool:
                 """Rotas /api/v1 e /overlay. Não exigem Host local: quem chama prova acesso pelo token próprio
                 (um site malicioso não tem o token, então "DNS rebinding" não serve de nada aqui)."""
@@ -8900,6 +9279,12 @@ class ByteOmniServer:
                     self._send_json(200, {"text": str((state or {}).get("text") or ""), "emotion": (state or {}).get("emotion"),
                                           "at": (state or {}).get("at")})
                     return True
+                if path == "/voz":                        # v12.3: página de voz para celular/relógio (pede o token da API)
+                    if method != "GET":
+                        self._send_json(405, {"error": "Use GET"})
+                        return True
+                    self._send_html(VOICE_PAGE_HTML)
+                    return True
                 if not path.startswith("/api/v1/"):
                     return False
                 if not outer.api_token:
@@ -8912,7 +9297,49 @@ class ByteOmniServer:
                 if method == "GET" and path == "/api/v1/status":
                     llm = service.llm
                     self._send_json(200, {"agent": AGENT_NAME, "version": BYTE_VERSION, "profile": ACTIVE_PROFILE,
-                                          "online": bool(llm.ollama_online), "model": f"{llm.active_provider}:{llm.active_model}"})
+                                          "online": bool(llm.ollama_online), "model": f"{llm.active_provider}:{llm.active_model}",
+                                          "voice": service.voice_status()})
+                    return True
+                if method == "POST" and path == "/api/v1/voice":
+                    # v12.3: comando de voz. Aceita JSON {"text"} (fala já reconhecida no celular), JSON {"audio_b64", "mime"}
+                    # ou o próprio áudio no corpo (Content-Type: audio/...). Quem tem o token da API é o dono.
+                    if not self._rate_ok():
+                        return True
+                    ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                    except ValueError:
+                        length = -1
+                    if length <= 0 or length > 16 * 1024 * 1024:
+                        self._send_json(413 if length > 0 else 400, {"error": "Envie o áudio (até 15 MB) ou JSON com o texto"})
+                        return True
+                    body = self.rfile.read(length)
+                    if ctype.startswith("audio/") or ctype in {"video/webm", "application/octet-stream"}:
+                        payload = {"audio_b64": body, "mime": ctype if ctype != "application/octet-stream" else "audio/ogg"}
+                    else:
+                        try:
+                            payload = json.loads(body.decode("utf-8") or "{}")
+                        except Exception:
+                            payload = None
+                        if not isinstance(payload, dict):
+                            self._send_json(400, {"error": 'Envie JSON {"text": "..."} ou {"audio_b64": "...", "mime": "audio/webm"}'})
+                            return True
+                    payload = {"audio_b64": payload.get("audio_b64"), "mime": payload.get("mime"),
+                               "text": payload.get("text"), "hands_free": bool(payload.get("hands_free")),
+                               "audio_reply": payload.get("audio_reply"), "source": "api", "owner": True}
+                    res = service.dispatch_request("voice_command", payload)
+                    if res.get("error"):
+                        self._send_json(400 if "PermissionError" not in str(res.get("error")) else 403, {"error": res["error"]})
+                        return True
+                    reply = str(res.get("response") or "")
+                    pending = reply.count("```byte-email") + reply.count("```byte-action") + reply.count("NÃO executada")
+                    clean = re.sub(r"🛡️[^\n]*\n?", "", _CODE_FENCE_RE.sub("", reply)).strip()
+                    self._send_json(200, {"agent": AGENT_NAME, "heard": res.get("heard", ""), "reply": clean,
+                                          "speech": res.get("speech", ""), "ignored": bool(res.get("ignored")),
+                                          "wake_only": bool(res.get("wake_only")), "live": bool(res.get("live")),
+                                          "audio_b64": res.get("audio_b64"), "audio_mime": res.get("audio_mime"),
+                                          "pending_approvals": pending,
+                                          "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
                     return True
                 if method == "GET" and path == "/api/v1/notifications":
                     items = service.db.pop_undelivered_proactive_messages()
@@ -8921,14 +9348,8 @@ class ByteOmniServer:
                          "created_at": i.get("created_at")} for i in items]})
                     return True
                 if method == "POST" and path == "/api/v1/message":
-                    now = time.monotonic()
-                    with outer._api_lock:
-                        while outer._api_calls and now - outer._api_calls[0] > 60.0:
-                            outer._api_calls.popleft()
-                        if len(outer._api_calls) >= outer.api_requests_per_minute:
-                            self._send_json(429, {"error": "Muitas mensagens por minuto; tente de novo em instantes"})
-                            return True
-                        outer._api_calls.append(now)
+                    if not self._rate_ok():
+                        return True
                     data = self._read_json()
                     text = str((data or {}).get("text") or "").strip()[:2000]
                     if data is None or not text:
@@ -9267,7 +9688,7 @@ def install_web_access(service: "ByteEcosystemService", data_dir: Path) -> Optio
 
 def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = True, telegram: bool = True,
                  perfil: str = "pessoal", dados_perfil: Optional[Dict[str, Any]] = None, agente: Any = None,
-                 menu_agentes: bool = False) -> None:
+                 menu_agentes: bool = True) -> None:
     """
     COMANDO ÚNICO DE INICIALIZAÇÃO DO ECOSSISTEMA BYTE v10.1 (Hardware-Aware & Unrestricted Registry Edition):
     0. Tags do Ollama respeitadas sem alias, telemetria real de GPU/VRAM/RAM, validador de alocação em
@@ -9334,8 +9755,10 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     def _switch_profile(target: str, want_html: bool = False) -> Dict[str, Any]:
         """v11.1 — troca Matrix (padrão) <-> Trabalho dentro da mesma sessão, sem rodar a célula de novo."""
         global byte_service
-        current = byte_service
         target_name = normalize_profile_name(target)
+        if ACTIVE_AGENT is not None:             # v12.3: com um agente ativo, volta primeiro para a Matrix
+            _switch_agent("")
+        current = byte_service
         if target_name != ACTIVE_PROFILE:
             previous = (ACTIVE_PROFILE, dict(ACTIVE_PROFILE_DATA))
             try:
@@ -9353,7 +9776,7 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
         return st
 
     def _switch_agent(target: str, want_html: bool = False) -> Dict[str, Any]:
-        """v12.1 — SOMENTE PARA TESTES: troca o agente da sessão (target="" volta para a Matrix, o perfil padrão)."""
+        """v12.1 — troca o agente da sessão (target="" volta para a Matrix, o perfil padrão). Painel e /agente no Telegram."""
         global byte_service
         from byte_agent import agents as _agents
         current = byte_service
@@ -9372,20 +9795,19 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
                     _agents.apply_identity(previous[2])
                 raise
             transfer_runtime(current, new_service, servers=[server])
-            new_service.profile_switcher = None if new_manifest is not None else _switch_profile
+            new_service.profile_switcher = _switch_profile
             new_service.agent_switcher = _switch_agent
             if new_manifest is not None and new_manifest["modelo"]:
                 new_service.llm.active_model = new_service.llm._require_valid_tag(new_manifest["modelo"])[0]
             byte_service = new_service
             start_llm_like(current, new_service)
-            print(f"[BYTE] Agente de teste ativo: {AGENT_NAME}.", flush=True)
+            print(f"[BYTE] Agente ativo: {AGENT_NAME}.", flush=True)
         st = byte_service.dispatch_request("status", {})
         if want_html:
             st["html"] = build_v90_web_ui(st)
         return st
 
-    if manifest is None:
-        byte_service.profile_switcher = _switch_profile
+    byte_service.profile_switcher = _switch_profile      # v12.3: também com agente ativo (volta para a Matrix antes)
     if menu_agentes:
         byte_service.agent_switcher = _switch_agent
 

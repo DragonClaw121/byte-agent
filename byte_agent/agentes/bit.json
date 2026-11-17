@@ -35,5 +35,12 @@
       "token_segredo": "BIT_TELEGRAM_TOKEN",
       "chat_ids_segredo": "BIT_TELEGRAM_CHAT_IDS"
     }
+  },
+  "voz": {
+    "responder_com_voz": "auto",
+    "palavras_chave": [
+      "bit",
+      "biti"
+    ]
   }
 }

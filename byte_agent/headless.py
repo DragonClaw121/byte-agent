@@ -156,8 +156,10 @@ class Runtime:
         self.args = args
         self.env = os.environ if env is None else env
         self.base_env = dict(self.env)
-        # v12.1: menu de agentes para TESTES (--agent-menu / BYTE_AGENT_MENU=1). Desligado no uso normal.
-        self.agent_menu = bool(getattr(args, "agent_menu", False))
+        # v12.3: troca de agentes (painel e /agente no Telegram) ligada por padrão; um processo dedicado a um agente
+        # (--agent kronus) só troca com --agent-menu. BYTE_AGENT_MENU=0 desliga.
+        self.agent_menu = bool(getattr(args, "agent_menu", False)) or (
+            not getattr(args, "agent", "") and self.base_env.get("BYTE_AGENT_MENU", "") != "0")
         self.default_data_dir = Path.home() / ".byte-agent"
         # v12.0: com --agent, o manifesto define perfil, pasta, porta e canais; não há troca de perfil.
         self.manifest: Optional[dict] = agents.resolve_agent(args.agent) if getattr(args, "agent", None) else None
@@ -173,6 +175,7 @@ class Runtime:
             if not getattr(args, "port", None):
                 args.port = self.manifest["canais"]["painel"]["porta"] or 0
         else:
+            args.profile = engine.normalize_profile_name(getattr(args, "profile", "pessoal"))
             if not getattr(args, "data_dir", None):
                 args.data_dir = str(Path.home() / ".byte-agent")
             if getattr(args, "port", None) is None:
@@ -201,6 +204,7 @@ class Runtime:
                 service.llm.active_model = model
         else:
             service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
+        if self.manifest is None or self.agent_menu:
             service.profile_switcher = self.switch
         if self.agent_menu:
             service.agent_switcher = self.switch_agent
@@ -232,6 +236,8 @@ class Runtime:
         director.chat.start()
         director.start()
         self.director = director
+        if self.manifest is not None and self.manifest["tipo"] == "vtuber":
+            self.service.live_owner_sink = director.owner_says     # v12.3: voz do dono -> fala da VTuber na live
         if self.bridge is not None:
             self.bridge.stream_director = director
         parts = [f"Twitch #{director.chat.channel} (modo {director.cfg.respond_mode})",
@@ -240,6 +246,8 @@ class Runtime:
 
     def _stop_live(self) -> None:
         director, self.director = self.director, None
+        if self.service is not None:
+            self.service.live_owner_sink = None
         if self.bridge is not None:
             self.bridge.stream_director = None
         if director is not None:
@@ -308,6 +316,8 @@ class Runtime:
         """Troca Matrix (padrão) <-> Trabalho: desliga a live, sobe o serviço do outro perfil com o mesmo modelo
         e aponta painel e Telegram para ele. Chamado pelo painel (switch_profile) e por /perfil no Telegram."""
         target = engine.normalize_profile_name(target)
+        if self.manifest is not None and self.agent_menu:      # v12.3: com um agente ativo, volta primeiro para a Matrix
+            self.switch_agent("")
         with self._lock:
             if target != engine.ACTIVE_PROFILE:
                 old = self.service
@@ -331,7 +341,7 @@ class Runtime:
         return st
 
     def switch_agent(self, target: str, want_html: bool = False) -> Dict[str, Any]:
-        """SOMENTE PARA TESTES: troca o agente em execução (Byte VTuber, Bit, Kronus... ou a Matrix padrão, target="").
+        """Troca o agente em execução (Byte VTuber, Bit, Kronus... ou a Matrix padrão, target="").
         Cada agente usa a própria pasta de dados. O Telegram continua no bot iniciado; a API e a legenda passam a usar
         os tokens do agente novo."""
         with self._lock:
@@ -361,7 +371,7 @@ class Runtime:
                     raise
                 self._stop_live()
                 engine.transfer_runtime(old, new, servers=[self.server])
-                new.profile_switcher = None if new_manifest is not None else self.switch      # transfer copia; corrige
+                new.profile_switcher = self.switch
                 new.agent_switcher = self.switch_agent
                 if new_manifest is not None and new_manifest["modelo"]:
                     new.llm.active_model = new.llm._require_valid_tag(new_manifest["modelo"])[0]
@@ -451,8 +461,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="manifesto JSON do agente (ex.: agents/kronus.json). Define perfil, pasta, porta e canais.")
     parser.add_argument("--data-dir", default=env.get("BYTE_DATA_DIR") or None)
     parser.add_argument("--agent-menu", action="store_true", default=env.get("BYTE_AGENT_MENU", "") == "1",
-                        help="mostra no painel o menu de troca de agentes (SOMENTE PARA TESTES).")
-    parser.add_argument("--profile", default=env.get("BYTE_PROFILE", "pessoal"), choices=["pessoal", "trabalho"],
+                        help="liga a troca de agentes (painel e /agente no Telegram) mesmo com --agent; sem --agent ela já vem ligada.")
+    parser.add_argument("--profile", default=env.get("BYTE_PROFILE", "pessoal"), choices=["matrix", "pessoal", "trabalho"],
                         help="perfil inicial; dá para trocar depois pelo painel ou por /perfil no Telegram.")
     parser.add_argument("--ollama-url", default=env.get("OLLAMA_URL", ""))
     parser.add_argument("--model", default=env.get("BYTE_MODEL", ""))
