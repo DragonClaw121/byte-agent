@@ -24,7 +24,7 @@ EMAIL_CARD_RE = re.compile(r"```byte-(?:email|action)\s*\n(\{.*?\})\s*\n```", re
 MAX_MSG = 3900          # o limite do Telegram é 4096 caracteres por mensagem
 
 HELP_TEXT = (
-    "Byte no Telegram — comandos:\n"
+    "Comandos do Telegram:\n"
     "/status — modelo ativo, GPU e servidor\n"
     "/modelo <tag> — troca o modelo (baixa se preciso), ex.: /modelo qwen2.5:7b\n"
     "/agenda — tarefas pendentes\n"
@@ -32,17 +32,17 @@ HELP_TEXT = (
     "/memorias — lista as memórias\n"
     "/lembrar <fato> — grava uma memória\n"
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
-    "/rotina <HH:MM> <instrução> — todo dia, a Byte executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
+    "/rotina <HH:MM> <instrução> — todo dia, o agente executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
-    "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil vtuber — troca de perfil\n"
+    "/perfil — mostra o perfil ativo | /perfil trabalho | /perfil matrix — troca de perfil\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
     "/limpar — limpa a janela de contexto da conversa\n"
     "/iniciativas on|off — liga/desliga mensagens espontâneas\n"
-    "Qualquer outro texto é enviado ao chat da Byte."
+    "Qualquer outro texto é enviado ao chat do agente."
 )
 
 
@@ -350,7 +350,7 @@ class TelegramBridge:
             hw = llm.get("gpu_hardware") or {}
             prov = llm.get("provision_state") or {}
             self.send(chat_id, "\n".join([
-                f"Byte v{full.get('version', '?')}",
+                f"{full.get('agent_name') or 'Matrix'} v{full.get('version', '?')}",
                 f"Modelo: {llm.get('active_provider')}:{llm.get('active_model')}",
                 f"Ollama: {'online' if llm.get('ollama_online') else 'offline'} | carregado: {', '.join(llm.get('ollama_loaded_vram') or []) or 'nada'}",
                 f"GPU: {hw.get('gpu_name')} | VRAM livre {hw.get('vram_free_gb')}/{hw.get('vram_total_gb')} GB | RAM livre {hw.get('ram_free_gb')} GB",
@@ -403,7 +403,7 @@ class TelegramBridge:
         elif cmd == "/live":
             director = self.stream_director
             if director is None:
-                self.send(chat_id, "A live não está ativa: ela só roda no perfil VTuber e exige BYTE_TWITCH_CHANNEL configurado.")
+                self.send(chat_id, "A live não está ativa: ela não roda no perfil de trabalho e exige BYTE_TWITCH_CHANNEL configurado.")
                 return
             if arg.lower() in {"on", "off"}:
                 director.set_paused(arg.lower() == "off")
@@ -417,15 +417,15 @@ class TelegramBridge:
                 f"Última fala: {(st.get('last_reply') or {}).get('text', '—')}",
             ]))
         elif cmd == "/perfil":
-            names = {"pessoal": "VTuber (pessoal)", "trabalho": "Trabalho"}
-            wanted = {"vtuber": "pessoal", "pessoal": "pessoal", "personal": "pessoal",
+            names = {"pessoal": "Matrix (padrão)", "trabalho": "Trabalho"}
+            wanted = {"matrix": "pessoal", "padrao": "pessoal", "padrão": "pessoal", "pessoal": "pessoal", "personal": "pessoal",
                       "trabalho": "trabalho", "work": "trabalho"}.get(arg.lower().strip())
             if not arg:
                 current = self._dispatch("status").get("profile", "pessoal")
-                self.send(chat_id, f"Perfil ativo: {names.get(current, current)}. Para trocar: /perfil trabalho ou /perfil vtuber")
+                self.send(chat_id, f"Perfil ativo: {names.get(current, current)}. Para trocar: /perfil trabalho ou /perfil matrix")
                 return
             if wanted is None:
-                self.send(chat_id, "Use: /perfil trabalho ou /perfil vtuber")
+                self.send(chat_id, "Use: /perfil trabalho ou /perfil matrix")
                 return
             self.send(chat_id, "Trocando de perfil...")
             st = self._dispatch("switch_profile", {"profile": wanted})

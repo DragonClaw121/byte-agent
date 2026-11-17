@@ -1,4 +1,4 @@
-"""Menu de agentes (somente para testes): troca Byte padrão <-> Byte VTuber <-> Bit <-> Kronus no mesmo processo."""
+"""Menu de agentes (somente para testes): troca Matrix (padrão) <-> Byte VTuber <-> Bit <-> Kronus no mesmo processo."""
 import argparse
 import json
 import urllib.request
@@ -56,12 +56,12 @@ def test_menu_switches_agents_and_keeps_data_apart(tmp_path, fake, monkeypatch):
     try:
         st = rt.service.dispatch_request("status", {})
         assert [a["id"] for a in st["agent_menu"]] == ["bit", "byte", "kronus"] and st["agent"] is None
-        rt.service.db.add_memory_direct("Memória da Byte padrão", importance=5)
+        rt.service.db.add_memory_direct("Memória da Matrix", importance=5)
 
         st = rt.service.dispatch_request("switch_agent", {"agent": "kronus", "want_html": True})
         assert st["agent"]["id"] == "kronus" and engine.AGENT_NAME == "Kronus" and st["profile_switch_available"] is False
         assert rt.data_dir == tmp_path / ".byte-agents" / "kronus" and "agent_menu" in st and st["html"].startswith("<!DOCTYPE html>")
-        assert all("Byte padrão" not in m["content"] for m in rt.service.db.list_memories())
+        assert all("Matrix" not in m["content"] for m in rt.service.db.list_memories())
         assert api_status(rt, KRONUS_TOKEN)[1]["agent"] == "Kronus"                         # API passa a usar o token do Kronus
 
         st = rt.service.dispatch_request("switch_agent", {"agent": "bit"})
@@ -69,8 +69,8 @@ def test_menu_switches_agents_and_keeps_data_apart(tmp_path, fake, monkeypatch):
         assert api_status(rt, KRONUS_TOKEN)[0] == 404                                        # o Bit não tem API
 
         st = rt.service.dispatch_request("switch_agent", {"agent": ""})
-        assert st["agent"] is None and engine.AGENT_NAME == "Byte" and st["profile_switch_available"] is True
-        assert any(m["content"] == "Memória da Byte padrão" for m in rt.service.db.list_memories())
+        assert st["agent"] is None and engine.AGENT_NAME == "Matrix" and st["profile_switch_available"] is True
+        assert any(m["content"] == "Memória da Matrix" for m in rt.service.db.list_memories())
         st = rt.service.dispatch_request("switch_profile", {"profile": "trabalho"})            # perfis continuam funcionando
         assert st["profile"] == "trabalho" and "agent_menu" in st
         assert "error" in rt.service.dispatch_request("switch_agent", {"agent": "naoexiste"})

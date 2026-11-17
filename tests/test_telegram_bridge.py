@@ -149,7 +149,7 @@ def test_commands(env):
     bridge.poll_once()
     texts = [m["text"] for m in tg.sent]
     assert "Tesla T4" in texts[0] and "Validar EVFI" in texts[1] and "download iniciado" in texts[2]
-    assert texts[0].startswith("Byte v9.9.9")
+    assert texts[0].startswith("Matrix v9.9.9")
     assert ("configure_llm", {"provider": "ollama", "model_name": "qwen2.5-coder:14b", "pull_model_async": True}) in svc.calls
     assert ("add_task", {"title": "comprar pão", "priority": 4}) in svc.calls
 

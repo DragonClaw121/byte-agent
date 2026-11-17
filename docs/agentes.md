@@ -3,6 +3,23 @@
 A Byte agora é um **núcleo replicável**: cada agente (Byte, Kronus, Bit...) é um arquivo JSON, rodando o
 mesmo código. Cada agente tem o próprio nome, personalidade, dono, habilidades, canais, pasta de dados e banco.
 
+Sem manifesto, quem responde é a **Matrix**, o perfil padrão: o núcleo de onde os outros vêm. Ela conhece os demais
+agentes e indica o mais adequado quando faz sentido, mas não finge executar nada por eles.
+
+## Personalidades
+
+| Agente | Quem é | Jeito |
+|---|---|---|
+| **Matrix** (padrão) | o núcleo, "mãe" dos agentes | impessoal, serena, sempre disposta; educada e positiva com os pés no chão; impecável |
+| **Byte** | VTuber e idol virtual | energética, elétrica, fofa e muito inteligente; amiga do chat, não assistente; competitiva nos jogos e empática; acolhe quem está mal e é justa e firme com quem é desagradável |
+| **Bit** | conselheiro empresarial | 100% profissional, neutro, calmo e lógico, como um mordomo de confiança; responde com estatísticas, relatórios e recomendações; parece frio, mas se importa |
+| **Kronus** | assistente de bolso | confiante e proativo, "brother" do usuário; sarcasmo leve, sempre com respeito pelo usuário e por outros produtos e agentes; pau pra toda obra |
+
+A personalidade fica no campo `persona` do manifesto e vale no chat, nas iniciativas espontâneas e na live (a
+Byte usa a mesma persona na Twitch). Para mudar o jeito de um agente, copie o exemplo para `agents/` e edite só a
+`persona`. Valores de exemplo no `dono` ("Seu Nome", "Sua empresa") são ignorados: preencha com os seus dados ou
+passe `dados_perfil={...}` no Colab.
+
 | Exemplo | Tipo | Para quê | Canais |
 |---|---|---|---|
 | `byte` | vtuber | live na Twitch com VTube Studio, voz e legenda no OBS | painel, Telegram, Twitch, legenda |

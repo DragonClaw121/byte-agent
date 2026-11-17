@@ -1,4 +1,4 @@
-"""Troca de perfil VTuber (pessoal) <-> Trabalho sem reiniciar o processo."""
+"""Troca de perfil Matrix (padrão) <-> Trabalho sem reiniciar o processo."""
 import argparse
 import json
 import sys
@@ -35,7 +35,7 @@ def test_data_dirs_for_each_profile(tmp_path):
     assert dirs == {"pessoal": tmp_path / "byte", "trabalho": tmp_path / "byte-trabalho"}
     dirs = headless.profile_data_dirs(tmp_path / "byte-trabalho", "trabalho", {})
     assert dirs["pessoal"] == tmp_path / "byte"
-    dirs = headless.profile_data_dirs(tmp_path / "x", "vtuber", {"BYTE_WORK_DATA_DIR": str(tmp_path / "empresa")})
+    dirs = headless.profile_data_dirs(tmp_path / "x", "matrix", {"BYTE_WORK_DATA_DIR": str(tmp_path / "empresa")})
     assert dirs == {"pessoal": tmp_path / "x", "trabalho": tmp_path / "empresa"}
     with pytest.raises(SystemExit):
         headless.profile_data_dirs(tmp_path / "a", "pessoal", {"BYTE_WORK_DATA_DIR": str(tmp_path / "a")})
@@ -70,7 +70,7 @@ def test_switch_keeps_model_separates_data_and_changes_theme(tmp_path, fake):
         assert same["profile"] == "trabalho" and runtime.service is work
         assert "error" in work.dispatch_request("switch_profile", {"profile": "gamer"}) and runtime.service is work
 
-        back = work.dispatch_request("switch_profile", {"profile": "vtuber"})
+        back = work.dispatch_request("switch_profile", {"profile": "matrix"})
         assert back["profile"] == "pessoal" and "FESA" in engine.SYSTEM_PROMPT_V100
         assert any(m["content"] == "Memória só da VTuber" for m in runtime.service.db.list_memories())   # voltou com os dados dela
         # o painel servido pelo HTTP acompanha o perfil (sem rodar nada de novo)
@@ -105,13 +105,13 @@ def test_telegram_follows_the_switch(tmp_path, fake):
         tg.text(4, OWNER, "/perfil gamer")
         bridge.poll_once()
         texts = [m["text"] for m in tg.sent]
-        assert texts[0].startswith("Perfil ativo: VTuber (pessoal)")
+        assert texts[0].startswith("Perfil ativo: Matrix (padrão)")
         assert texts[2].startswith("Perfil ativo: Trabalho") and bridge.service is runtime.service
         assert "vendas_exemplo.csv" in texts[3]                                                   # já atende como perfil de trabalho
-        assert texts[4] == "Use: /perfil trabalho ou /perfil vtuber"
-        tg.text(5, OWNER, "/perfil vtuber")
+        assert texts[4] == "Use: /perfil trabalho ou /perfil matrix"
+        tg.text(5, OWNER, "/perfil matrix")
         bridge.poll_once()
-        assert tg.sent[-1]["text"].startswith("Perfil ativo: VTuber") and engine.ACTIVE_PROFILE == "pessoal"
+        assert tg.sent[-1]["text"].startswith("Perfil ativo: Matrix") and engine.ACTIVE_PROFILE == "pessoal"
     finally:
         sys.__dict__.get("_byte_telegram_bridges", {}).pop("teste", None)
         runtime.stop()

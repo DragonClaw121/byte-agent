@@ -93,7 +93,9 @@ def validate_manifest(raw: Any) -> Dict[str, Any]:
     owner = m.get("dono") or {}
     if not isinstance(owner, dict):
         raise ManifestError("'dono' deve ser um objeto (usuario, cargo, empresa, assinatura...).")
-    m["dono"] = {str(k)[:40]: str(v)[:300] for k, v in owner.items() if str(v).strip()}
+    # v12.2: valores de exemplo ("Seu Nome", "Sua empresa"...) contam como não preenchidos, para o agente não se apresentar
+    # como "assistente de Seu Nome".
+    m["dono"] = {str(k)[:40]: str(v)[:300] for k, v in owner.items() if str(v).strip() and not _is_placeholder(v)}
     skills = m.get("habilidades")
     if skills is None:
         skills = list(DEFAULT_SKILLS[kind])
@@ -232,18 +234,48 @@ SHORT_STYLE = ("Responda em no máximo 2 frases curtas, sem listas, sem markdown
                "ser lida numa tela pequena ou falada em voz alta.")
 
 
-def build_agent_prompt(manifest: Dict[str, Any]) -> str:
+DEFAULT_PERSONAS = {
+    "assistente": "Prestativo(a), direto(a) e cordial; resolve o pedido sem enrolação.",
+    "trabalho": "Tom profissional, cordial e objetivo; apresenta a melhor solução com dados quando houver.",
+    "vtuber": "Carismático(a), bem-humorado(a) e natural; conversa com o chat como gente de verdade.",
+}
+
+
+def persona_of(manifest: Dict[str, Any]) -> str:
+    return str(manifest.get("persona") or DEFAULT_PERSONAS[manifest["tipo"]]).strip()
+
+
+def identity_text(manifest: Dict[str, Any]) -> str:
+    """Personalidade com o nome do agente na frente, sem repetir quando a persona já começa por "Você é <nome>"."""
+    persona = persona_of(manifest)
+    if engine_fold(persona[:80]).startswith(engine_fold(f"voce e {manifest['nome']}")):
+        return persona
+    return f"Você é {manifest['nome']}.\n{persona}"
+
+
+def engine_fold(text: str) -> str:
     from . import engine
-    persona = manifest["persona"] or {
-        "assistente": "Seja prestativa, direta e cordial.",
-        "trabalho": "Tom profissional, cordial e objetivo.",
-        "vtuber": "Seja carismática, bem-humorada e natural.",
-    }[manifest["tipo"]]
+    return str(text).lower().translate(engine.TRANSLATION_TABLE)
+
+
+_PLACEHOLDER_RE = re.compile(r"^(seu|sua) (nome|cargo|empresa|e-?mail)$|^nome da empresa$|\bseu nome\s*$", re.IGNORECASE)
+
+
+def _is_placeholder(value: Any) -> bool:
+    return bool(_PLACEHOLDER_RE.search(" ".join(str(value).split())))
+
+
+def build_agent_prompt(manifest: Dict[str, Any]) -> str:
+    """Prompt do agente. v12.2: apresentação corrigida (antes saía "Você é Byte, vTuber ..., de Seu Nome")."""
+    from . import engine
     owner = manifest["dono"]
-    owner_name = owner.get("usuario") or "o usuário"
-    head = (f"Você é {manifest['nome']}, {manifest['descricao'][0].lower() + manifest['descricao'][1:]}, de {owner_name}.\n"
-            f"PERSONALIDADE: {persona}\n\n"
-            f"1. SOBRE O USUÁRIO:\n{json.dumps(owner, ensure_ascii=False) if owner else '(não informado)'}\n\n")
+    owner_name = str(owner.get("usuario") or "").strip()
+    descricao = str(manifest["descricao"]).strip().rstrip(".")
+    head = f"Você é {manifest['nome']}. {descricao[:1].upper() + descricao[1:]}.\n"
+    if owner_name:
+        head += f"Você atende {owner_name}.\n"
+    head += (f"QUEM VOCÊ É (mantenha essa personalidade em todas as respostas):\n{persona_of(manifest)}\n\n"
+             f"1. SOBRE O USUÁRIO:\n{json.dumps(owner, ensure_ascii=False) if owner else '(não informado)'}\n\n")
     prompt = head + engine._PROMPT_TOOLS_SECTION + engine._PROMPT_GUIDELINES_SECTION
     if manifest["tipo"] == "trabalho":
         prompt += engine.WORK_GUIDELINES
@@ -258,6 +290,7 @@ def apply_identity(manifest: Dict[str, Any]) -> None:
     from . import engine
     engine.ACTIVE_AGENT = manifest
     engine.AGENT_NAME = manifest["nome"]
+    engine.AGENT_PERSONA = identity_text(manifest)
     engine.OWNER_NAME = (manifest["dono"].get("usuario") or "você").split()[0]
     engine.UI_THEME = manifest["estilo"]["tema"]
     engine.SYSTEM_PROMPT_V100 = engine.SYSTEM_PROMPT_V90 = build_agent_prompt(manifest)
@@ -325,7 +358,7 @@ def stream_env(manifest: Dict[str, Any], read: Optional[Callable[[Tuple[str, ...
         "BYTE_STREAM_REPLY_IN_CHAT": "1" if tw.get("responder_no_chat", True) else "0",
     }
     if manifest["persona"]:
-        env["BYTE_STREAM_PERSONA"] = f"Você é {manifest['nome']}. {manifest['persona']}"
+        env["BYTE_STREAM_PERSONA"] = identity_text(manifest)
     if tw.get("emocoes"):
         env["BYTE_STREAM_EMOTIONS"] = json.dumps(tw["emocoes"], ensure_ascii=False)
     for key, var in (("vts_url", "BYTE_VTS_URL"), ("tts", "BYTE_TTS_COMMAND"), ("player", "BYTE_AUDIO_PLAYER"),

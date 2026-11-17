@@ -400,6 +400,28 @@ def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+_MONTHS_PT = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
+
+
+def month_label(label: str) -> str:
+    """'2025-09' -> 'set/25'; outros rótulos voltam como vieram."""
+    m = re.fullmatch(r"(\d{4})-(\d{2})", str(label).strip())
+    if not m or not 1 <= int(m.group(2)) <= 12:
+        return str(label)
+    return f"{_MONTHS_PT[int(m.group(2)) - 1]}/{m.group(1)[2:]}"
+
+
+def fmt_compact(value: Optional[float]) -> str:
+    """Número curto para cartões de slide: 2.838.332,20 -> '2,84 mi'; 7.430,19 -> '7.430'."""
+    if value is None:
+        return "—"
+    v = float(value)
+    for limit, suffix in ((1e9, " bi"), (1e6, " mi")):
+        if abs(v) >= limit:
+            return fmt_num(v / limit, 2) + suffix
+    return fmt_num(v, 0 if abs(v) >= 1000 else (2 if v != int(v) else 0))
+
+
 def svg_bars(items: Sequence[Tuple[str, float]], title: str, decimals: Optional[int] = 2, scale: float = 1.0, show_title: bool = True) -> str:
     """Barras horizontais de uma única série: barra fina, ponta arredondada, valor na ponta em tinta de texto."""
     items = [(str(label), max(0.0, float(value))) for label, value in items][:12]
@@ -451,7 +473,7 @@ def svg_columns(points: Sequence[Tuple[str, float]], title: str, scale: float = 
         if idx in {0, best, len(points) - 1}:
             parts.append(f'<text x="{x + col_w / 2:.1f}" y="{y - 6:.1f}" font-size="11" text-anchor="middle" fill="{INK}">{fmt_num(value, 0)}</text>')
         if len(points) <= 9 or idx % 2 == 0 or idx == len(points) - 1:
-            parts.append(f'<text x="{x + col_w / 2:.1f}" y="{height - bottom + 16}" font-size="10.5" text-anchor="middle" fill="{INK_2}">{_esc(label[2:])}</text>')
+            parts.append(f'<text x="{x + col_w / 2:.1f}" y="{height - bottom + 16}" font-size="10.5" text-anchor="middle" fill="{INK_2}">{_esc(_short(month_label(label), 10))}</text>')
         parts.append("</g>")
     parts.append("</svg>")
     return "".join(parts)
@@ -502,13 +524,20 @@ def _narrative_html(text: str) -> str:
     return "".join(blocks)
 
 
+def _distinct_label(column: str) -> str:
+    name = str(column).strip()
+    if name[-1:].lower() in "aeiou" and " " not in name:
+        return f"{name}s distintos"
+    return f"valores distintos de {name}"
+
+
 def _tiles(analysis: Dict[str, Any]) -> List[Tuple[str, str]]:
     tiles = [(fmt_num(analysis["rows"]), "registros")]
     main = next((c for c in analysis["columns"] if c["name"] == analysis.get("measure")), None)
     if main:
         tiles += [(fmt_num(main["sum"], 2), f"total de {main['name']}"), (fmt_num(main["mean"], 2), "média por registro")]
     if analysis.get("customers"):
-        tiles += [(fmt_num(analysis["customers"]["count"]), analysis["customers"]["by"]),
+        tiles += [(fmt_num(analysis["customers"]["count"]), _distinct_label(analysis["customers"]["by"])),
                   (fmt_pct(analysis["customers"]["top20_share"]), "concentração nos 20% maiores")]
     return tiles
 
@@ -580,20 +609,37 @@ def render_report_html(title: str, analysis: Dict[str, Any], narrative: str = ""
 
 _DECK_CSS = f"""
 *{{box-sizing:border-box}} html{{scroll-snap-type:y mandatory}} body{{margin:0;background:#e9e9e6;color:{INK};font:18px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}}
-section{{scroll-snap-align:start;min-height:100vh;display:flex;flex-direction:column;justify-content:center;padding:6vh 8vw;background:{SURFACE};border-bottom:1px solid {RULE}}}
-section.cover{{background:#0d366b;color:#fff}} section.cover p{{color:#cde2fb}} h1{{font-size:44px;line-height:1.15;margin:0 0 14px}} h2{{font-size:30px;margin:0 0 22px}}
-ul{{margin:0;padding-left:26px}} li{{margin:12px 0}} .foot{{margin-top:auto;padding-top:22px;color:{INK_2};font-size:13px}}
-.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}} .tile{{border:1px solid {RULE};border-radius:10px;padding:18px;background:#fff}}
-.tile b{{display:block;font-size:32px;line-height:1.15}} .tile span{{color:{INK_2};font-size:14px}}
+section{{scroll-snap-align:start;min-height:100vh;display:flex;flex-direction:column;padding:6vh 8vw 3vh;background:{SURFACE};border-bottom:1px solid {RULE};overflow-wrap:anywhere}}
+section .content{{flex:1;display:flex;flex-direction:column;justify-content:center;gap:22px;min-width:0}} section .content svg{{align-self:center}}
+section.cover{{background:#0d366b;color:#fff;justify-content:center}} section.cover p{{color:#cde2fb;margin:0}}
+h1{{font-size:clamp(30px,4.4vw,48px);line-height:1.15;margin:0 0 14px;text-wrap:balance}} h2{{font-size:clamp(22px,2.6vw,32px);line-height:1.2;margin:0;text-wrap:balance}}
+h2::after{{content:"";display:block;width:48px;height:4px;border-radius:2px;background:{SERIES};margin-top:12px}}
+ul{{margin:0;padding-left:26px;max-width:60em}} li{{margin:10px 0}} li::marker{{color:{SERIES}}}
+.foot{{display:flex;justify-content:space-between;gap:16px;padding-top:18px;color:{INK_2};font-size:13px}}
+.tiles{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:16px}}
+.tile{{border:1px solid {RULE};border-radius:10px;padding:18px 20px;background:#fff;min-width:0}}
+.tile b{{display:block;font-size:clamp(24px,2.6vw,34px);line-height:1.15;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.tile span{{color:{INK_2};font-size:14px}} .tile small{{display:block;color:{INK_2};font-size:12px;margin-top:2px}}
+@media (max-width:640px){{section{{padding:5vh 16px 2vh}} body{{font-size:16px}}}}
 @media print{{html{{scroll-snap-type:none}} section{{min-height:auto;height:100vh;break-after:page}}}}
 """
+
+
+def _deck_tiles(analysis: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Como _tiles, mas com números grandes abreviados (2,84 mi) e o valor exato na legenda."""
+    out = []
+    for value, label in _tiles(analysis):
+        number = parse_number(value.replace("%", ""), True) if "%" not in value else None
+        short = fmt_compact(number) if number is not None and abs(number) >= 1e6 else value
+        out.append((short, label if short == value else f"{label} ({value})"))
+    return out
 
 
 def build_slides(title: str, analysis: Dict[str, Any], narrative: str = "") -> List[Dict[str, Any]]:
     """Roteiro da apresentação a partir da análise: capa, números, um slide por corte, tendência, clientes, conclusões."""
     slides: List[Dict[str, Any]] = [{"kind": "cover", "title": title,
                                      "subtitle": f"Fonte: {analysis['source']} · {fmt_num(analysis['rows'])} registros · {datetime.now().strftime('%d/%m/%Y')}"}]
-    slides.append({"kind": "tiles", "title": "Visão geral", "tiles": _tiles(analysis)})
+    slides.append({"kind": "tiles", "title": "Visão geral", "tiles": _deck_tiles(analysis)})
     for cut in analysis["breakdowns"][:3]:
         top = cut["groups"][0]
         slides.append({"kind": "chart", "title": f"{_cap(cut['measure'])} por {cut['by']}",
@@ -632,9 +678,10 @@ def render_deck_html(title: str, slides: Sequence[Dict[str, Any]]) -> str:
         if kind == "cover":
             out.append(f'<section class="cover"><h1>{_esc(slide["title"])}</h1><p>{_esc(slide.get("subtitle", ""))}</p></section>')
             continue
-        out.append(f"<section><h2>{_esc(slide['title'])}</h2>")
+        out.append(f"<section><h2>{_esc(slide['title'])}</h2><div class=\"content\">")
         if kind == "tiles":
-            out.append('<div class="tiles">' + "".join(f'<div class="tile"><b>{_esc(v)}</b><span>{_esc(l)}</span></div>' for v, l in slide["tiles"]) + "</div>")
+            out.append('<div class="tiles">' + "".join(
+                f'<div class="tile"><b title="{_esc(v)}">{_esc(v)}</b><span>{_esc(l)}</span></div>' for v, l in slide["tiles"]) + "</div>")
         if kind == "chart":
             chart_kind, data = slide["chart"]
             out.append(svg_bars(data, slide["title"], scale=1.65, show_title=False) if chart_kind == "bars"
@@ -642,56 +689,136 @@ def render_deck_html(title: str, slides: Sequence[Dict[str, Any]]) -> str:
         bullets = [b for b in slide.get("bullets", []) if str(b).strip()]
         if bullets:
             out.append("<ul>" + "".join(f"<li>{_esc(_short(str(b), 260))}</li>" for b in bullets) + "</ul>")
-        out.append(f'<div class="foot">{_esc(slide.get("foot", ""))} <span style="float:right">{idx} / {total}</span></div></section>')
+        out.append(f'</div><div class="foot"><span>{_esc(slide.get("foot", ""))}</span><span>{_esc(_short(title, 60))} · {idx} / {total}</span></div></section>')
     out.append("</body></html>")
     return "".join(out)
 
 
+def _rgb(hex_color: str) -> Any:
+    from pptx.dml.color import RGBColor  # type: ignore
+    return RGBColor.from_string(hex_color.lstrip("#").upper())
+
+
 def write_pptx(path: Path, title: str, slides: Sequence[Dict[str, Any]]) -> bool:
-    """Grava um .pptx editável (gráficos nativos do PowerPoint). False se python-pptx não estiver instalado."""
+    """Grava um .pptx editável, com o mesmo visual do HTML: capa azul, título alinhado à esquerda com filete, cartões de
+    números, gráficos nativos do PowerPoint (eixo formatado, sem título duplicado) e rodapé com página.
+    False se python-pptx não estiver instalado."""
     try:
         from pptx import Presentation  # type: ignore
         from pptx.chart.data import CategoryChartData  # type: ignore
-        from pptx.enum.chart import XL_CHART_TYPE  # type: ignore
+        from pptx.enum.chart import XL_CHART_TYPE, XL_LABEL_POSITION  # type: ignore
+        from pptx.enum.shapes import MSO_SHAPE  # type: ignore
+        from pptx.enum.text import MSO_ANCHOR, PP_ALIGN  # type: ignore
         from pptx.util import Inches, Pt  # type: ignore
     except ImportError:
         return False
     deck = Presentation()
     deck.slide_width, deck.slide_height = Inches(13.333), Inches(7.5)
-    for slide in slides:
+    blank = deck.slide_layouts[6]
+    margin, width = Inches(0.8), Inches(13.333 - 1.6)
+    total = len(slides)
+
+    def text_box(page: Any, left: Any, top: Any, w: Any, h: Any, lines: Sequence[str], size: int, color: str = INK,
+                 bold: bool = False, bullets: bool = False, anchor: Any = None) -> Any:
+        box = page.shapes.add_textbox(left, top, w, h)
+        frame = box.text_frame
+        frame.word_wrap = True
+        if anchor is not None:
+            frame.vertical_anchor = anchor
+        for i, line in enumerate(lines):
+            para = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
+            if bullets:
+                run_dot = para.add_run()
+                run_dot.text = "•  "
+                run_dot.font.color.rgb = _rgb(SERIES)
+                run_dot.font.size = Pt(size)
+                run_dot.font.bold = True
+            run = para.add_run()
+            run.text = line
+            run.font.size, run.font.bold, run.font.color.rgb = Pt(size), bold, _rgb(color)
+            para.space_after = Pt(size * 0.6)
+        return box
+
+    for idx, slide in enumerate(slides, start=1):
         kind = slide.get("kind", "bullets")
+        page = deck.slides.add_slide(blank)
         if kind == "cover":
-            page = deck.slides.add_slide(deck.slide_layouts[0])
-            page.shapes.title.text = str(slide["title"])[:200]
-            if len(page.placeholders) > 1:
-                page.placeholders[1].text = str(slide.get("subtitle", ""))[:300]
+            page.background.fill.solid()
+            page.background.fill.fore_color.rgb = _rgb("#0d366b")
+            text_box(page, margin, Inches(2.4), width, Inches(1.8), [str(slide["title"])[:200]], 40, "#ffffff", True,
+                     anchor=MSO_ANCHOR.BOTTOM)
+            text_box(page, margin, Inches(4.35), width, Inches(1.0), [str(slide.get("subtitle", ""))[:300]], 16, "#cde2fb")
             continue
-        page = deck.slides.add_slide(deck.slide_layouts[5])
-        page.shapes.title.text = str(slide["title"])[:200]
-        bullets = [str(b) for b in slide.get("bullets", []) if str(b).strip()]
+        page.background.fill.solid()
+        page.background.fill.fore_color.rgb = _rgb(SURFACE)
+        heading = str(slide["title"])[:200]
+        text_box(page, margin, Inches(0.45), width, Inches(1.0), [heading], 26 if len(heading) <= 60 else 20, INK, True,
+                 anchor=MSO_ANCHOR.BOTTOM)
+        rule = page.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, margin, Inches(1.55), Inches(0.55), Inches(0.06))
+        rule.fill.solid()
+        rule.fill.fore_color.rgb = _rgb(SERIES)
+        rule.line.fill.background()
+        bullets = [_short(str(b), 240) for b in slide.get("bullets", []) if str(b).strip()]
+        top = Inches(1.9)
         if kind == "tiles":
-            bullets = [f"{value} — {label}" for value, label in slide["tiles"]] + bullets
-        text_top = Inches(1.6)
+            tiles = list(slide["tiles"])[:6]
+            gap = Inches(0.25)
+            tile_w = int((width - gap * (len(tiles) - 1)) / max(1, len(tiles)))
+            for t, (value, label) in enumerate(tiles):
+                card = page.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, margin + t * (tile_w + gap), Inches(2.4), tile_w, Inches(1.9))
+                card.adjustments[0] = 0.08
+                card.fill.solid()
+                card.fill.fore_color.rgb = _rgb("#ffffff")
+                card.line.color.rgb = _rgb(RULE)
+                frame = card.text_frame
+                frame.word_wrap, frame.vertical_anchor = True, MSO_ANCHOR.TOP
+                frame.margin_left = frame.margin_right = Inches(0.18)
+                frame.margin_top = Inches(0.2)
+                p1 = frame.paragraphs[0]
+                p1.alignment = PP_ALIGN.LEFT
+                r1 = p1.add_run()
+                r1.text = str(value)
+                r1.font.size, r1.font.bold, r1.font.color.rgb = Pt(28 if len(tiles) <= 4 else 24), True, _rgb(INK)
+                p2 = frame.add_paragraph()
+                r2 = p2.add_run()
+                r2.text = str(label)
+                r2.font.size, r2.font.color.rgb = Pt(12), _rgb(INK_2)
+            top = Inches(4.7)
         if kind == "chart":
             chart_kind, data = slide["chart"]
-            chart_data = CategoryChartData()
-            chart_data.categories = [_short(str(label), 40) for label, _ in data]
+            data = list(data)
+            if chart_kind == "bars":
+                data = data[::-1]                                  # o PowerPoint desenha de baixo para cima: maior no topo
+            chart_data = CategoryChartData(number_format="#,##0")
+            chart_data.categories = [_short(month_label(str(label)), 40) for label, _ in data]
             chart_data.add_series(str(slide["title"])[:60], [float(value) for _, value in data])
             chart_type = XL_CHART_TYPE.BAR_CLUSTERED if chart_kind == "bars" else XL_CHART_TYPE.COLUMN_CLUSTERED
-            frame = page.shapes.add_chart(chart_type, Inches(0.7), Inches(1.5), Inches(11.9), Inches(4.6), chart_data)
-            frame.chart.has_legend = False
-            if chart_kind == "bars":
-                frame.chart.category_axis.reverse_order = True      # maior no topo, como no relatório
-            text_top = Inches(6.2)
-        if bullets or slide.get("foot"):
-            box = page.shapes.add_textbox(Inches(0.8), text_top, Inches(11.7), Inches(7.3) - text_top)
-            frame = box.text_frame
-            frame.word_wrap = True
-            lines = [f"• {_short(b, 240)}" for b in bullets] + ([str(slide["foot"])] if slide.get("foot") else [])
-            for line_idx, line in enumerate(lines):
-                para = frame.paragraphs[0] if line_idx == 0 else frame.add_paragraph()
-                para.text = line
-                para.font.size = Pt(12 if line == slide.get("foot") else (16 if kind == "chart" else 22))
+            chart_h = Inches(4.0 if bullets else 4.9)
+            frame = page.shapes.add_chart(chart_type, margin, Inches(1.85), width, chart_h, chart_data)
+            chart = frame.chart
+            chart.has_legend, chart.has_title = False, False
+            chart.font.size, chart.font.color.rgb = Pt(12), _rgb(INK_2)
+            plot = chart.plots[0]
+            plot.gap_width = 60
+            plot.has_data_labels = True
+            labels = plot.data_labels
+            labels.number_format, labels.number_format_is_linked = "#,##0", False
+            labels.position = XL_LABEL_POSITION.OUTSIDE_END
+            labels.font.size, labels.font.color.rgb = Pt(11), _rgb(INK)
+            series = plot.series[0]
+            series.format.fill.solid()
+            series.format.fill.fore_color.rgb = _rgb(SERIES)
+            value_axis = chart.value_axis
+            value_axis.has_major_gridlines = False
+            value_axis.visible = False
+            value_axis.tick_labels.number_format, value_axis.tick_labels.number_format_is_linked = "#,##0", False
+            chart.category_axis.format.line.color.rgb = _rgb(RULE)
+            top = Inches(1.85) + chart_h + Inches(0.1)
+        if bullets:
+            text_box(page, margin, top, width, Inches(6.75) - top, bullets, 22 if kind == "bullets" else 16, INK, bullets=True)
+        text_box(page, margin, Inches(6.85), Inches(8.5), Inches(0.4), [str(slide.get("foot", ""))[:200]], 10, INK_2)
+        text_box(page, Inches(13.333 - 0.8 - 3.6), Inches(6.85), Inches(3.6), Inches(0.4),
+                 [f"{_short(title, 40)} · {idx} / {total}"], 10, INK_2).text_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
     path.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(path))
     return True

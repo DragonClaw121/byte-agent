@@ -1,6 +1,8 @@
 # Byte — agente pessoal
 
-Agente pessoal com LLMs locais (Ollama), memória, agenda, e-mail com aprovação humana, painel web e ponte para Telegram.
+Núcleo de agentes com LLMs locais (Ollama). Sem manifesto, quem atende é a **Matrix**, o perfil padrão; Byte (VTuber),
+Bit (trabalho) e Kronus (relógio/celular) são agentes com personalidade própria ([docs/agentes.md](docs/agentes.md)).
+Memória, agenda, e-mail com aprovação humana, painel web e ponte para Telegram.
 Só usa a biblioteca padrão do Python (3.10+).
 
 ```
@@ -122,7 +124,7 @@ aprovação e todo número de análise é calculado por código. Guia completo: 
 python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 ```
 
-Com uma única instância, o seletor **VTuber · Trabalho** no título do painel (ou `/perfil` no Telegram) troca de
+Com uma única instância, o seletor **Matrix · Trabalho** no título do painel (ou `/perfil` no Telegram) troca de
 perfil sem reiniciar nada; cada perfil mantém seus próprios dados.
 
 ## Vários agentes, o mesmo núcleo

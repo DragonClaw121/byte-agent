@@ -466,3 +466,26 @@ def test_single_account_config_is_migrated(tmp_path):
     assert client.provider == "outlook" and client.email_address == "antigo@empresa.com"
     assert client.accounts == {"outlook": {"address": "antigo@empresa.com", "secret": ""}}
     db.close()
+
+
+def test_deck_labels_are_readable(sample, tmp_path):
+    assert work_data.month_label("2025-09") == "set/25" and work_data.month_label("Sudeste") == "Sudeste"
+    assert work_data.fmt_compact(2838332.2) == "2,84 mi" and work_data.fmt_compact(7430.19) == "7.430"
+    slides = work_data.build_slides("Análise", sample, "")
+    tiles = dict((label, value) for value, label in slides[1]["tiles"])
+    assert not any(label.endswith(" cliente") for label in tiles)                     # antes: "40 cliente"
+    html_deck = work_data.render_deck_html("Análise", slides)
+    assert 'class="content"' in html_deck and "-09</text>" not in html_deck and "overflow-wrap:anywhere" in html_deck
+
+
+def test_pptx_matches_the_html_design(sample, tmp_path):
+    pptx = pytest.importorskip("pptx")
+    slides = work_data.build_slides("Análise", sample, "")
+    assert work_data.write_pptx(tmp_path / "d.pptx", "Análise", slides)
+    deck = pptx.Presentation(str(tmp_path / "d.pptx"))
+    charts = [sh.chart for s in deck.slides for sh in s.shapes if sh.has_chart]
+    assert charts and all(not c.has_title and not c.has_legend for c in charts)       # sem título duplicado
+    texts = [sh.text_frame.text for sh in deck.slides[1].shapes if sh.has_text_frame]
+    assert any(t.startswith("Visão geral") for t in texts) and sum(1 for t in texts if "\n" in t) >= 3   # cartões, não lista crua
+    assert all(f"/ {len(slides)}" in " ".join(sh.text_frame.text for sh in s.shapes if sh.has_text_frame)
+               for s in list(deck.slides)[1:])                                        # rodapé com página

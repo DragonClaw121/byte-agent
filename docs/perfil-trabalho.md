@@ -52,18 +52,18 @@ pip install -e ".[trabalho]"
 python -m byte_agent --profile trabalho --data-dir ~/byte-trabalho --port 8766
 ```
 
-A VTuber continua sendo outra instância (`--profile pessoal`, outra `--data-dir` e outra porta). O perfil de
+A Matrix (perfil padrão) continua sendo outra instância (`--profile matrix`, outra `--data-dir` e outra porta). O perfil de
 trabalho se recusa a ligar a live.
 
-## Trocar entre VTuber e Trabalho
+## Trocar entre Matrix e Trabalho
 
-No canto do título do painel há um seletor discreto **VTuber · Trabalho**. Clique no perfil desejado e clique de
+No canto do título do painel há um seletor discreto **Matrix · Trabalho**. Clique no perfil desejado e clique de
 novo em "Confirmar?". A Byte reinicia no outro perfil em poucos segundos, sem rodar a célula de novo, e o painel
-troca de visual sozinho. Pelo Telegram: `/perfil` mostra o atual, `/perfil trabalho` e `/perfil vtuber` trocam.
+troca de visual sozinho. Pelo Telegram: `/perfil` mostra o atual, `/perfil trabalho` e `/perfil matrix` trocam (o nome antigo `pessoal`/`vtuber` ainda é aceito).
 
 - Cada perfil guarda a própria conversa, agenda, lembretes e memórias; trocar não mistura nada.
 - O modelo, os parâmetros e as chaves de API continuam os mesmos, e o modelo já carregado na GPU é aproveitado.
-- No perfil de trabalho a live da Twitch é desligada; ao voltar para VTuber ela liga de novo (modo servidor).
+- No perfil de trabalho a live da Twitch é desligada; ao voltar para a Matrix ela liga de novo (modo servidor).
 - No Colab, os dados do perfil de trabalho ficam salvos em `MyDrive/byte-trabalho/perfil.json` na primeira vez
   que você iniciar com `dados_perfil`; depois disso a troca os reaproveita.
 - No modo servidor, a pasta do outro perfil é uma pasta irmã (`~/.byte-agent` ↔ `~/.byte-agent-trabalho`), ou a

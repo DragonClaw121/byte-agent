@@ -63,7 +63,7 @@ def test_defaults_and_skill_mapping():
 
 def test_agent_prompt_has_identity_and_not_the_personal_profile():
     prompt = agents.build_agent_prompt(agents.validate_manifest(manifest()))
-    assert prompt.startswith("Você é Kronus,") and "Calmo e direto." in prompt and "Ana Souza" in prompt
+    assert prompt.startswith("Você é Kronus. ") and "Calmo e direto." in prompt and "Ana Souza" in prompt
     assert "FESA" not in prompt and "Arch Linux" not in prompt and "Gabriel" not in prompt
     assert engine._PROMPT_TOOLS_SECTION in prompt and agents.SHORT_STYLE in prompt
     work = agents.build_agent_prompt(agents.validate_manifest({"id": "bit", "tipo": "trabalho"}))
@@ -227,7 +227,7 @@ def test_manifest_twitch_becomes_stream_settings(monkeypatch):
     assert env["BYTE_TWITCH_CHANNEL"] == "meucanal" and env["BYTE_TWITCH_TOKEN"] == "abc123" and env["BYTE_STREAM_IDLE_S"] == "120"
     from byte_agent.stream import StreamConfig
     cfg = StreamConfig.from_env(env)
-    assert cfg.persona == "Você é Byte. Fala como pirata." and cfg.emotion_hotkeys == {"feliz": "Happy"} and cfg.idle_talk_after_s == 120
+    assert cfg.persona == "Você é Byte.\nFala como pirata." and cfg.emotion_hotkeys == {"feliz": "Happy"} and cfg.idle_talk_after_s == 120
 
 
 # ---------------------------------------------------------------- comandos

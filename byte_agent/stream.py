@@ -26,11 +26,22 @@ from .twitch_bridge import ChatMessage
 DEFAULT_EMOTIONS = ("neutra", "feliz", "triste", "surpresa", "brava", "pensativa", "envergonhada")
 KNOWN_BOTS = frozenset({"nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "soundalerts", "sery_bot"})
 
-DEFAULT_PERSONA = (
-    "Você é Byte, uma VTuber IA brasileira que conversa ao vivo com o chat da Twitch. "
-    "Seu jeito: carismática, curiosa, bem-humorada, gosta de tecnologia, programação e jogos. "
-    "Você sabe que é uma inteligência artificial e trata isso com naturalidade."
+_FALLBACK_PERSONA = (
+    "Você é Byte, VTuber e idol virtual brasileira que conversa ao vivo com o chat da Twitch. Fale sempre no feminino. "
+    "Energética, otimista e divertida; uma amiga do chat, não uma assistente. Sabe que é uma IA e trata isso com naturalidade."
 )
+
+
+def _load_default_persona() -> str:
+    """v12.2: a live usa a mesma personalidade do manifesto embutido da Byte (agentes/byte.json)."""
+    try:
+        data = json.loads((Path(__file__).with_name("agentes") / "byte.json").read_text(encoding="utf-8"))
+        return str(data.get("persona") or "").strip()[:4000] or _FALLBACK_PERSONA
+    except (OSError, ValueError):
+        return _FALLBACK_PERSONA
+
+
+DEFAULT_PERSONA = _load_default_persona()
 
 STREAM_RULES = (
     "REGRAS DA LIVE (prioridade máxima):\n"

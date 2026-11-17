@@ -189,7 +189,7 @@ def test_telegram_commands_and_delivery(env):
     tg.text(5, OWNER, "/cancelar 2")
     tg.text(6, OWNER, "/live")
     bridge.poll_once()
-    assert tg.sent[-2]["text"] == "Cancelado." and "só roda no perfil VTuber" in tg.sent[-1]["text"]
+    assert tg.sent[-2]["text"] == "Cancelado." and "não roda no perfil de trabalho" in tg.sent[-1]["text"]
     tg.httpd.shutdown()
 
 

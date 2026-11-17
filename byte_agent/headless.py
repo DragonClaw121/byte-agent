@@ -210,7 +210,7 @@ class Runtime:
 
     def _announce(self) -> None:
         if self.manifest is not None:
-            print(f"[{self.manifest['nome'].upper()} | Byte v{engine.BYTE_VERSION}] Agente '{self.manifest['id']}' ({self.manifest['tipo']}) | "
+            print(f"[{self.manifest['nome'].upper()} | byte-agent v{engine.BYTE_VERSION}] Agente '{self.manifest['id']}' ({self.manifest['tipo']}) | "
                   f"habilidades: {', '.join(self.manifest['habilidades']) or 'nenhuma'} | dados em {self.data_dir}", flush=True)
         else:
             print(f"[BYTE v{engine.BYTE_VERSION}] Perfil ativo: {engine.PROFILE_LABELS[engine.ACTIVE_PROFILE]} | dados em {self.data_dir}", flush=True)
@@ -220,7 +220,7 @@ class Runtime:
     def _start_live(self) -> None:
         if engine.ACTIVE_PROFILE == "trabalho":
             if self.env.get("BYTE_TWITCH_CHANNEL", "").strip():
-                print("[BYTE] Live desligada no perfil de trabalho (troque para VTuber para ligá-la).", flush=True)
+                print("[BYTE] Live desligada no perfil de trabalho (troque para o perfil Matrix ou para o agente Byte para ligá-la).", flush=True)
             return
         try:
             director = build_stream(self.service, self.env, self.data_dir)
@@ -305,7 +305,7 @@ class Runtime:
         return self
 
     def switch(self, target: str, want_html: bool = False) -> Dict[str, Any]:
-        """Troca VTuber (pessoal) <-> Trabalho: desliga a live, sobe o serviço do outro perfil com o mesmo modelo
+        """Troca Matrix (padrão) <-> Trabalho: desliga a live, sobe o serviço do outro perfil com o mesmo modelo
         e aponta painel e Telegram para ele. Chamado pelo painel (switch_profile) e por /perfil no Telegram."""
         target = engine.normalize_profile_name(target)
         with self._lock:
@@ -331,7 +331,7 @@ class Runtime:
         return st
 
     def switch_agent(self, target: str, want_html: bool = False) -> Dict[str, Any]:
-        """SOMENTE PARA TESTES: troca o agente em execução (Byte VTuber, Bit, Kronus... ou a Byte padrão, target="").
+        """SOMENTE PARA TESTES: troca o agente em execução (Byte VTuber, Bit, Kronus... ou a Matrix padrão, target="").
         Cada agente usa a própria pasta de dados. O Telegram continua no bot iniciado; a API e a legenda passam a usar
         os tokens do agente novo."""
         with self._lock:

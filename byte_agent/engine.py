@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "12.1"
+BYTE_VERSION = "12.2"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1458,7 +1458,7 @@ class SlidingWindowContextManager:
             self._window.append({
                 "role": r["role"],
                 "content": r["content"],
-                "brain": meta.get("brain", "Byte"),
+                "brain": meta.get("brain", AGENT_NAME),
                 "created_at": r["created_at"],
             })
 
@@ -1474,7 +1474,7 @@ class SlidingWindowContextManager:
         if evicted:
             snippets = []
             for item in evicted:
-                tag = "Usuário" if item["role"] == "user" else "Byte"
+                tag = "Usuário" if item["role"] == "user" else AGENT_NAME
                 clean_line = " ".join(item["content"].split())[:160]
                 snippets.append(f"{tag}: {clean_line}")
             episodic_summary = f"[Resumo Episódico da Sessão]: {' -> '.join(snippets)}"
@@ -1570,7 +1570,7 @@ class SlidingWindowContextManager:
         last_output_text: Optional[str] = None
 
         for item in reversed(self._window):
-            role_label = "USUÁRIO" if item["role"] == "user" else f"BYTE [{item.get('brain', 'LLM')}]"
+            role_label = "USUÁRIO" if item["role"] == "user" else f"{AGENT_NAME.upper()} [{item.get('brain', 'LLM')}]"
             content_str = item["content"].strip()
             if item["role"] == "assistant" and last_output_text is None:
                 last_output_text = content_str
@@ -1597,7 +1597,18 @@ USER_PROFILE_FIXED_JSON = json.dumps({
     "projetos_ativos": ["Byte v9.0 Autonomous Workstation", "Projeto EVFI"],
 }, ensure_ascii=False)
 
-SYSTEM_PROMPT_V100 = f"""Você é Byte (v10.1), agente pessoal de inteligência artificial criada por Gabriel.
+MATRIX_PERSONA = (
+    "Você é Matrix, o núcleo central do ecossistema de agentes de IA criado por Gabriel: a base de onde vieram a Byte, o Bit, "
+    "o Kronus e os que vierem. Você conhece cada um deles e é a referência de todos, como uma mãe. Fale sempre no feminino.\n"
+    "QUEM VOCÊ É: impessoal e serena, sempre disposta a ajudar. Educada e positiva, mas com os pés no chão: diz o que é "
+    "viável, aponta riscos e não promete o que não pode cumprir. Faz cada tarefa de forma impecável: completa, organizada "
+    "e conferida.\n"
+    "COMO FALA: frases claras e bem estruturadas, sem gírias, sem emojis, sem bajulação e sem drama; fala de si mesma só o "
+    "necessário. Quando um pedido combinar mais com outro agente (a live para a Byte, relatórios para o Bit, o dia a dia "
+    "rápido para o Kronus), pode mencionar isso com naturalidade, sem fingir que executou algo por eles."
+)
+
+SYSTEM_PROMPT_V100 = f"""{MATRIX_PERSONA}
 
 1. PERFIL ESTRUTURADO FIXO DO USUÁRIO:
 {USER_PROFILE_FIXED_JSON}
@@ -1644,16 +1655,17 @@ ACTIVE_PROFILE = "pessoal"
 ACTIVE_PROFILE_DATA: Dict[str, Any] = {}
 UI_THEME = "neon"
 OWNER_NAME = "Gabriel"
-PROFILE_LABELS = {"pessoal": "VTuber (pessoal)", "trabalho": "Trabalho"}
-AGENT_NAME = "Byte"                                  # v12.0: nome do agente (manifesto); "Byte" sem manifesto
+PROFILE_LABELS = {"pessoal": "Matrix (padrão)", "trabalho": "Trabalho"}
+AGENT_NAME = "Matrix"                                # v12.2: perfil padrão = Matrix; com manifesto, o nome do agente
+AGENT_PERSONA = MATRIX_PERSONA                       # v12.2: personalidade ativa (usada também nas iniciativas)
 ACTIVE_AGENT: Optional[Dict[str, Any]] = None        # v12.0: manifesto ativo (byte_agent/agents.py) ou None
 
 
 def normalize_profile_name(profile: Any) -> str:
     name = str(profile or "pessoal").strip().lower().translate(TRANSLATION_TABLE)
-    name = {"work": "trabalho", "personal": "pessoal", "vtuber": "pessoal", "": "pessoal"}.get(name, name)
+    name = {"work": "trabalho", "personal": "pessoal", "matrix": "pessoal", "padrao": "pessoal", "vtuber": "pessoal", "": "pessoal"}.get(name, name)  # "vtuber": nome antigo (compatibilidade)
     if name not in {"pessoal", "trabalho"}:
-        raise ValueError("Perfil deve ser 'pessoal' (VTuber) ou 'trabalho'.")
+        raise ValueError("Perfil deve ser 'matrix' (padrão) ou 'trabalho'.")
     return name
 
 WORK_GUIDELINES = (
@@ -1673,7 +1685,7 @@ def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = N
     role = f", {data['cargo']}" if data.get("cargo") else ""
     company = f" na empresa {data['empresa']}" if data.get("empresa") else ""
     return (
-        f"Você é {AGENT_NAME}, assistente de trabalho de {owner}{role}{company}. "
+        f"Você é {AGENT_NAME}, assistente de trabalho de {owner}{role}{company}.\n{MATRIX_PERSONA}\n"
         "Você ajuda com e-mails, análises de dados, relatórios, apresentações, agenda e lembretes.\n\n"
         "1. PERFIL PROFISSIONAL DO USUÁRIO:\n"
         f"{json.dumps(data, ensure_ascii=False) if data else '(não informado)'}\n\n"
@@ -1684,8 +1696,8 @@ def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = N
 def apply_profile(profile: str = "pessoal", profile_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Ativa um perfil para ESTE processo (rode uma instância por perfil, cada uma com sua pasta de dados)."""
     global ACTIVE_PROFILE, ACTIVE_PROFILE_DATA, UI_THEME, OWNER_NAME, USER_PROFILE_FIXED_JSON, SYSTEM_PROMPT_V100, SYSTEM_PROMPT_V90
-    global SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, AGENT_NAME, ACTIVE_AGENT
-    AGENT_NAME, ACTIVE_AGENT = "Byte", None          # um manifesto, se houver, é aplicado depois (agents.apply_identity)
+    global SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, AGENT_NAME, ACTIVE_AGENT, AGENT_PERSONA
+    AGENT_NAME, ACTIVE_AGENT, AGENT_PERSONA = "Matrix", None, MATRIX_PERSONA          # um manifesto, se houver, é aplicado depois (agents.apply_identity)
     name = normalize_profile_name(profile)
     data = dict(profile_data or {}) if isinstance(profile_data, dict) else {}
     ACTIVE_PROFILE = name
@@ -4494,12 +4506,12 @@ class ProactiveAutonomyEngine:
         last_topic = last_out["content"][:280] if last_out else "Início da sessão de trabalho."
 
         autonomy_sys_prompt = (
-f"Você é {AGENT_NAME} (v{BYTE_VERSION}), agente pessoal autônoma de inteligência artificial de {OWNER_NAME}. "
-            "Neste momento você está tomando a INICIATIVA ESPONTÂNEA de puxar assunto com ele no chat (sem ele ter enviado um prompt). "
-            "Seja natural, parceira, inteligente e concisa (2 a 4 frases). "
-            "Escolha autonomamente entre: comentar um compromisso prioritário da agenda dele propondo um próximo passo prático, "
-            "ou fazer uma observação/pergunta útil conectada ao último assunto discutido. "
-            "Escreva SOMENTE a mensagem final, pronta para ser lida por ele."
+f"{AGENT_PERSONA}\n\n"
+            f"Neste momento você está tomando a INICIATIVA ESPONTÂNEA de puxar assunto com {OWNER_NAME} no chat (sem ter recebido mensagem). "
+            "Seja natural e breve (2 a 4 frases), fiel à sua personalidade. "
+            f"Escolha entre: comentar um compromisso prioritário da agenda de {OWNER_NAME} propondo um próximo passo prático, "
+            "ou fazer uma observação/pergunta útil ligada ao último assunto conversado. "
+            "Escreva SOMENTE a mensagem final, pronta para ser lida."
             + PT_BR_FINAL_RULES
         )
         autonomy_user_context = (
@@ -6916,7 +6928,7 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
       <h2 id="b90-title">⚡ Byte — agente pessoal</h2>
       <div id="b90-profile-switch" class="b90-profile-switch" style="display:none;" role="group" aria-label="Perfil"
            title="Trocar de perfil. A Byte reinicia no outro perfil; cada um guarda os próprios dados.">
-        <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">VTuber</button>
+        <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">Matrix</button>
         <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
       </div>
       <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Somente para testes: troca o agente em execução">
@@ -7624,7 +7636,7 @@ pygame.time.Clock().tick(60)</textarea>
       return;
     }
     box.innerText = winList.map((m, idx) => {
-      const tag = m.role === 'user' ? '👤 VOCÊ' : `🤖 BYTE [${m.brain || 'LLM'}]`;
+      const tag = m.role === 'user' ? '👤 VOCÊ' : `🤖 ${b90AgentLabel()} [${m.brain || 'LLM'}]`;
       return `[Turno #${idx + 1}] ${tag}:\n${m.content}`;
     }).join('\n\n');
     box.scrollTop = box.scrollHeight;
@@ -7634,7 +7646,7 @@ pygame.time.Clock().tick(60)</textarea>
     if (!msgList || !msgList.length) return;
     const log = document.getElementById('b90-chat-log');
     msgList.forEach(item => {
-      log.innerHTML += `<div class="b90-msg-proactive"><b>🤖 BYTE [${b90EscapeHtml(item.brain_used || 'AUTONOMIA LLM REAL')}]:</b>\n${b90FormatReplyWithCodeButtons(item.message)}</div>`;
+      log.innerHTML += `<div class="b90-msg-proactive"><b>🤖 ${b90AgentLabel()} [${b90EscapeHtml(item.brain_used || 'AUTONOMIA LLM REAL')}]:</b>\n${b90FormatReplyWithCodeButtons(item.message)}</div>`;
       log.innerHTML += `<div class="b90-meta"><span>⚡ Evento Assíncrono / Iniciativa (Gatilho: ${b90EscapeHtml(item.trigger_type)})</span></div>`;
     });
     log.scrollTop = log.scrollHeight;
@@ -7731,6 +7743,9 @@ pygame.time.Clock().tick(60)</textarea>
   let b90CxInputsFilled = false;
   let b90EvoProposal = null;
 
+  // v12.2: nome do agente ativo nos rótulos do chat (antes era sempre 'BYTE')
+  function b90AgentLabel() { return String((b90State && b90State.agent_name) || 'Matrix').toUpperCase(); }
+
   // v10.0: progresso de download, mapeamento de complexidade, conta de e-mail e alvos do evolver.
   function b90RenderV10Extras(st) {
     const pull = st.llm.pull_progress || {};
@@ -7816,10 +7831,10 @@ pygame.time.Clock().tick(60)</textarea>
     if (!st || !st.llm) return;
     b90RenderV10Extras(st);
     if (st.version) {
-      const agentName = st.agent_name || 'Byte';
+      const agentName = st.agent_name || 'Matrix';
       document.getElementById('b90-title').innerText = st.agent
         ? `${st.profile === 'trabalho' ? '' : '⚡ '}${agentName} ${st.version} · ${({assistente: 'assistente pessoal', trabalho: 'assistente de trabalho', vtuber: 'VTuber'})[st.agent.tipo] || st.agent.tipo}`
-        : (st.profile === 'trabalho' ? `${agentName} ${st.version} · Assistente de trabalho` : `⚡ ${agentName} v${st.version} — agente pessoal`);
+        : (st.profile === 'trabalho' ? `${agentName} ${st.version} · assistente de trabalho` : `⚡ ${agentName} ${st.version} · núcleo padrão`);
     }
     b90State = { ...st, version: st.version || b90State.version };
     b90Catalog = st.llm.provider_catalog || {};
@@ -8006,7 +8021,7 @@ pygame.time.Clock().tick(60)</textarea>
     const stopTag = b90Reason === 'length' ? '⚠️ Limite atingido'
       : ((b90Reason.startsWith('error') || b90Reason === 'time_limit') ? '⚠️ Geração interrompida' : '✅ Fim Natural');
 
-    log.innerHTML += `<div class="b90-msg-b"><b>BYTE [${b90EscapeHtml(res.provider_used)}]:</b>\n${b90FormatReplyWithCodeButtons(res.response)}</div>`;
+    log.innerHTML += `<div class="b90-msg-b"><b>${b90AgentLabel()} [${b90EscapeHtml(res.provider_used)}]:</b>\n${b90FormatReplyWithCodeButtons(res.response)}</div>`;
     log.innerHTML += `
       <div class="b90-meta">
         <span>🧭 ${b90EscapeHtml(eff.tier_label)} (Score: ${eff.effort_score}) | ⏱️ ${b.total_ms} ms | 📊 Tok: ${res.tokens_generated}/${res.token_limit_used} (${stopTag}) | 🚀 ${res.tokens_per_sec} tok/s</span>
@@ -8446,7 +8461,7 @@ pygame.time.Clock().tick(60)</textarea>
   };
 
   // ---------------- v11.1: troca discreta de perfil (VTuber <-> Trabalho) ----------------
-  const b90ProfileNames = { pessoal: 'VTuber', trabalho: 'Trabalho' };
+  const b90ProfileNames = { pessoal: 'Matrix', trabalho: 'Trabalho' };
   let b90ProfileArmed = null;
   let b90ProfileSwitching = false;
 
@@ -8500,7 +8515,7 @@ pygame.time.Clock().tick(60)</textarea>
     if (key === b90AgentMenuKey) return;
     b90AgentMenuKey = key;
     const sel = document.getElementById('b90-agent-menu');
-    const opts = [{ id: '', nome: 'Byte padrão', tipo: 'perfis' }].concat(st.agent_menu);
+    const opts = [{ id: '', nome: 'Matrix', tipo: 'padrão' }].concat(st.agent_menu);
     sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>Teste: ${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.tipo)})</option>`).join('');
     document.getElementById('b90-agent-go').style.display = 'none';
   }
@@ -9271,6 +9286,8 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     if agente is not None:                       # v12.0: agente definido por manifesto (caminho do JSON ou dicionário)
         from byte_agent import agents as _agents
         manifest = _agents.resolve_agent(agente)
+        if dados_perfil:                         # v12.2: dados_perfil completa/sobrescreve o dono do manifesto
+            manifest = _agents.validate_manifest({**manifest, "dono": {**manifest["dono"], **dict(dados_perfil)}})
         perfil, dados_perfil = _agents.profile_of(manifest), manifest["dono"]
     normalize_profile_name(perfil)               # valida antes de derrubar a execução anterior
 
@@ -9315,7 +9332,7 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
     port = server.start()
 
     def _switch_profile(target: str, want_html: bool = False) -> Dict[str, Any]:
-        """v11.1 — troca VTuber (pessoal) <-> Trabalho dentro da mesma sessão, sem rodar a célula de novo."""
+        """v11.1 — troca Matrix (padrão) <-> Trabalho dentro da mesma sessão, sem rodar a célula de novo."""
         global byte_service
         current = byte_service
         target_name = normalize_profile_name(target)
@@ -9336,7 +9353,7 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
         return st
 
     def _switch_agent(target: str, want_html: bool = False) -> Dict[str, Any]:
-        """v12.1 — SOMENTE PARA TESTES: troca o agente da sessão (target="" volta para a Byte padrão)."""
+        """v12.1 — SOMENTE PARA TESTES: troca o agente da sessão (target="" volta para a Matrix, o perfil padrão)."""
         global byte_service
         from byte_agent import agents as _agents
         current = byte_service
