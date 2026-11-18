@@ -166,7 +166,10 @@ def test_analysis_flow_generates_report_and_deck(env):
     res = service.dispatch_request("work_analyze", {"file": "vendas_exemplo", "question": "Onde está a receita?"})
     assert "error" not in res and res["measure"] == "valor" and res["flagged_numbers"] == ["77,7"]
     names = res["outputs"]
-    assert names[0].startswith("relatorio_vendas-exemplo_") and any(n.startswith("planilha_") and n.endswith(".xlsx") for n in names)
+    import importlib.util
+    has_xlsx = importlib.util.find_spec("openpyxl") is not None          # a planilha exige o extra [trabalho]
+    assert names[0].startswith("relatorio_vendas-exemplo_")
+    assert any(n.startswith("planilha_") and n.endswith(".xlsx") for n in names) or not has_xlsx
     assert any(n.startswith("apresentacao_") and n.endswith(".html") for n in names)
     report = (work.outputs / names[0]).read_text(encoding="utf-8")
     assert "Fatos calculados" in report and "Conferir:" in report and "77,7" in report and "Onde está a receita?" in report
