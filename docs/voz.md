@@ -165,3 +165,12 @@ Valerio (masculinas), sempre no formato `pt-BR-NomeNeural`. Ouça antes na **Gal
 
 Com o Azure Speech ligado, o painel e a página /voz também falam com essa voz do agente (v13.8). Sem ele, ou se o
 aparelho não tocar o áudio, usam a voz do navegador/celular com o tom e a velocidade do manifesto.
+
+## Pronúncia e velocidade (v13.11)
+- A voz pula as etiquetas de emoção do avatar (`[feliz]`, `[animada]`) e lê termos em inglês do jeito brasileiro
+  (live → "laive", game → "gueime", stream → "strim", Byte → "báite"...). O texto escrito não muda.
+  Acrescente os seus: `BYTE_VOZ_PRONUNCIAS="Kronus=crônus;deploy=diplói"`.
+- Velocidade por agente: `BYTE_VOZ_MATRIX_VELOCIDADE=1.15` (0.5 a 2.0; também `_BYTE`, `_BIT`, `_KRONUS`).
+  A Matrix agora fala em 1.1 por padrão.
+- Vozes "Multilingual" do Azure (ex.: `pt-BR-ThalitaMultilingualNeural`) costumam soar mais naturais e lidam melhor
+  com inglês; se o nome não existir na sua região, o agente usa a voz padrão.

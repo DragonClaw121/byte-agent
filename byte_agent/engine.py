@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.10"
+BYTE_VERSION = "13.11"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -8376,7 +8376,7 @@ pygame.time.Clock().tick(60)</textarea>
     } catch (e) {}
   }
   function b90SpeechClean(t) {
-    return String(t || '').replace(/```[\s\S]*?```/g, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/🛡️[^\n]*/g, ' ')
+    return String(t || '').replace(/```[\s\S]*?```/g, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/\u{1F6E1}\uFE0F?[^\n]*/gu, ' ')
       .replace(/[*_`#>|~\[\]{}]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
   }
   function b90SpeechChunks(t) {

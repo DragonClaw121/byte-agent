@@ -318,7 +318,7 @@ def test_each_agent_has_its_own_voice(tmp_path, fake, monkeypatch):
         agents.validate_manifest({"id": "xx", "voz": {"tom": 3}})
     with pytest.raises(agents.ManifestError, match="voz_servidor"):
         agents.validate_manifest({"id": "xx", "voz": {"voz_servidor": "pf dora; rm -rf"}})
-    assert voice.policy_for(None)["velocidade"] == 0.95
+    assert voice.policy_for(None)["velocidade"] == 1.1
 
 
 def test_transcription_passes_cloudflare_signature_check():

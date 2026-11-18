@@ -59,7 +59,7 @@ VOICE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 # Matrix: voz do servidor = BYTE_VOICE_TTS_VOICE (a voz padrão); serena, um pouco mais pausada
 MATRIX_VOICE = {"ativo": True, "responder_com_voz": "auto", "palavras_chave": ["matrix", "matriz"], "somente_dono": False,
-                "na_live": False, "voz_servidor": "", "tom": 1.0, "velocidade": 0.95}
+                "na_live": False, "voz_servidor": "", "tom": 1.0, "velocidade": 1.1}
 
 # como cada tipo de agente responde quando a pergunta chega por voz
 VOICE_DIRECTIVES = {
@@ -163,7 +163,20 @@ def policy_for(manifest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     override = _env_voice(pol["nome"])
     if override:
         pol["voz_servidor"] = override
+    speed = _env_speed(pol["nome"])
+    if speed:
+        pol["velocidade"] = speed
     return pol
+
+
+def _env_speed(name: str) -> Optional[float]:
+    """v13.11: BYTE_VOZ_<AGENTE>_VELOCIDADE (0.5 a 2.0), ex.: BYTE_VOZ_MATRIX_VELOCIDADE=1.15."""
+    key = "BYTE_VOZ_" + re.sub(r"[^A-Z0-9]", "_", fold(name).upper()) + "_VELOCIDADE"
+    try:
+        value = float(os.environ.get(key, "").replace(",", ".") or 0)
+    except ValueError:
+        return None
+    return round(min(2.0, max(0.5, value)), 2) if value else None
 
 
 def match_wake_word(text: str, words: List[str]) -> Tuple[bool, str]:
@@ -321,6 +334,7 @@ def _faster_whisper_installed() -> bool:
 # ---------------------------------------------------------------- fala das respostas
 _URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 _FENCE_RE = re.compile(r"```.*?(```|\Z)", re.DOTALL)
+_TAG_RE = re.compile(r"\[[^\]\n]{1,24}\]")
 _EMOJI_RE = re.compile(r"[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE00-\U0000FE0F\U0001F1E6-\U0001F1FF]+")
 
 
@@ -328,6 +342,7 @@ def speech_text(reply: str, limit: int = 700) -> str:
     """Texto que vai para o sintetizador: sem blocos de código, cartões, links, emojis e marcação."""
     out = _FENCE_RE.sub(" ", str(reply or ""))
     out = re.sub(r"🛡️[^\n]*\n?", " ", out)
+    out = _TAG_RE.sub(" ", out)                              # [feliz], [animada]: comandos do avatar, não fala
     out = _URL_RE.sub(" ", out)
     out = _EMOJI_RE.sub(" ", out)
     out = re.sub(r"[*_`#>|~\[\]{}<\\]+", " ", out)
@@ -347,6 +362,41 @@ KOKORO_TO_AZURE = {
     "pm_santa": "pt-BR-ValerioNeural",      # Kronus: masculina, grave
 }
 _AZURE_VOICE_RE = re.compile(r"^[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+Neural$")
+
+
+# v13.11: como uma voz pt-BR deve ler termos em inglês comuns em live, games e trabalho (o texto escrito não muda).
+# Acrescente os seus com BYTE_VOZ_PRONUNCIAS="palavra=como se fala;outra=como se fala".
+PRONUNCIATIONS = {
+    "byte": "báite", "live": "laive", "lives": "laives", "stream": "strim", "streams": "strims", "streamer": "strímer",
+    "streamers": "strímers", "streaming": "strímin", "game": "gueime", "games": "gueimes", "gamer": "gueimer",
+    "gameplay": "gueimplei", "vtuber": "vi tiúber", "vtubers": "vi tiúbers", "twitch": "tuítch", "youtube": "iutúbi",
+    "online": "onlaine", "offline": "oflaine", "download": "dáunloud", "upload": "âploud", "feedback": "fídbéque",
+    "setup": "sétâp", "play": "plêi", "player": "plêier", "players": "plêiers", "boss": "bós", "skin": "isquin",
+    "skins": "isquins", "spoiler": "ispóiler", "hype": "ráipe", "nice": "náice", "gg": "gê gê", "ok": "oquêi",
+    "okay": "oquêi", "e-mail": "imêiu", "email": "imêiu", "e-mails": "imêius", "emails": "imêius", "mouse": "máuse",
+    "software": "sóftuer", "hardware": "rárduer", "wi-fi": "uai fai", "wifi": "uai fai", "discord": "díscord",
+    "minecraft": "máinecraft", "chat": "chét", "lag": "lég", "nerf": "nérf", "buff": "bâf", "headset": "réd sét",
+    "webcam": "uébi quém", "insight": "ínsait", "insights": "ínsaits", "deadline": "dédlaine", "meeting": "mítin",
+    "dashboard": "déshbord", "report": "ripórt", "slides": "isláides", "google": "gúgou", "drive": "dráive",
+}
+
+
+def _pronunciations() -> Dict[str, str]:
+    lex = dict(PRONUNCIATIONS)
+    for item in os.environ.get("BYTE_VOZ_PRONUNCIAS", "").split(";"):
+        word, _, said = item.partition("=")
+        word, said = word.strip().lower(), " ".join(said.split())
+        if word and said and len(word) <= 40 and len(said) <= 60:
+            lex[word] = said
+    return lex
+
+
+def apply_pronunciations(escaped_text: str) -> str:
+    """Troca termos conhecidos por <sub alias>, que a voz lê do jeito certo (o texto já vem escapado para XML)."""
+    lex = _pronunciations()
+    words = sorted(lex, key=len, reverse=True)
+    pattern = re.compile(r"(?<![\w-])(" + "|".join(re.escape(w) for w in words) + r")(?![\w-])", re.IGNORECASE)
+    return pattern.sub(lambda m: f'<sub alias="{_xml(lex[m.group(1).lower()])}">{m.group(1)}</sub>', escaped_text)
 
 
 def _xml(text: str) -> str:
@@ -460,6 +510,8 @@ class Synthesizer:
     def _azure(self, text: str, voice: str, speed: Optional[float] = None) -> Tuple[bytes, str]:
         lang = "-".join(voice.split("-")[:2])
         body = _xml(text)
+        if lang.lower().startswith("pt"):
+            body = apply_pronunciations(body)
         if speed and abs(float(speed) - 1.0) > 0.01:
             rate = max(-50, min(100, int(round((float(speed) - 1.0) * 100))))
             body = f'<prosody rate="{rate:+d}%">{body}</prosody>'

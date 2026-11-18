@@ -120,3 +120,35 @@ def test_panel_and_voice_page_can_ask_for_the_agents_server_voice(tmp_path, monk
     finally:
         rt.stop()
         fake.httpd.shutdown()
+
+
+def test_byte_voice_skips_avatar_tags_and_reads_english_terms_right(speech_url, monkeypatch):
+    assert voice.speech_text("[feliz] Bora pra live! [animada] 🎮") == "Bora pra live!"
+    monkeypatch.setenv("BYTE_VOZ_PRONUNCIAS", "Kronus=crônus; ; =x;palavra-sem-fala=")
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    s.synthesize("A Byte vai fazer live de games com o Kronus. Livestock não muda.", voice="pt-BR-ThalitaNeural")
+    ssml = FakeSpeech.calls[-1]["ssml"]
+    assert '<sub alias="báite">Byte</sub>' in ssml and '<sub alias="laive">live</sub>' in ssml
+    assert '<sub alias="gueimes">games</sub>' in ssml and '<sub alias="crônus">Kronus</sub>' in ssml
+    assert "Livestock não muda" in ssml                                   # palavra parecida não é tocada
+
+
+def test_speed_per_agent_and_a_brisker_matrix(monkeypatch):
+    assert voice.policy_for(None)["velocidade"] == 1.1
+    monkeypatch.setenv("BYTE_VOZ_MATRIX_VELOCIDADE", "1,25")
+    monkeypatch.setenv("BYTE_VOZ_BYTE_VELOCIDADE", "9")                  # limitado a 2.0
+    assert voice.policy_for(None)["velocidade"] == 1.25
+    byte = {"tipo": "vtuber", "nome": "Byte", "voz": dict(voice.VOICE_DEFAULTS["vtuber"], velocidade=1.1)}
+    assert voice.policy_for(byte)["velocidade"] == 2.0
+
+
+def test_work_profile_panel_keeps_the_speech_filter_intact():
+    """O visual de trabalho remove emojis do painel; o filtro da fala não pode depender de um emoji literal
+    (antes virava /[^\\n]*/g, apagava o texto inteiro e o Bit ficava mudo)."""
+    from byte_agent import engine
+    engine.apply_profile("trabalho", {"usuario": "X"})
+    try:
+        html = engine.build_v90_web_ui({}, token="t" * 43)
+    finally:
+        engine.apply_profile("pessoal")
+    assert "replace(/[^\\n]*/g" not in html and "\\u{1F6E1}" in html
