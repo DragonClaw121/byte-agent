@@ -524,6 +524,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "avaliar":
         from .evaluate import main as evaluate_main
         return evaluate_main(argv[1:])
+    if argv and argv[0] == "comportamento":
+        from .comportamento import main as behavior_main
+        return behavior_main(argv[1:])
     parser = argparse.ArgumentParser(prog="byte_agent", description="Byte em modo servidor (sem Colab).")
     parser.add_argument("--agent", default=env.get("BYTE_AGENT", ""),
                         help="manifesto JSON do agente (ex.: agents/kronus.json). Define perfil, pasta, porta e canais.")

@@ -36,6 +36,7 @@ HELP_TEXT = (
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
     "/objetivo <o que você quer> — tarefa longa: o agente planeja em etapas e trabalha sozinho até entregar\n"
     "/objetivos — progresso | /retomar <id> — continua um travado | /cancelar_objetivo <id>\n"
+    "/avaliar — roda as avaliações de comportamento (nota por categoria e o que piorou desde a última)\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -73,6 +74,7 @@ class TelegramBridge:
                  api_base: str = "https://api.telegram.org", poll_timeout_s: int = 25):
         if not token or not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", token.strip()):
             raise ValueError("Token do Telegram ausente ou com formato inválido (esperado 123456:ABC...).")
+        self._eval_lock = threading.Lock()
         self.service = service
         self._token = token.strip()
         self.allowed = {int(c) for c in allowed_chat_ids}
@@ -198,6 +200,40 @@ class TelegramBridge:
     def _service_closed(self) -> bool:
         """True quando o serviço desta ponte foi encerrado (ex.: a célula do Colab foi executada de novo)."""
         return bool(getattr(self.service, "closed", False))
+
+    def _run_behavior_eval(self, chat_id: int) -> None:
+        """Roda `python -m byte_agent comportamento` em outro processo (não mexe no estado desta Byte) e manda o placar."""
+        import os
+        import subprocess
+        from . import engine
+        try:
+            llm = self.service.llm
+            model = llm.current_model_spec() if hasattr(llm, "current_model_spec") else str(llm.active_model)
+            cmd = [sys.executable, "-m", "byte_agent", "comportamento", "--model", model, "--json"]
+            agent = (engine.ACTIVE_AGENT or {}).get("id")
+            if agent:
+                cmd += ["--agent", agent]
+            store = os.environ.get("BYTE_DADOS_PERSISTENTES")
+            if store:
+                cmd += ["--saida", os.path.join(store, "avaliacoes")]
+            if getattr(llm, "ollama_url", None) and not str(model).startswith("azure:"):
+                cmd += ["--ollama-url", str(llm.ollama_url)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+            line = next((ln for ln in proc.stdout.splitlines()[::-1] if ln.startswith("JSON:")), "")
+            if not line:
+                raise RuntimeError((proc.stderr or proc.stdout or "sem saída")[-400:])
+            from .comportamento import format_report
+            report = json.loads(line[5:])
+            report.setdefault("results", [])
+            fails = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip().startswith("FALHA")]
+            text = format_report(report)
+            if fails:
+                text += "\n\nDetalhes:\n" + "\n".join(fails[:12])
+            self.send(chat_id, text)
+        except Exception as err:
+            self.send(chat_id, f"⚠️ A avaliação não terminou: {type(err).__name__}: {str(err)[:300]}")
+        finally:
+            self._eval_lock.release()
 
     def stop(self) -> None:
         self._stop.set()
@@ -528,6 +564,13 @@ class TelegramBridge:
             else:
                 ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
                 self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
+        elif cmd == "/avaliar":
+            if not self._eval_lock.acquire(blocking=False):
+                self.send(chat_id, "Já há uma avaliação rodando; aguarde o placar.")
+                return
+            self.send(chat_id, "📊 Avaliando o comportamento numa cópia temporária (seus dados não são tocados). "
+                               "Leva alguns minutos; mando o placar aqui.")
+            threading.Thread(target=self._run_behavior_eval, args=(chat_id,), daemon=True, name="ByteAvaliacao").start()
         elif cmd == "/live":
             director = self.stream_director
             if director is None:

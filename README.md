@@ -202,3 +202,5 @@ A ordem segura é: extrair o HTML/JS do painel para arquivos próprios, depois `
 depois o roteador, rodando `pytest` a cada extração.
 
 - **Objetivos (v13.9):** tarefas longas que a Byte executa sozinha, em etapas — [docs/objetivos.md](docs/objetivos.md)
+- **Avaliações de comportamento (v13.10):** nota por categoria e regressões — [docs/avaliacoes.md](docs/avaliacoes.md)
+- **Atualização automática da nuvem pelo GitHub (v13.10):** [docs/azure-conteiner.md](docs/azure-conteiner.md)
