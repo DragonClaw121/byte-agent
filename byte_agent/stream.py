@@ -236,7 +236,7 @@ class StreamDirector:
         return self.llm._resolve_valid_ollama_model()
 
     def _generate(self, user_block: str) -> Optional[Tuple[str, str]]:
-        if self.llm.connection_mode == "offline" or not self.llm.ollama_online:
+        if self.llm.connection_mode == "offline" or not (self.llm.llm_ready() if hasattr(self.llm, "llm_ready") else self.llm.ollama_online):
             self.last_error = "LLM local indisponível"
             return None
         messages: List[Dict[str, str]] = [{"role": "system", "content": self._system_prompt()}]

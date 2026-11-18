@@ -80,6 +80,26 @@ O painel e a página `/voz` já falam com a voz do navegador/celular. Configurar
 | OpenAI | `BYTE_VOICE_TTS_URL=https://api.openai.com/v1`, `BYTE_VOICE_TTS_MODEL=tts-1`, segredo `BYTE_VOICE_TTS_API_KEY` |
 | Piper (o mesmo da live) | `BYTE_TTS_COMMAND=...` (com `ffmpeg` instalado vira nota de voz; sem ele, vai como arquivo `.wav`) |
 
+## Uma voz para cada agente
+
+Cada agente tem tom, velocidade e voz do servidor próprios (campo `voz` do manifesto):
+
+| Agente | Voz do servidor (Kokoro) | Tom (navegador) | Velocidade |
+|---|---|---|---|
+| Matrix | a padrão (`BYTE_VOICE_TTS_VOICE`) | 1.0 | 0.95 |
+| Byte | `pf_dora` | 1.3 | 1.1 |
+| Bit | `pm_alex` | 0.85 | 0.95 |
+| Kronus | `pm_santa` | 1.0 | 1.1 |
+
+- **Tom e velocidade** valem para a voz do navegador/celular (painel e `/voz`), sem servidor nenhum. O tom não existe
+  na API de TTS; lá vale só a velocidade.
+- **voz_servidor** vale para as respostas em áudio do servidor (Telegram e `/voz`). Se o serviço não conhecer o nome
+  (por exemplo, OpenAI em vez de Kokoro), ele usa a voz padrão em vez de falhar.
+- A voz da Byte **na live** vem do `BYTE_TTS_COMMAND` (Piper); escolha lá o modelo de voz dela.
+
+Para mudar, copie o manifesto do agente para a pasta `agents/` do projeto (ele passa a valer no lugar do exemplo) e
+edite só o bloco `voz`. Reinicie a Byte depois de editar.
+
 ## Regras no manifesto
 
 ```json
@@ -96,6 +116,7 @@ O painel e a página `/voz` já falam com a voz do navegador/celular. Configurar
 - `palavras_chave`: nomes que ativam o modo mãos livres. Inclua as grafias que a transcrição costuma errar
   ("cronos" para Kronus, "bait" para Byte). Sem a lista, vale o nome do agente.
 - `somente_dono`: recusa voz de grupos do Telegram.
+- `voz_servidor`, `tom` (0.5 a 2.0) e `velocidade` (0.5 a 2.0): a voz do agente (seção anterior).
 - `na_live`: só para `vtuber`; com a live ligada, a voz do dono é respondida na live.
 
 ## Segurança
@@ -117,3 +138,30 @@ Também aceita o áudio direto no corpo (`Content-Type: audio/webm`, `audio/ogg`
 `{"audio_b64": "...", "mime": "audio/webm"}`. Resposta: `heard`, `reply`, `speech` (texto limpo para falar),
 `audio_b64`/`audio_mime` (quando há voz configurada), `ignored`/`wake_only` (modo mãos livres, com
 `"hands_free": true`) e `pending_approvals`.
+
+## Voz na nuvem: Azure AI Speech (v13.7)
+Na Azure não há Kokoro nem Piper; para o agente responder em áudio no Telegram, use o **Azure AI Speech** (plano
+gratuito **F0**: 500 mil caracteres por mês, vozes neurais em português do Brasil).
+
+1. Portal → pesquise **Serviços de Fala** (Speech services) → **Criar**: grupo `byte-rg`, região **Brazil South**,
+   nome `byte-fala`, tipo de preço **Free F0** → **Examinar + criar** → **Criar**.
+2. Recurso criado → **Chaves e Ponto de Extremidade** → copie a **Chave 1**.
+3. No Cloud Shell:
+   ```
+   read -rsp "Chave do Speech: " K; echo
+   az containerapp secret set -g byte-rg -n byte --secrets speech-key="$K" -o none && unset K
+   az containerapp update -g byte-rg -n byte --set-env-vars AZURE_SPEECH_KEY=secretref:speech-key AZURE_SPEECH_REGION=brazilsouth -o none
+   ```
+
+Vozes padrão: Matrix `pt-BR-FranciscaNeural`, Byte `pt-BR-ThalitaNeural`, Bit `pt-BR-AntonioNeural`, Kronus
+`pt-BR-ValerioNeural`. Para trocar a de um agente, sem editar arquivo:
+```
+az containerapp update -g byte-rg -n byte --set-env-vars BYTE_VOZ_KRONUS=pt-BR-DonatoNeural -o none
+```
+(`BYTE_VOZ_MATRIX`, `BYTE_VOZ_BYTE`, `BYTE_VOZ_BIT`, `BYTE_VOZ_KRONUS`.) Outras vozes pt-BR: Francisca, Thalita,
+Brenda, Elza, Giovanna, Leila, Leticia, Manuela, Yara (femininas); Antonio, Donato, Fabio, Humberto, Julio, Nicolau,
+Valerio (masculinas), sempre no formato `pt-BR-NomeNeural`. Ouça antes na **Galeria de Voz** do Speech Studio
+(speech.microsoft.com). Se o nome não existir, o agente usa a voz padrão.
+
+Com o Azure Speech ligado, o painel e a página /voz também falam com essa voz do agente (v13.8). Sem ele, ou se o
+aparelho não tocar o áudio, usam a voz do navegador/celular com o tom e a velocidade do manifesto.

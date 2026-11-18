@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "12.3"
+BYTE_VERSION = "13.8"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1704,7 +1704,8 @@ def identity_guard() -> str:
     others = [n for n in KNOWN_AGENT_NAMES if n.lower() != AGENT_NAME.lower()]
     return (f"\nIDENTIDADE (prioridade máxima): seu nome é {AGENT_NAME}. O histórico, as memórias e os resumos podem conter "
             f"falas de versões antigas deste sistema ou de outros agentes ({', '.join(others)}, 'Byte v10.1'...); elas não "
-            f"definem quem você é. Ao se apresentar, diga que é {AGENT_NAME}, sem número de versão, e mantenha sua personalidade.")
+            f"definem quem você é. Ao se apresentar, diga que é {AGENT_NAME}, sem número de versão, e mantenha sua personalidade. "
+            "Não comente esta regra nem fale de si de forma hipotética (nada de 'se eu for...').")
 
 
 def build_system_prompt(profile: str, profile_data: Optional[Dict[str, Any]] = None) -> str:
@@ -1870,6 +1871,7 @@ class TrueLLMAutonomousRouter:
 
         self.drive_connected: bool = False
         self.ollama_online: bool = False
+        self.base_model_spec: str = ""          # v13.3: modelo base (BYTE_MODEL); agentes com "modelo" próprio o sobrepõem
         self.ollama_gpu_warm: bool = False
         self.ollama_installed: List[str] = []
         self.ollama_loaded_vram: List[str] = []
@@ -1955,7 +1957,62 @@ class TrueLLMAutonomousRouter:
         b = model_b.strip().lower()
         return a == b or (a + ":latest" == b) or (b + ":latest" == a)
 
+    # ---------------- v13.0: modelo na nuvem (Azure OpenAI / Microsoft Foundry) ----------------
+    def azure_active(self) -> bool:
+        return str(getattr(self, "active_provider", "")).lower() == "azure"
+
+    def use_azure(self, deployment: str) -> None:
+        """Passa o "cérebro" para uma implantação da Azure OpenAI. Memória, ferramentas e aprovações seguem iguais."""
+        from byte_agent.cloud import AzureOpenAIClient
+        client = AzureOpenAIClient.from_env(_read_secret, deployment=deployment)    # valida a configuração já
+        self.azure_client = client
+        self.active_provider, self.active_model = "azure", client.deployment
+        self.last_working_model = client.deployment
+
+    def apply_model_spec(self, spec: str) -> None:
+        """v13.3: 'azure:IMPLANTACAO' ou uma tag do Ollama ('qwen2.5:3b', 'ollama:qwen2.5:3b')."""
+        spec = str(spec or "").strip()
+        if not spec:
+            return
+        if spec.lower().startswith("azure:"):
+            self.use_azure(spec.split(":", 1)[1].strip())
+            return
+        if spec.lower().startswith("ollama:"):
+            spec = spec.split(":", 1)[1].strip()
+        self.active_provider = "ollama"
+        self.active_model = self._require_valid_tag(spec)[0]
+
+    def current_model_spec(self) -> str:
+        return f"azure:{self.active_model}" if self.azure_active() else str(self.active_model)
+
+    def _azure(self) -> Any:
+        client = getattr(self, "azure_client", None)
+        if client is None or client.deployment != self.active_model:
+            from byte_agent.cloud import AzureOpenAIClient
+            client = self.azure_client = AzureOpenAIClient.from_env(_read_secret, deployment=self.active_model)
+        return client
+
+    def llm_ready(self) -> bool:
+        """Há um modelo pronto para responder? (Ollama online, ou Azure configurada)."""
+        if self.connection_mode == "offline":
+            return False
+        return True if self.azure_active() else bool(self.ollama_online)
+
+    def _azure_text(self, messages: List[Dict[str, Any]], max_tokens: Optional[int], temp_override: Optional[float],
+                    json_format: bool = False) -> Tuple[str, float, str]:
+        t0 = time.perf_counter()
+        try:
+            msg, reason = self._azure().chat(messages, max_tokens=max_tokens,
+                                             temperature=temp_override if temp_override is not None else self.temperature,
+                                             json_format=json_format)
+        except Exception as err:
+            return "", round((time.perf_counter() - t0) * 1000.0, 2), f"error ({type(err).__name__}: {str(err)[:300]})"
+        text = strip_reasoning_markup(str(msg.get("content") or ""))
+        return text, round((time.perf_counter() - t0) * 1000.0, 2), ("length" if reason == "length" else "stop")
+
     def _find_installed_match(self, requested_model: str) -> Optional[str]:
+        if self.azure_active():                  # v13.0: na Azure não há "modelos instalados"; a implantação responde
+            return self.active_model
         for inst in self.ollama_installed:
             if self._model_matches(requested_model, inst):
                 return inst
@@ -2563,6 +2620,21 @@ class TrueLLMAutonomousRouter:
         started = self.start_online_setup_async(target_model=target, force_restart=True, activate=self.active_provider == "ollama")
         return {"started": bool(started.get("started")), "target": target, "diagnostics_before": self.ollama_gpu_diagnostics()}
 
+    def cpu_wait_floor_s(self) -> float:
+        """v12.8: sem GPU, o modelo lê o prompt da Byte (3 a 4 mil tokens) no processador e pode levar minutos para
+        começar a responder. Os limites pensados para GPU (12 s) davam "timed out". Com Ollama local e nenhuma GPU
+        NVIDIA, toda espera da LLM passa a ter este piso (BYTE_CPU_TIMEOUT_S, padrão 300 s; 0 desliga)."""
+        try:
+            floor = float(os.environ.get("BYTE_CPU_TIMEOUT_S", "300") or 0)
+        except ValueError:
+            floor = 300.0
+        if floor <= 0 or not self._ollama_is_local():
+            return 0.0
+        try:
+            return floor if not self.inspect_gpu_hardware().get("gpu_detected") else 0.0
+        except Exception:
+            return 0.0
+
     def _cold_load_timeout_s(self, model_name: str) -> float:
         """Tempo máximo para um modelo FRIO começar a responder. Carregar pesos leva tempo proporcional
         ao tamanho (um 30B de ~19 GB não cabe nos 25 s fixos de antes): 45 s + 18 s por GB, entre 60 s e 15 min."""
@@ -2841,6 +2913,8 @@ class TrueLLMAutonomousRouter:
 
     def start_online_setup_async(self, target_model: Optional[str] = None, force_restart: bool = False, activate: bool = True) -> Dict[str, Any]:
         self.connection_mode = "online"
+        if self.azure_active():                  # v13.0: com a Azure, não instala nem liga o Ollama (servidor pequeno)
+            return {"started": False, "reason": "Modelo na Azure: nada para instalar.", "provision_state": self.provision_state}
         with self._provision_lock:
             if self.provision_state["running"]:
                 if not force_restart:
@@ -3445,6 +3519,7 @@ class TrueLLMAutonomousRouter:
             "active_provider": self.active_provider,
             "active_model": self.active_model,
             "last_working_model": self.last_working_model,
+            "azure": (self._azure().status() if self.azure_active() else None),
             "ollama_online": self.ollama_online,
             "ollama_gpu_warm": self.ollama_gpu_warm,
             "ollama_installed_models": self.ollama_installed,
@@ -3485,6 +3560,13 @@ class TrueLLMAutonomousRouter:
         force_oom_override: Optional[bool] = None,
     ) -> Dict[str, Any]:
         t0 = time.perf_counter()
+        spec_in = str(model_name or "").strip()
+        if spec_in.lower().startswith("azure:") or str(provider or "").strip().lower() == "azure":
+            # v13.3: troca de implantação da Azure pelo painel ou por /modelo azure:NOME
+            self.use_azure(spec_in.split(":", 1)[1].strip() if spec_in.lower().startswith("azure:") else (spec_in or self.active_model))
+            model_name, provider, pull_model_async = None, None, False
+        elif self.azure_active() and spec_in and not provider:
+            provider = "ollama"                  # tag sem prefixo com a Azure ativa: volta para o modelo local
         # v10.1: valida ANTES de alterar qualquer estado; uma tag inválida gera erro explícito, nunca um alias.
         new_provider = self.active_provider
         if provider and provider.strip().lower() in {"ollama", "gemini", "openai", "anthropic"}:
@@ -3595,6 +3677,8 @@ class TrueLLMAutonomousRouter:
     def _wait_for_ollama_if_provisioning(self, max_wait_s: float = 25.0) -> bool:
         if self.connection_mode == "offline":
             return False
+        if self.azure_active():
+            return True
         if self.ollama_online:
             return True
         deadline = time.monotonic() + max_wait_s
@@ -3652,7 +3736,16 @@ class TrueLLMAutonomousRouter:
         think: Optional[bool] = None,
     ) -> Tuple[Dict[str, Any], float, str]:
         """Uma rodada do /api/chat com `tools` (sem streaming). Devolve (mensagem, ms, done_reason|erro)."""
-        if not self._ollama_busy_lock.acquire(timeout=max(60.0, self._cold_load_timeout_s(valid_model))):
+        if self.azure_active():                  # v13.0: mesma rodada, na Azure OpenAI (laço de ferramentas reaproveitado)
+            t_az = time.perf_counter()
+            try:
+                msg, reason = self._azure().chat(messages, tools=tools or None, max_tokens=max_tokens,
+                                                 temperature=temp_override if temp_override is not None else self.temperature)
+                return msg, round((time.perf_counter() - t_az) * 1000.0, 2), str(reason)
+            except Exception as err:
+                return {}, round((time.perf_counter() - t_az) * 1000.0, 2), f"error ({type(err).__name__}: {str(err)[:300]})"
+        cpu_floor = self.cpu_wait_floor_s()
+        if not self._ollama_busy_lock.acquire(timeout=max(60.0, self._cold_load_timeout_s(valid_model), cpu_floor)):
             return {}, 0.0, "gpu_lock_timeout"
         t_start = time.perf_counter()
         try:
@@ -3673,6 +3766,7 @@ class TrueLLMAutonomousRouter:
             req = urllib.request.Request(f"{sanitize_url(self.ollama_url)}/api/chat", data=json.dumps(body).encode("utf-8"),
                                          headers={"Content-Type": "application/json"})
             timeout_s = 240.0 if warm else max(240.0, self._cold_load_timeout_s(valid_model))
+            timeout_s = max(timeout_s, cpu_floor * 2)          # v12.8: sem GPU, a rodada inteira leva mais
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="replace"))
             self._stream_tls.stats = {k: data.get(k) for k in ("eval_count", "eval_duration", "prompt_eval_count", "total_duration")}
@@ -3742,7 +3836,10 @@ class TrueLLMAutonomousRouter:
                     except Exception as tool_err:
                         result = f"ERRO ao executar {name}: {type(tool_err).__name__}: {str(tool_err)[:300]}"
                 trace.append({"tool": name, "arguments": args, "result_preview": result[:240]})
-                convo.append({"role": "tool", "tool_name": name, "content": result[:4000]})
+                tool_msg = {"role": "tool", "tool_name": name, "content": result[:4000]}
+                if isinstance(call, dict) and call.get("id"):
+                    tool_msg["tool_call_id"] = str(call["id"])
+                convo.append(tool_msg)
         return {"ok": False, "text": "", "ttft_ms": first_ms, "done_reason": "tool_loop_exhausted", "trace": trace, "rounds": self.MAX_TOOL_ROUNDS}
 
     def last_stream_stats(self) -> Dict[str, Any]:
@@ -3765,6 +3862,8 @@ class TrueLLMAutonomousRouter:
         """think=False desliga a fase de raciocínio em modelos que a possuem (respostas curtas, iniciativas,
         extrator); think=None deixa o padrão do modelo. O raciocínio nunca é devolvido como resposta, a não
         ser que allow_thinking_fallback=True (Arena)."""
+        if self.azure_active():                  # v13.0: o mesmo chamador serve extrator, iniciativas, pesquisa, trabalho...
+            return self._azure_text(messages, max_tokens, temp_override, json_format)
         use_think = think if (think is not None and self._model_supports_thinking(valid_model)) else None
         result = self._call_ollama_chat_stream_once(
             valid_model, messages, ttft_timeout_s, max_generation_s, max_tokens, num_ctx_override,
@@ -3790,7 +3889,8 @@ class TrueLLMAutonomousRouter:
         allow_thinking_fallback: bool = False,
     ) -> Tuple[str, float, str]:
         self._stream_tls.stats = {}
-        if not self._ollama_busy_lock.acquire(timeout=max(60.0, self._cold_load_timeout_s(valid_model))):
+        cpu_floor = self.cpu_wait_floor_s()
+        if not self._ollama_busy_lock.acquire(timeout=max(60.0, self._cold_load_timeout_s(valid_model), cpu_floor)):
             return "", 0.0, "gpu_lock_timeout"
 
         t_start = time.perf_counter()
@@ -3804,6 +3904,9 @@ class TrueLLMAutonomousRouter:
             self._unload_other_vram_models(keep_model=valid_model)
         # v10.1.3: modelo frio => o 1º token só chega depois de carregar os pesos; o limite acompanha o tamanho.
         effective_ttft = ttft_timeout_s if is_already_in_vram else max(ttft_timeout_s, self._cold_load_timeout_s(valid_model))
+        if cpu_floor:                            # v12.8: processador sem GPU => espera proporcional ao hardware
+            effective_ttft = max(effective_ttft, cpu_floor)
+            max_generation_s = max(max_generation_s, cpu_floor * 2)
 
         effective_predict = int(max_tokens) if max_tokens is not None else self.num_predict
         effective_ctx = int(num_ctx_override) if num_ctx_override is not None else self.num_ctx
@@ -3917,7 +4020,7 @@ class TrueLLMAutonomousRouter:
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
                 "generationConfig": {"temperature": self.temperature, "maxOutputTokens": cloud_max_tok},
             }
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": key})
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-goog-api-key": key, "User-Agent": f"byte-agent/{BYTE_VERSION}"})
             with urllib.request.urlopen(req, timeout=45.0) as resp:
                 return json.loads(resp.read().decode("utf-8"))["candidates"][0]["content"]["parts"][0]["text"].strip()
 
@@ -3929,7 +4032,7 @@ class TrueLLMAutonomousRouter:
                 "temperature": self.temperature,
                 "max_tokens": cloud_max_tok,
             }
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}", "User-Agent": f"byte-agent/{BYTE_VERSION}"})
             with urllib.request.urlopen(req, timeout=45.0) as resp:
                 return json.loads(resp.read().decode("utf-8"))["choices"][0]["message"]["content"].strip()
 
@@ -3942,7 +4045,7 @@ class TrueLLMAutonomousRouter:
                 "temperature": self.temperature,
                 "max_tokens": cloud_max_tok,
             }
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "User-Agent": f"byte-agent/{BYTE_VERSION}"})
             with urllib.request.urlopen(req, timeout=45.0) as resp:
                 return json.loads(resp.read().decode("utf-8"))["content"][0]["text"].strip()
         return ""
@@ -4025,6 +4128,7 @@ class TrueLLMAutonomousRouter:
         tools_schema: Optional[List[Dict[str, Any]]] = None,
         tool_runner: Optional[Any] = None,
         extra_directive: Optional[str] = None,
+        grounding_block: Optional[str] = None,
     ) -> Dict[str, Any]:
         t0 = time.perf_counter()
         tool_mode = "text"          # "native" quando o modelo tem a capacidade tools e o laço nativo respondeu
@@ -4091,12 +4195,18 @@ class TrueLLMAutonomousRouter:
                 "O Modo Offline está ativo (a geração por LLM foi pausada por você). "
                 "Clique no botão '📴 MODO OFFLINE' no topo da tela para voltar ao Modo Online e usar a LLM real."
             )
+        if self.azure_active():                  # v13.0: a implantação da Azure atende todos os níveis de esforço
+            target_provider, target_model = "azure", self.active_model
+            if effective_max_tokens <= 0:
+                effective_max_tokens = 2048
 
         sys_prompt = SYSTEM_PROMPT_V90 + identity_guard() + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
         if self.custom_user_directive:
             sys_prompt += f"\nDIRETRIZ PRIORITÁRIA DO USUÁRIO: {self.custom_user_directive}"
         if extra_directive:
             sys_prompt += f"\nFORMATO DESTA RESPOSTA: {extra_directive}"
+        if grounding_block:                      # v12.6: resultados de busca já feitos pelo orquestrador (busca garantida)
+            sys_prompt += "\n" + grounding_block
         if relevant_memories:
             mem_summary = " | ".join(m["content"] for m in relevant_memories[:4])
             sys_prompt += f"\nMEMÓRIAS RELEVANTES RECUPERADAS: {mem_summary}"
@@ -4113,7 +4223,7 @@ class TrueLLMAutonomousRouter:
             # v10.0 (item 7): destaque no FIM do prompt, onde modelos pequenos prestam mais atenção.
             quoted = " ".join(str(last_proactive_text).split())[:600]
             sys_prompt += (
-                f"\nÚLTIMA INICIATIVA AUTÔNOMA QUE VOCÊ (BYTE) ENVIOU AO USUÁRIO: \"{quoted}\". "
+                f"\nÚLTIMA INICIATIVA AUTÔNOMA QUE VOCÊ ({AGENT_NAME}) ENVIOU AO USUÁRIO: \"{quoted}\". "
                 "A mensagem atual do usuário muito provavelmente é a resposta direta dele a essa fala: continue o diálogo "
                 "com total coerência. Se ele mudar de assunto, acompanhe o novo assunto."
             )
@@ -4150,6 +4260,28 @@ class TrueLLMAutonomousRouter:
                 self.db.record_audit("cloud_error", "generate", "error", {"provider": target_provider, "error": self.last_cloud_error})
             ttft_ms = round((time.perf_counter() - t_c0) * 1000.0, 2)
             provider_used = f"CLOUD {target_provider.upper()} ({target_model})"
+
+        if target_provider == "azure":
+            t_az0 = time.perf_counter()
+            provider_used = f"AZURE ({target_model})"
+            if tools_schema and tool_runner and self.native_tools_enabled:
+                native_msgs: List[Dict[str, Any]] = list(chat_messages)
+                native_msgs[0] = {"role": "system",
+                                  "content": sys_prompt.replace(SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, SYSTEM_PROMPT_TOOLS_NATIVE_BLOCK)}
+                loop = self.run_native_tool_loop(target_model, native_msgs, tools_schema, tool_runner,
+                                                 max_tokens=effective_max_tokens, temp_override=effective_temp)
+                tool_trace, text_out, done_reason, tool_mode = loop["trace"], loop["text"], loop["done_reason"], "native"
+                if not loop["ok"] and not loop["trace"]:
+                    # v13.1: modelos sem ferramentas nativas (alguns de outras empresas): modo texto (<tool_call>)
+                    tool_mode_note = f"'{target_model}' não aceitou ferramentas nativas ({str(loop['done_reason'])[:120]}); usando o modo texto"
+                    text_out, _, done_reason = self._azure_text(chat_messages, effective_max_tokens, effective_temp)
+                    tool_mode = "text"
+            else:
+                text_out, _, done_reason = self._azure_text(chat_messages, effective_max_tokens, effective_temp)
+            ttft_ms = round((time.perf_counter() - t_az0) * 1000.0, 2)
+            if not text_out:
+                raise RuntimeError(f"A Azure OpenAI não respondeu ({done_reason}). Confira AZURE_OPENAI_ENDPOINT, a chave e o "
+                                   "nome da implantação (AZURE_OPENAI_DEPLOYMENT).")
 
         if not text_out:
             if not self._wait_for_ollama_if_provisioning(max_wait_s=25.0):
@@ -4231,6 +4363,11 @@ class TrueLLMAutonomousRouter:
                                   "download": download_info}
 
         if not text_out:
+            if self.cpu_wait_floor_s() and ("timed out" in str(done_reason).lower() or "timeout" in str(done_reason).lower()):
+                raise RuntimeError(
+                    f"O modelo ({provider_used}) não começou a responder a tempo neste processador sem GPU ({done_reason}). "
+                    "Tente um modelo menor (ex.: qwen2.5:1.5b), limpe o contexto, desligue o que não estiver usando "
+                    "(ex.: o Kronus dedicado) ou aumente BYTE_CPU_TIMEOUT_S.")
             raise RuntimeError(f"A LLM ({provider_used}) não retornou tokens ({done_reason}). Verifique a VRAM na aba de Conexão.")
 
         llm_ms = round((time.perf_counter() - t0) * 1000.0, 2)
@@ -5950,6 +6087,7 @@ class ByteEcosystemService:
         # v11.0 — pontos de extensão (usados pelo módulo de trabalho, byte_agent/work.py):
         self.extra_tools: Dict[str, Dict[str, Any]] = {}          # nome -> {auto, description, parameters, handler, intent, mission}
         self.extra_actions: Dict[str, Any] = {}                    # ação do painel/Telegram -> função(payload) -> dict
+        self.pre_turn_hooks: List[Any] = []                        # v12.6: (mensagem, turno) -> bloco extra para o prompt
         self.mission_interceptors: List[Tuple[Any, Any]] = []      # (regex, função(instrução) -> texto): fluxos determinísticos
         self.status_providers: Dict[str, Any] = {}                 # chave no status -> função() -> valor
         self.file_provider: Optional[Any] = None                   # nome de arquivo -> Path servível em /files/<nome>
@@ -6508,6 +6646,20 @@ class ByteEcosystemService:
             self.voice_kit = _voice.VoiceKit.from_env(read_secret=_read_secret)
         return self.voice_kit
 
+    def voice_speak(self, text: str) -> Dict[str, Any]:
+        """v13.8: fala um texto com a voz do SERVIDOR do agente ativo (Azure Speech/Kokoro), para o painel e a /voz
+        soarem igual ao Telegram. Texto limpo e curto (speech_text) para não gastar a cota de caracteres."""
+        from byte_agent import voice as _voice
+        kit = self.get_voice_kit()
+        if not kit.synthesizer.available:
+            return {"error": "Voz do servidor não configurada."}
+        speech = _voice.speech_text(str(text or ""))
+        if not speech:
+            return {"error": "Nada para falar."}
+        policy = _voice.policy_for(ACTIVE_AGENT)
+        data, mime = kit.synthesizer.synthesize(speech, voice=policy.get("voz_servidor") or None, speed=policy.get("velocidade"))
+        return {"audio_b64": base64.b64encode(data).decode("ascii"), "audio_mime": mime, "chars": len(speech)}
+
     def voice_status(self) -> Dict[str, Any]:
         """O que o painel e os clientes precisam saber sobre voz: regras do agente e o que o servidor oferece."""
         try:
@@ -6518,7 +6670,8 @@ class ByteEcosystemService:
             return {"error": f"{type(err).__name__}: {str(err)[:120]}"}
         return {"enabled": policy["ativo"], "wake_words": policy["palavras_chave"], "owner_only": policy["somente_dono"],
                 "reply_with_voice": policy["responder_com_voz"], "live": bool(policy.get("na_live") and callable(self.live_owner_sink)),
-                "kind": policy["tipo"], "stt": kit["stt"], "tts": kit["tts"]}
+                "kind": policy["tipo"], "stt": kit["stt"], "tts": kit["tts"],
+                "pitch": policy.get("tom", 1.0), "rate": policy.get("velocidade", 1.0), "server_voice": policy.get("voz_servidor") or None}
 
     def interact(
         self,
@@ -6576,6 +6729,15 @@ class ByteEcosystemService:
         agent_turn: Dict[str, Any] = {"blocks": [], "executions": [], "wrote": False, "user_msg": clean_msg}
         offered_tools = self.select_tools_for_message(clean_msg)
         agent_turn["allowed"] = {t["function"]["name"] for t in offered_tools}
+        grounding: List[str] = []
+        for hook in list(self.pre_turn_hooks):
+            try:
+                extra_block = hook(clean_msg, agent_turn)
+            except Exception as hook_err:
+                extra_block = None
+                agent_turn.setdefault("hook_errors", []).append(f"{type(hook_err).__name__}: {str(hook_err)[:160]}")
+            if extra_block:
+                grounding.append(str(extra_block))
         gen = self.llm.generate(
             user_msg=clean_msg,
             relevant_memories=relevant_memories,
@@ -6591,6 +6753,7 @@ class ByteEcosystemService:
             reference_anchor=(reference.get("anchor_text") if reference.get("is_reference") and not last_proactive else None),
             tools_schema=offered_tools or None,
             extra_directive=extra_directive,
+            grounding_block="\n".join(grounding) or None,
             tool_runner=lambda tool_name, tool_args: self.run_agent_tool(tool_name, tool_args, agent_turn),
         )
         t_llm_ms = gen["llm_latency_ms"]
@@ -6764,8 +6927,12 @@ class ByteEcosystemService:
                 # v12.3: comando de voz vindo do Telegram ou da API; o canal informa se é o dono
                 from byte_agent import voice as _voice
                 res = _voice.handle_command(self, payload, self.get_voice_kit())
+            elif action == "voice_speak":
+                res = self.voice_speak(payload.get("text", ""))
             elif action == "voice_transcribe":
                 from byte_agent import voice as _voice
+                if "owner" in payload:               # v12.9: o Telegram transcreve antes; as regras do agente valem já aqui
+                    _voice.check_allowed(payload)
                 audio, mime = _voice._decode_audio(payload)
                 res = {"text": self.get_voice_kit().transcriber.transcribe(audio, mime)}
             elif action == "clear_context":
@@ -6806,6 +6973,8 @@ class ByteEcosystemService:
                     pull_model_async=bool(payload.get("pull_model_async", False)),
                     force_oom_override=payload.get("force_oom_override"),
                 )
+                if payload.get("model_name") and not (ACTIVE_AGENT or {}).get("modelo"):
+                    self.llm.base_model_spec = self.llm.current_model_spec()     # v13.3: vale para as próximas trocas
             elif action == "email_config":
                 res = self.email_client.configure_account(
                     provider=payload.get("provider", "gmail"),
@@ -6968,8 +7137,11 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
   .b90-tab-btn.active { background: var(--accent); color: #090d16; border-color: var(--accent); }
   .b90-tab-content { display: none; }
   .b90-tab-content.active { display: block; }
-  .b90-grid { display: grid; grid-template-columns: 1.6fr 1.2fr; gap: 12px; }
-  .b90-grid-equal { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .b90-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr); gap: 12px; }
+  .b90-grid-equal { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  /* v13.6: links longos (fontes da busca) não podem empurrar as colunas para fora do painel */
+  .b90-grid > *, .b90-grid-equal > *, [style*="grid-template-columns"] > * { min-width: 0; }
+  .b90-pre, .b90-msg-b, .b90-msg-proactive, .b90-code-card, .b90-code-card pre { overflow-wrap: anywhere; word-break: break-word; }
   @media (max-width: 820px) { .b90-grid, .b90-grid-equal { grid-template-columns: 1fr; } }
   .b90-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
   .b90-card h3 { margin-top: 0; font-size: 0.93rem; color: var(--accent); }
@@ -7140,7 +7312,7 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.74rem; color:var(--muted); margin-top:6px;">
           <label style="display:flex; align-items:center; gap:4px;" title="Microfone aberto: só reage quando você chama o agente pelo nome"><input type="checkbox" id="b90-voice-hands" onchange="window.b90HandsFree()"> Mãos livres <span id="b90-voice-wake"></span></label>
-          <label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" id="b90-voice-speak" checked> Ler as respostas de voz em voz alta</label>
+          <label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" id="b90-voice-speak" checked> Ler as respostas em voz alta</label>
           <span id="b90-voice-msg"></span>
           <button class="b90-btn-sec" style="white-space:nowrap;" onclick="window.b90ContinueLast()">➕ Continuar</button>
           <button class="b90-btn-purple" style="white-space:nowrap;" onclick="window.b90TriggerProactiveNow()">🤖 Iniciativa LLM</button>
@@ -7929,7 +8101,9 @@ pygame.time.Clock().tick(60)</textarea>
     const driveTag = st.llm.drive_connected ? 'Drive OK' : 'Tmp Local';
     const prov = st.llm.provision_state || {};
     const cpuOnly = (st.llm.loaded_on_cpu_only || []).length > 0;
-    const vramTag = cpuOnly
+    const vramTag = st.llm.active_provider === 'azure'
+      ? `☁️ Azure${(st.llm.azure || {}).last_error ? ' ⚠️ ' + st.llm.azure.last_error : ''}`
+      : cpuOnly
       ? `⚠️ MODELO NA RAM/CPU, GPU OCIOSA (${st.llm.loaded_on_cpu_only[0]})`
       : st.llm.ollama_gpu_warm
       ? `VRAM Quente (${st.llm.ollama_loaded_vram[0] || st.llm.active_model})`
@@ -8097,6 +8271,7 @@ pygame.time.Clock().tick(60)</textarea>
   }
   window.b90HandsFree = function() { if (b90VoiceOn) { b90VoiceStop(); window.b90Mic(); } };
   window.b90Mic = async function() {
+    b90SpeechUnlock();
     if (b90VoiceOn) { b90VoiceStop(); b90VoiceMsg(''); return; }
     const v = b90State.voice || {};
     if (v.enabled === false) { b90VoiceMsg('Comando de voz desligado para este agente.'); return; }
@@ -8130,22 +8305,70 @@ pygame.time.Clock().tick(60)</textarea>
       b90VoiceRecorder.start(); b90VoiceOn = true; btn.innerText = '⏹️ Enviar áudio'; b90VoiceMsg('🎙️ Gravando…');
     } catch (e) { b90VoiceMsg('⚠️ Sem acesso ao microfone: ' + e.message); }
   };
+  // v13.7: fala do navegador mais robusta. O Chrome descarta falas iniciadas logo após cancel(), corta textos longos
+  // (~15 s) e pode bloquear a fala sem um clique antes: limpa o texto, fala em pedaços e "destrava" no clique.
+  let b90SpeechUnlocked = false;
+  function b90SpeechUnlock() {
+    try {
+      if (b90SpeechUnlocked || !('speechSynthesis' in window)) return;
+      const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); b90SpeechUnlocked = true;
+    } catch (e) {}
+  }
+  function b90SpeechClean(t) {
+    return String(t || '').replace(/```[\s\S]*?```/g, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/🛡️[^\n]*/g, ' ')
+      .replace(/[*_`#>|~\[\]{}]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+  }
+  function b90SpeechChunks(t) {
+    const out = []; let cur = '';
+    for (const part of t.split(/(?<=[.!?…;:])\s+/)) {
+      if (cur && (cur + ' ' + part).length > 180) { out.push(cur); cur = part; } else cur = cur ? cur + ' ' + part : part;
+    }
+    if (cur) out.push(cur);
+    return out.flatMap(c => c.length > 220 ? (c.match(/.{1,200}(\s|$)/g) || [c]) : [c]);
+  }
+  function b90BrowserSpeak(text, done) {
+    const clean = b90SpeechClean(text);
+    if (!('speechSynthesis' in window) || !clean) { done(); return; }
+    const vcfg = b90State.voice || {};
+    const voice = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang));
+    const parts = b90SpeechChunks(clean);
+    speechSynthesis.cancel();
+    setTimeout(() => {                                   // depois do cancel(), senão o Chrome descarta a fala
+      try { speechSynthesis.resume(); } catch (e) {}
+      parts.forEach((part, i) => {
+        const u = new SpeechSynthesisUtterance(part); u.lang = 'pt-BR';
+        u.pitch = vcfg.pitch || 1; u.rate = vcfg.rate || 1;                                  // v12.4: voz de cada agente
+        if (voice) u.voice = voice;
+        if (i === parts.length - 1) u.onend = done;
+        u.onerror = (ev) => { if (i === parts.length - 1 || (ev && ev.error !== 'interrupted')) done(); };
+        speechSynthesis.speak(u);
+      });
+    }, 120);
+  }
   function b90VoiceSpeak(res) {
     if (!document.getElementById('b90-voice-speak').checked) return;
-    const done = () => { b90VoiceSpeaking = false; };
+    let finished = false;
+    const done = () => { if (!finished) { finished = true; b90VoiceSpeaking = false; } };
     b90VoiceSpeaking = true;
-    if (res.audio_b64) {
-      const a = new Audio('data:' + (res.audio_mime || 'audio/ogg') + ';base64,' + res.audio_b64);
-      a.onended = a.onerror = done; a.play().catch(done); return;
+    const text = res.speech || res.response;
+    const fallback = () => b90BrowserSpeak(text, done);
+    const play = (b64, mime) => {                       // voz do servidor (Azure Speech/Kokoro); se não tocar, o navegador fala
+      const a = new Audio('data:' + (mime || 'audio/ogg') + ';base64,' + b64);
+      a.onended = done; a.onerror = fallback; a.play().catch(fallback);
+    };
+    if (res.audio_b64) { play(res.audio_b64, res.audio_mime); return; }
+    if ((b90State.voice || {}).tts && b90SpeechClean(text)) {   // v13.8: mesma voz do agente que no Telegram
+      b90Call('voice_speak', { text: b90SpeechClean(text) }, true)
+        .then(r => (r && r.audio_b64) ? play(r.audio_b64, r.audio_mime) : fallback())
+        .catch(fallback);
+      return;
     }
-    if (!('speechSynthesis' in window) || !(res.speech || res.response)) { done(); return; }
-    const u = new SpeechSynthesisUtterance(res.speech || res.response); u.lang = 'pt-BR';
-    const voice = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang)); if (voice) u.voice = voice;
-    u.onend = u.onerror = done; speechSynthesis.cancel(); speechSynthesis.speak(u);
+    b90BrowserSpeak(text, done);
   }
 
   window.b90SendChat = async function(opts) {
     opts = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
+    b90SpeechUnlock();
     const inp = document.getElementById('b90-chat-in');
     const btn = document.getElementById('b90-send-btn');
     const text = inp.value.trim();
@@ -8182,7 +8405,7 @@ pygame.time.Clock().tick(60)</textarea>
       return;
     }
 
-    if (opts.voice) setTimeout(() => { try { b90VoiceSpeak(res); } catch (e) { b90VoiceSpeaking = false; b90VoiceMsg('⚠️ Voz: ' + e.message); } }, 0);
+    setTimeout(() => { try { b90VoiceSpeak(res); } catch (e) { b90VoiceSpeaking = false; b90VoiceMsg('⚠️ Voz: ' + e.message); } }, 0);
     if (res.live) {
       log.innerHTML += `<div class="b90-msg-b"><b>${b90AgentLabel()} [LIVE]:</b> 🎙️ ${b90EscapeHtml(res.response || 'Respondendo na live.')}</div>`;
       log.scrollTop = log.scrollHeight;
@@ -9024,6 +9247,8 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
   const store = { get(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
                   set(k, v) { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch (e) {} } };
   let token = '', wakeWords = [], agent = 'Agente', rec = null, listening = false, awaitingCommand = 0, speaking = false, busy = false;
+  let serverStt = false, useRecorder = false;
+  let voicePitch = 1, voiceRate = 1, serverTts = false;              // v12.4: tom e velocidade do agente na voz do aparelho     // v12.3: sem reconhecimento no aparelho, grava e o servidor transcreve
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   const hash = new URLSearchParams(location.hash.slice(1));
@@ -9059,18 +9284,48 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
     if (!$('speak').checked) return Promise.resolve();
     return new Promise(done => {
       speaking = true; const finish = () => { speaking = false; done(); };
-      if (res.audio_b64) {
-        const a = new Audio('data:' + (res.audio_mime || 'audio/ogg') + ';base64,' + res.audio_b64);
-        a.onended = finish; a.onerror = () => { speaking = false; browserSpeak(res.speech || res.reply, done); }; a.play().catch(a.onerror);
-      } else browserSpeak(res.speech || res.reply, done);
+      const text = res.speech || res.reply;
+      const fallback = () => { speaking = false; browserSpeak(text, done); };
+      const play = (b64, mime) => {
+        const a = new Audio('data:' + (mime || 'audio/ogg') + ';base64,' + b64);
+        a.onended = finish; a.onerror = fallback; a.play().catch(fallback);
+      };
+      if (res.audio_b64) play(res.audio_b64, res.audio_mime);
+      else if (serverTts && text) {              // v13.8: a voz do agente no servidor (a mesma do Telegram)
+        api('/api/v1/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+          .then(r => (r && r.audio_b64) ? play(r.audio_b64, r.audio_mime) : fallback()).catch(fallback);
+      } else browserSpeak(text, done);
     });
   }
+  let unlocked = false;
+  function unlockSpeech() {          // v13.7: o Chrome só deixa falar depois de um toque; destrava no primeiro
+    try { if (!unlocked && 'speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); unlocked = true; } } catch (e) {}
+  }
+  function speechChunks(t) {
+    const out = []; let cur = '';
+    for (const part of t.split(/(?<=[.!?…;:])\s+/)) {
+      if (cur && (cur + ' ' + part).length > 180) { out.push(cur); cur = part; } else cur = cur ? cur + ' ' + part : part;
+    }
+    if (cur) out.push(cur);
+    return out.flatMap(c => c.length > 220 ? (c.match(/.{1,200}(\s|$)/g) || [c]) : [c]);
+  }
   function browserSpeak(text, done) {
-    if (!('speechSynthesis' in window) || !text) { speaking = false; done(); return; }
-    const u = new SpeechSynthesisUtterance(text); u.lang = 'pt-BR';
-    const v = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang)); if (v) u.voice = v;
-    u.onend = u.onerror = () => { speaking = false; done(); };
-    speaking = true; speechSynthesis.cancel(); speechSynthesis.speak(u);
+    const clean = String(text || '').replace(/https?:\/\/\S+/g, ' ').replace(/[*_`#>|~\[\]{}]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+    if (!('speechSynthesis' in window) || !clean) { speaking = false; done(); return; }
+    const v = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang));
+    const parts = speechChunks(clean); let finished = false;
+    const finish = () => { if (!finished) { finished = true; speaking = false; done(); } };
+    speaking = true; speechSynthesis.cancel();
+    setTimeout(() => {               // falar logo depois do cancel() faz o Chrome descartar a fala
+      try { speechSynthesis.resume(); } catch (e) {}
+      parts.forEach((part, i) => {
+        const u = new SpeechSynthesisUtterance(part); u.lang = 'pt-BR'; u.pitch = voicePitch; u.rate = voiceRate;
+        if (v) u.voice = v;
+        if (i === parts.length - 1) u.onend = finish;
+        u.onerror = (ev) => { if (i === parts.length - 1 || (ev && ev.error !== 'interrupted')) finish(); };
+        speechSynthesis.speak(u);
+      });
+    }, 120);
   }
 
   async function send(body, isAudio) {
@@ -9101,10 +9356,20 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
   }
 
   function startRec() {
-    if (!Rec) return startRecorder();
+    if (!Rec || useRecorder) return startRecorder();
     rec = new Rec(); rec.lang = 'pt-BR'; rec.interimResults = false; rec.continuous = $('hands').checked;
     rec.onresult = e => handleHeard(e.results[e.results.length - 1][0].transcript);
-    rec.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') state('⚠️ Microfone: ' + e.error); };
+    rec.onerror = e => {
+      // Celulares sem os serviços de fala do Google (vários Xiaomi/Redmi) falham com "network"/"service-not-allowed":
+      // se o servidor transcreve, passa a gravar o áudio e mandar para ele.
+      if (['network', 'service-not-allowed', 'language-not-supported'].includes(e.error) && serverStt) {
+        useRecorder = true; listening = false; rec.onend = null; stopUi();
+        state('O reconhecimento deste aparelho falhou; usando gravação. Toque de novo para falar.');
+        return;
+      }
+      if (e.error === 'not-allowed') { state('⚠️ Permita o microfone para este site (cadeado na barra de endereço).'); return; }
+      if (e.error !== 'no-speech' && e.error !== 'aborted') state('⚠️ Microfone: ' + e.error);
+    };
     rec.onend = () => { if (listening && $('hands').checked) { try { rec.start(); } catch (e) {} } else stopUi(); };
     try { rec.start(); listening = true; $('mic').classList.add('listening'); state($('hands').checked ? 'Ouvindo… chame pelo nome.' : 'Ouvindo…'); }
     catch (e) { state('⚠️ ' + e.message); }
@@ -9127,7 +9392,7 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
     if (recorder && recorder.state === 'recording') recorder.stop();
     stopUi();
   }
-  $('mic').onclick = () => { if (busy) return; listening ? stop() : startRec(); };
+  $('mic').onclick = () => { unlockSpeech(); if (busy) return; listening ? stop() : startRec(); };
   $('hands').onchange = () => { if (listening) { stop(); startRec(); } };
 
   let notifTimer = null;
@@ -9147,6 +9412,7 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
       agent = st.agent || agent; $('name').textContent = agent; document.title = agent + ' · voz';
       $('dot').classList.toggle('on', !!st.online);
       const v = st.voice || {};
+      serverStt = !!v.stt; serverTts = !!v.tts; voicePitch = v.pitch || 1; voiceRate = v.rate || 1;
       wakeWords = (v.wake_words || [fold(agent)]).map(fold);
       $('wake').textContent = '(“' + agent + ', …”)';
       $('setup').hidden = true; $('mic').hidden = false; $('opts').hidden = false; $('forget').hidden = false;
@@ -9297,8 +9563,22 @@ class ByteOmniServer:
                 if method == "GET" and path == "/api/v1/status":
                     llm = service.llm
                     self._send_json(200, {"agent": AGENT_NAME, "version": BYTE_VERSION, "profile": ACTIVE_PROFILE,
-                                          "online": bool(llm.ollama_online), "model": f"{llm.active_provider}:{llm.active_model}",
+                                          "online": bool(llm.llm_ready()), "model": f"{llm.active_provider}:{llm.active_model}",
                                           "voice": service.voice_status()})
+                    return True
+                if method == "POST" and path == "/api/v1/speak":
+                    # v13.8: a página /voz pede a fala da resposta com a voz do servidor do agente
+                    if not self._rate_ok():
+                        return True
+                    body = self._read_json()
+                    if body is None:
+                        self._send_json(400, {"error": 'Envie JSON {"text": "..."}'})
+                        return True
+                    try:
+                        res = service.voice_speak(str(body.get("text") or "")[:4000])
+                    except Exception as err:
+                        res = {"error": f"{type(err).__name__}: {str(err)[:160]}"}
+                    self._send_json(200 if not res.get("error") else 503, res)
                     return True
                 if method == "POST" and path == "/api/v1/voice":
                     # v12.3: comando de voz. Aceita JSON {"text"} (fala já reconhecida no celular), JSON {"audio_b64", "mime"}
@@ -9384,7 +9664,14 @@ class ByteOmniServer:
                 if self._public(parsed, "GET"):
                     return
                 if not self._host_ok():
-                    self._send_json(403, {"error": "Host não permitido"})
+                    if parsed.path in {"/", "/ui"}:
+                        # v12.3: de fora do PC (Tailscale, celular) o painel não abre; a raiz leva para a página de voz
+                        self.send_response(302)
+                        self.send_header("Location", "/voz")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    self._send_json(403, {"error": "Host não permitido: o painel só abre no próprio PC. No celular, use /voz."})
                     return
                 is_file = parsed.path.startswith("/files/")
                 if parsed.path not in {"/", "/ui"} and not is_file:
@@ -9477,7 +9764,16 @@ byte_service: Optional[ByteEcosystemService] = None
 
 
 LLM_SETTINGS_CARRIED = ("active_provider", "active_model", "last_working_model", "temperature", "num_ctx", "num_predict",
-                        "auto_effort_routing", "native_tools_enabled", "force_oom_override")
+                        "auto_effort_routing", "native_tools_enabled", "force_oom_override", "base_model_spec")
+
+
+def apply_agent_model(service: "ByteEcosystemService", manifest: Optional[Dict[str, Any]]) -> None:
+    """v13.3: depois de uma troca de agente, usa o modelo do manifesto (campo "modelo") ou volta para o modelo base
+    (BYTE_MODEL / o último escolhido no painel), em vez de herdar o modelo do agente anterior."""
+    llm = service.llm
+    spec = (manifest or {}).get("modelo") or getattr(llm, "base_model_spec", "")
+    if spec:
+        llm.apply_model_spec(spec)
 
 
 def transfer_runtime(old_service: "ByteEcosystemService", new_service: "ByteEcosystemService", servers: Any = ()) -> None:
@@ -9797,8 +10093,7 @@ def iniciar_byte(modo_conexao: str = "online", montar_drive_automatico: bool = T
             transfer_runtime(current, new_service, servers=[server])
             new_service.profile_switcher = _switch_profile
             new_service.agent_switcher = _switch_agent
-            if new_manifest is not None and new_manifest["modelo"]:
-                new_service.llm.active_model = new_service.llm._require_valid_tag(new_manifest["modelo"])[0]
+            apply_agent_model(new_service, new_manifest)
             byte_service = new_service
             start_llm_like(current, new_service)
             print(f"[BYTE] Agente ativo: {AGENT_NAME}.", flush=True)

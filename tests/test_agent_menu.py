@@ -144,3 +144,33 @@ def test_starting_from_an_agent_by_id(tmp_path, fake, monkeypatch):
         assert st["agent"]["tipo"] == "vtuber" and rt.data_dir == tmp_path / "byte" and rt.director is None   # sem token: sem live
     finally:
         rt.stop()
+
+
+def test_dedicated_kronus_and_main_instance_in_parallel(tmp_path, fake, monkeypatch):
+    """v12.5: o Kronus dedicado (porta própria) e a instância principal rodam juntos; a principal não abre o mesmo banco."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("KRONUS_API_TOKEN", KRONUS_TOKEN)
+    monkeypatch.setenv("BYTE_WEB", "0")
+    base = dict(ollama_url=fake.url, model=TOOL_MODEL, host="127.0.0.1", port=0, ui_token="", telegram_token="",
+                telegram_chat_ids="", no_autonomy=True, profile="pessoal")
+    kronus = headless.Runtime(argparse.Namespace(agent="kronus", agent_menu=False, data_dir=None, **base),
+                              env={"KRONUS_API_TOKEN": KRONUS_TOKEN}).start()
+    try:
+        assert kronus.data_dir == tmp_path / ".byte-agents" / "kronus" and api_status(kronus, KRONUS_TOKEN)[0] == 200
+        main = headless.Runtime(argparse.Namespace(agent="", agent_menu=False, data_dir=str(tmp_path / ".byte-agent"), **base),
+                                env={}).start()
+        try:
+            res = main.service.dispatch_request("switch_agent", {"agent": "kronus"})
+            assert "já estão em uso" in res["error"] and main.manifest is None            # a principal continua na Matrix
+            assert main.service.dispatch_request("switch_agent", {"agent": "bit"})["agent"]["id"] == "bit"
+            assert main.service.dispatch_request("switch_agent", {"agent": ""})["agent"] is None
+            headless.DataDirLock(tmp_path / ".byte-agents" / "bit").acquire()               # saiu do Bit: trava solta
+        finally:
+            main.stop()
+        with pytest.raises(RuntimeError, match="já estão em uso"):
+            headless.DataDirLock(tmp_path / ".byte-agents" / "kronus").acquire()          # o Kronus segue com a trava
+    finally:
+        kronus.stop()
+    lock = headless.DataDirLock(tmp_path / ".byte-agents" / "kronus")
+    lock.acquire()                                                                         # desligado: a trava foi solta
+    lock.release()

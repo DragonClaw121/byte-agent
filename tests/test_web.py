@@ -306,3 +306,40 @@ def test_web_can_be_disabled(tmp_path, monkeypatch):
         service.shutdown()
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_guaranteed_search_when_the_model_does_not_use_the_tool(env):
+    """v12.6: o caso real da Matrix com qwen3.5:0.8b: o modelo respondeu sem buscar e inventou a empresa."""
+    fake, service, access, site = env
+    assert web.search_query_from("Consegue fazer uma pesquisa sobre a empresa: ENGINEERING DO BRASIL S/A?") == \
+        "empresa: ENGINEERING DO BRASIL S/A"
+    fake.script = [{"content": "A empresa atua com energia solar [1]."}]          # o modelo nem chama web_search
+    res = service.interact("Consegue fazer uma pesquisa sobre a empresa: ENGINEERING DO BRASIL S/A?")
+    searches = [r for r in site.requests if r[1].startswith("/search")]
+    assert searches and "ENGINEERING" in urllib.parse.unquote_plus(searches[-1][1])
+    system = next(m["content"] for m in fake.requests[-1]["messages"] if m["role"] == "system")
+    assert "BUSCA NA INTERNET JÁ FEITA" in system and "[1] Energia solar no Brasil" in system and "NÃO invente" in system
+    assert "🔎 Fontes (SearXNG" in res["response"] and "/pagina-a" in res["response"]
+    before = len(searches)
+
+    fake.script = [{"content": "Mais detalhes [2]."}]
+    service.interact("Quero uma pesquisa um pouco mais detalhada do que isso")       # sem tema: repete a última busca
+    searches = [r for r in site.requests if r[1].startswith("/search")]
+    assert len(searches) == before + 1 and "ENGINEERING" in urllib.parse.unquote_plus(searches[-1][1])
+
+    fake.script = [call("add_memory", content="anotar algo"), {"content": "ok"}]
+    service.interact("pesquise o mercado de energia e anote na memória")             # conteúdo da web: não grava sozinho
+    assert not any("anotar algo" in m["content"] for m in service.db.list_memories())
+
+    n = len([r for r in site.requests if r[1].startswith("/search")])
+    fake.script = [{"content": "A fotossíntese..."}]
+    service.interact("me explique a fotossíntese")
+    assert len([r for r in site.requests if r[1].startswith("/search")]) == n       # pergunta comum: nenhuma busca
+
+
+def test_guaranteed_search_respects_agents_without_web(env):
+    fake, service, access, site = env
+    service.disabled_tools = {"web_search", "fetch_url", "deep_research"}
+    fake.script = [{"content": "Não tenho acesso à internet."}]
+    service.interact("pesquise o mercado de energia")
+    assert not [r for r in site.requests if r[1].startswith("/search")]

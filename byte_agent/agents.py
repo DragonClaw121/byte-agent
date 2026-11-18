@@ -328,8 +328,7 @@ def apply_to_service(service: Any, manifest: Dict[str, Any]) -> Any:
     engine_initiatives.idle_threshold_sec = manifest["iniciativas"]["ociosidade_min"] * 60.0
     engine_initiatives.min_interval_sec = manifest["iniciativas"]["intervalo_min"] * 60.0
     if manifest["modelo"]:
-        service.llm.active_provider = "ollama"
-        service.llm.active_model = service.llm._require_valid_tag(manifest["modelo"])[0]
+        service.llm.apply_model_spec(manifest["modelo"])         # v13.3: aceita "azure:IMPLANTACAO" ou tag do Ollama
     service.agent_manifest = manifest
     service.profile_switcher = None                 # um agente definido por manifesto não troca de perfil
     return service

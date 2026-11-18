@@ -73,7 +73,8 @@ def _build(ollama_url: Optional[str], model: str, manifest: Optional[Dict[str, A
     if manifest:
         agents.apply_identity(manifest)
         agents.apply_to_service(service, manifest)
-        service.llm.active_model = model
+        if not str(model).lower().startswith("azure:"):
+            service.llm.active_model = model
     service.proactive_engine.stop()
     service.llm.auto_effort_routing = False
     service.db.add_task(SEEDED_TASK, priority=5, scheduled_slot="sexta-feira")
@@ -92,7 +93,7 @@ def evaluate_models(models: List[str], ollama_url: Optional[str] = None, agent: 
             if not service.llm._find_installed_match(model):
                 echo(f"[{model}] não está instalado no Ollama: pulando (instale pelo painel ou com 'ollama pull {model}').")
                 continue
-            native = bool(service.llm._model_supports_tools(model))
+            native = True if service.llm.azure_active() else bool(service.llm._model_supports_tools(model))
             result = ModelResult(model, native)
             echo(f"[{model}] ferramentas nativas: {'sim' if native else 'não'}")
             for case in cases:

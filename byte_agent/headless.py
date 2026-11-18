@@ -55,7 +55,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
     llm = engine.TrueLLMAutonomousRouter(db=db, ollama_url=ollama_url or None)
     llm.mydrive_path = data_dir / "_sem_google_drive"        # fora do Colab não existe /content/drive
     if model:
-        llm.active_model = llm._require_valid_tag(model)[0]
+        llm.apply_model_spec(str(model))                    # v13.0: "azure:IMPLANTACAO" (sem Ollama) ou tag do Ollama
+        llm.base_model_spec = llm.current_model_spec()
     service = engine.ByteEcosystemService(db, llm, engine.RealEmailConnector(db),
                                           engine.MultiFrameGameTerminal(db, data_dir / "workspace"))
     if profile and engine.ACTIVE_PROFILE == "trabalho":
@@ -149,6 +150,45 @@ def profile_data_dirs(data_dir: Path, profile: str, env: Any) -> Dict[str, Path]
     return {current: base, other: other_dir}
 
 
+class DataDirLock:
+    """v12.5: impede dois processos de usarem a mesma pasta de dados (o mesmo banco SQLite). Ex.: o Kronus dedicado
+    (`--agent kronus`) ligado e, ao mesmo tempo, a troca para o Kronus no painel principal."""
+
+    def __init__(self, folder: Path):
+        self.folder = Path(folder)
+        self.path = self.folder / ".em-uso.lock"
+        self._fh: Any = None
+
+    def acquire(self) -> None:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        fh = open(self.path, "a+", encoding="utf-8")
+        try:
+            import fcntl
+        except ImportError:                  # Windows sem WSL: sem trava (rode um agente por pasta)
+            self._fh = fh
+            return
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.seek(0)
+            owner = fh.read().strip() or "outro processo"
+            fh.close()
+            raise RuntimeError(f"Os dados em {self.folder} já estão em uso ({owner}). "
+                               "Esse agente já está ligado em outro processo: use o painel/página dele, ou desligue-o antes.") from None
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"PID {os.getpid()}")
+        fh.flush()
+        self._fh = fh
+
+    def release(self) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.close()                 # fechar o arquivo solta a trava
+            finally:
+                self._fh = None
+
+
 class Runtime:
     """Serviço ativo + servidor + Telegram + live, com troca de perfil sem reiniciar o processo."""
 
@@ -188,20 +228,44 @@ class Runtime:
         self.bridge: Optional[TelegramBridge] = None
         self.director: Optional[StreamDirector] = None
         self._lock = threading.Lock()
+        self._dir_locks: Dict[Path, DataDirLock] = {}
         self.port = 0
 
     @property
     def data_dir(self) -> Path:
         return self.dirs[engine.ACTIVE_PROFILE]
 
+    def _lock_dir(self, folder: Path) -> bool:
+        """Trava a pasta de dados para este processo. Devolve True se a trava é nova (para soltar se o build falhar)."""
+        key = Path(folder).expanduser().resolve()
+        if key in self._dir_locks:
+            return False
+        lock = DataDirLock(key)
+        lock.acquire()
+        self._dir_locks[key] = lock
+        return True
+
+    def _unlock_dirs(self, keep: Optional[Path] = None) -> None:
+        keep_key = Path(keep).expanduser().resolve() if keep is not None else None
+        for key in list(self._dir_locks):
+            if key != keep_key:
+                self._dir_locks.pop(key).release()
+
     def _build(self, profile: str, model: Optional[str]) -> Any:
+        fresh = self._lock_dir(self.dirs[profile])
+        try:
+            return self._build_unlocked(profile, model)
+        except Exception:
+            if fresh:
+                self._dir_locks.pop(Path(self.dirs[profile]).expanduser().resolve()).release()
+            raise
+
+    def _build_unlocked(self, profile: str, model: Optional[str]) -> Any:
         if self.manifest is not None:
             service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile,
                                     web="web" in self.manifest["habilidades"], profile_data=self.manifest["dono"])
             agents.apply_identity(self.manifest)
-            agents.apply_to_service(service, self.manifest)
-            if model:
-                service.llm.active_model = model
+            agents.apply_to_service(service, self.manifest)     # o "modelo" do manifesto, se houver, vence o --model
         else:
             service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
         if self.manifest is None or self.agent_menu:
@@ -256,7 +320,7 @@ class Runtime:
             if director.vts is not None:
                 director.vts.close()
 
-    def _channel_settings(self) -> Dict[str, Any]:
+    def _channel_settings(self, warn_telegram: bool = True) -> Dict[str, Any]:
         """Tokens e opções de canal: do manifesto (pelos NOMES dos segredos) ou dos argumentos de linha de comando."""
         out: Dict[str, Any] = {"telegram_token": self.args.telegram_token, "telegram_chat_ids": self.args.telegram_chat_ids,
                                "api_token": "", "api_rpm": 20, "overlay_token": ""}
@@ -266,7 +330,7 @@ class Runtime:
         if "telegram" in channels:
             out["telegram_token"] = agents.read_named_secret(channels["telegram"]["token_segredo"])
             out["telegram_chat_ids"] = agents.read_named_secret(channels["telegram"]["chat_ids_segredo"])
-            if not out["telegram_token"]:
+            if not out["telegram_token"] and warn_telegram:   # na troca de agente o bot já ligado continua; não é erro
                 print(f"[AVISO] Telegram configurado, mas o segredo {channels['telegram']['token_segredo']} está vazio.", flush=True)
         if "api" in channels:
             out["api_token"] = agents.read_named_secret(channels["api"]["token_segredo"])
@@ -330,6 +394,7 @@ class Runtime:
                 self._stop_live()
                 engine.transfer_runtime(old, new, servers=[self.server])
                 self.service = new
+                self._unlock_dirs(keep=self.dirs[target])
                 if self.bridge is not None:
                     self.bridge.service = new
                 engine.start_llm_like(old, new)
@@ -373,12 +438,12 @@ class Runtime:
                 engine.transfer_runtime(old, new, servers=[self.server])
                 new.profile_switcher = self.switch
                 new.agent_switcher = self.switch_agent
-                if new_manifest is not None and new_manifest["modelo"]:
-                    new.llm.active_model = new.llm._require_valid_tag(new_manifest["modelo"])[0]
+                engine.apply_agent_model(new, new_manifest)
                 self.service = new
+                self._unlock_dirs(keep=self.dirs[profile])
                 if self.bridge is not None:
                     self.bridge.service = new
-                channels = self._channel_settings()
+                channels = self._channel_settings(warn_telegram=False)
                 self.server.api_token = channels["api_token"] or None
                 self.server.api_requests_per_minute = channels["api_rpm"]
                 self.server.overlay_token = channels["overlay_token"] or None
@@ -398,6 +463,7 @@ class Runtime:
             self.server.stop()
         if self.service is not None:
             self.service.shutdown()
+        self._unlock_dirs()
 
 
 def start_all(args: argparse.Namespace) -> Tuple[Any, Any, Optional[TelegramBridge], Optional[StreamDirector]]:

@@ -42,6 +42,9 @@
       "cronos",
       "kronos",
       "crono"
-    ]
+    ],
+    "voz_servidor": "pm_santa",
+    "tom": 1.0,
+    "velocidade": 1.1
   }
 }

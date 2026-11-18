@@ -335,7 +335,19 @@ r = llm.repair_gpu_async(); wait_idle()
 check(repairs == [True] and "ollama_version" in r["diagnostics_before"] and llm.get_status()["loaded_on_cpu_only"] == [], "botão Reparar GPU força reinstalação e reaquece")
 STATE["cpu_only"] = False
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"; check("CUDA_VISIBLE_DEVICES" not in llm._ollama_gpu_env(), "CUDA_VISIBLE_DEVICES=-1 removido"); del os.environ["CUDA_VISIBLE_DEVICES"]
-check(R._ollama_cuda_libs_present(None) is False, "runtime CUDA ausente detectado")
+# pastas temporárias no lugar de /usr/local/lib/ollama: o resultado não depende do Ollama instalado na máquina do teste
+import tempfile as _tf
+from pathlib import Path as _P
+_real_roots = R.__dict__["_ollama_lib_roots"]
+with _tf.TemporaryDirectory() as _lib:
+    R._ollama_lib_roots = staticmethod(lambda _bin: [_P(_lib)])
+    try:
+        (_P(_lib) / "cuda_v12").mkdir()
+        check(R._ollama_cuda_libs_present(None) is False, "runtime CUDA ausente detectado (pasta vazia)")
+        (_P(_lib) / "cuda_v12" / "libggml-cuda.so").write_bytes(b"")
+        check(R._ollama_cuda_libs_present(None) is True, "runtime CUDA presente detectado")
+    finally:
+        R._ollama_lib_roots = _real_roots
 d = llm.ollama_gpu_diagnostics(); check(isinstance(d["log_gpu_lines"], list) and "server_processes" in d, "diagnóstico de GPU disponível")
 
 # v10.1.3: arena com troca de modelo

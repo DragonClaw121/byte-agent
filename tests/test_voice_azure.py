@@ -1,0 +1,122 @@
+"""v13.7: fala das respostas pelo Azure AI Speech (plano gratuito, vozes pt-BR)."""
+import http.server
+import threading
+
+import pytest
+
+from byte_agent import voice
+
+
+class FakeSpeech(http.server.BaseHTTPRequestHandler):
+    calls = []
+    known = {"pt-BR-FranciscaNeural", "pt-BR-ThalitaNeural", "pt-BR-AntonioNeural", "pt-BR-ValerioNeural"}
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        FakeSpeech.calls.append({"key": self.headers.get("Ocp-Apim-Subscription-Key"), "fmt": self.headers.get("X-Microsoft-OutputFormat"),
+                                 "ctype": self.headers.get("Content-Type"), "ssml": body})
+        if self.headers.get("Ocp-Apim-Subscription-Key") != "chave-certa":
+            self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if not any(f'name="{v}"' in body for v in self.known):
+            self.send_response(400); self.send_header("Content-Length", "0"); self.end_headers(); return
+        data = b"OggS-audio"
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/ogg")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+@pytest.fixture()
+def speech_url():
+    FakeSpeech.calls = []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeSpeech)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_port}/cognitiveservices/v1"
+    srv.shutdown()
+
+
+def test_azure_speech_is_picked_from_env_and_builds_the_regional_endpoint():
+    s = voice.Synthesizer.from_env({"AZURE_SPEECH_KEY": "k", "AZURE_SPEECH_REGION": "Brazil South"})
+    assert s.available and s.backend == "azure" and s.describe() == "Azure AI Speech"
+    assert s.azure_endpoint == "https://brazilsouth.tts.speech.microsoft.com/cognitiveservices/v1"
+    assert voice.Synthesizer.from_env({"AZURE_SPEECH_KEY": "k"}).available is False        # sem região, nada
+    assert voice.Synthesizer.from_env({"AZURE_SPEECH_KEY": "k", "AZURE_SPEECH_REGION": "x",
+                                       "BYTE_VOICE_TTS_URL": "http://127.0.0.1:8880/v1"}).backend == "http"
+
+
+def test_each_agent_gets_its_own_portuguese_voice_with_speed_and_escaped_text(speech_url):
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    data, mime = s.synthesize("Oi <Gabriel> & cia", voice="pm_santa", speed=1.1)    # voz do Kronus (Kokoro)
+    assert data == b"OggS-audio" and mime == "audio/ogg"
+    call = FakeSpeech.calls[-1]
+    assert call["fmt"] == "ogg-24khz-16bit-mono-opus" and call["ctype"] == "application/ssml+xml"
+    assert 'name="pt-BR-ValerioNeural"' in call["ssml"] and 'xml:lang="pt-BR"' in call["ssml"]
+    assert 'rate="+10%"' in call["ssml"] and "Gabriel &amp; cia" in call["ssml"] and "<Gabriel" not in call["ssml"]
+    s.synthesize("oi", voice="pt-BR-AntonioNeural")                                  # nome do Azure direto
+    assert 'name="pt-BR-AntonioNeural"' in FakeSpeech.calls[-1]["ssml"] and "prosody" not in FakeSpeech.calls[-1]["ssml"]
+    s.synthesize("oi")                                                                  # Matrix: voz padrão
+    assert 'name="pt-BR-FranciscaNeural"' in FakeSpeech.calls[-1]["ssml"]
+
+
+def test_unknown_voice_falls_back_to_the_default_but_a_bad_key_is_reported(speech_url):
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url, voice="pt-BR-FranciscaNeural")
+    data, _ = s.synthesize("oi", voice="pt-BR-NaoExisteNeural")
+    assert data and "recusada" in (s.last_voice_error or "")
+    assert 'name="pt-BR-FranciscaNeural"' in FakeSpeech.calls[-1]["ssml"]
+    bad = voice.Synthesizer(azure_key="errada", azure_endpoint=speech_url)
+    with pytest.raises(voice.VoiceError, match="HTTP 401"):
+        bad.synthesize("oi", voice="pf_dora")
+
+
+def test_voice_can_be_changed_per_agent_by_environment(monkeypatch):
+    monkeypatch.setenv("BYTE_VOZ_KRONUS", "pt-BR-DonatoNeural")
+    monkeypatch.setenv("BYTE_VOZ_MATRIX", "pt-BR-LeilaNeural")
+    monkeypatch.setenv("BYTE_VOZ_BIT", "voz com espaço;rm")                       # valor estranho é ignorado
+    kronus = {"tipo": "assistente", "nome": "Kronus", "voz": dict(voice.VOICE_DEFAULTS["assistente"], voz_servidor="pm_santa")}
+    assert voice.policy_for(kronus)["voz_servidor"] == "pt-BR-DonatoNeural"
+    assert voice.policy_for(None)["voz_servidor"] == "pt-BR-LeilaNeural"
+    bit = {"tipo": "trabalho", "nome": "Bit", "voz": dict(voice.VOICE_DEFAULTS["trabalho"], voz_servidor="pm_alex")}
+    assert voice.policy_for(bit)["voz_servidor"] == "pm_alex"
+
+
+def test_panel_and_voice_page_can_ask_for_the_agents_server_voice(tmp_path, monkeypatch):
+    """v13.8: painel e /voz falam com a mesma voz do servidor (Azure) que o Telegram, na voz do agente ativo."""
+    import json
+    import urllib.error
+    import urllib.request
+    import test_voice as tv
+    fake = tv.FakeOllama()
+    monkeypatch.setenv("BYTE_VOZ_KRONUS", "pt-BR-DonatoNeural")
+    rt = tv.runtime(tmp_path, fake, monkeypatch)
+    base = f"http://127.0.0.1:{rt.port}"
+    try:
+        synth = rt.service.voice_kit.synthesizer
+        res = rt.service.dispatch_request("voice_speak", {"text": "**Oi!** Veja https://exemplo.com agora."})
+        assert res["audio_b64"] and res["audio_mime"] == "audio/ogg"
+        text, used_voice, speed = synth.calls[-1]
+        assert used_voice == "pt-BR-DonatoNeural" and "https" not in text and "*" not in text and speed == 1.1
+
+        def post(body, token=tv.API_TOKEN):
+            req = urllib.request.Request(base + "/api/v1/speak", data=body, method="POST",
+                                         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return resp.status, json.loads(resp.read())
+            except urllib.error.HTTPError as err:
+                return err.code, json.loads(err.read() or b"{}")
+
+        assert post(b'{"text": "oi"}', token="errado")[0] == 401
+        code, out = post(json.dumps({"text": "Bom dia, Gabriel."}).encode())
+        assert code == 200 and out["audio_b64"]
+        assert post(b"nao-e-json")[0] == 400
+        assert post(b'{"text": "   "}')[0] == 503                       # nada para falar
+        rt.service.voice_kit.synthesizer = voice.Synthesizer()               # sem voz do servidor
+        code, out = post(b'{"text": "oi"}')
+        assert code == 503 and "não configurada" in out["error"]
+    finally:
+        rt.stop()
+        fake.httpd.shutdown()

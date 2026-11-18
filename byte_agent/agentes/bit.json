@@ -41,6 +41,9 @@
     "palavras_chave": [
       "bit",
       "biti"
-    ]
+    ],
+    "voz_servidor": "pm_alex",
+    "tom": 0.85,
+    "velocidade": 0.95
   }
 }

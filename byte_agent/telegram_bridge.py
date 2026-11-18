@@ -26,7 +26,7 @@ MAX_MSG = 3900          # o limite do Telegram é 4096 caracteres por mensagem
 HELP_TEXT = (
     "Comandos do Telegram:\n"
     "/status — modelo ativo, GPU e servidor\n"
-    "/modelo <tag> — troca o modelo (baixa se preciso), ex.: /modelo qwen2.5:7b\n"
+    "/modelo — mostra o modelo | /modelo azure:nemotron (Azure) ou /modelo qwen2.5:7b (local) — troca\n"
     "/agenda — tarefas pendentes\n"
     "/tarefa <texto> — adiciona uma tarefa\n"
     "/memorias — lista as memórias\n"
@@ -88,7 +88,7 @@ class TelegramBridge:
         req = urllib.request.Request(
             f"{self.api_base}/bot{self._token}/{method}",
             data=json.dumps(payload or {}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": "byte-agent/telegram"},
         )
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -119,7 +119,7 @@ class TelegramBridge:
                      f'Content-Type: {mime}\r\n\r\n'.encode("utf-8") + data + b"\r\n")
         parts.append(f"--{boundary}--\r\n".encode("utf-8"))
         req = urllib.request.Request(f"{self.api_base}/bot{self._token}/{method}", data=b"".join(parts),
-                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "byte-agent/telegram"})
         with urllib.request.urlopen(req, timeout=120.0) as resp:
             if not json.loads(resp.read().decode("utf-8")).get("ok"):
                 raise RuntimeError("Telegram recusou o envio do arquivo.")
@@ -307,6 +307,30 @@ class TelegramBridge:
         if generated:
             self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
 
+    def _typing(self, chat_id: int) -> Any:
+        """Mantém o "digitando..." visível (o Telegram apaga o aviso depois de ~5 s) enquanto o bloco roda."""
+        import contextlib
+
+        @contextlib.contextmanager
+        def keep() -> Any:
+            stop = threading.Event()
+
+            def loop() -> None:
+                while not stop.is_set():
+                    try:
+                        self._api("sendChatAction", {"chat_id": chat_id, "action": "typing"}, timeout_s=10.0)
+                    except Exception:
+                        pass
+                    stop.wait(4.5)
+
+            worker = threading.Thread(target=loop, daemon=True, name="ByteTelegramTyping")
+            worker.start()
+            try:
+                yield
+            finally:
+                stop.set()
+        return keep()
+
     def _download(self, file_id: Any, limit: int) -> bytes:
         info = self._api("getFile", {"file_id": file_id}).get("result") or {}
         file_path = str(info.get("file_path") or "")
@@ -324,22 +348,27 @@ class TelegramBridge:
         if int(media.get("file_size") or 0) > 15 * 1024 * 1024:
             self.send(chat_id, "Áudio acima de 15 MB.")
             return
-        try:
-            self._api("sendChatAction", {"chat_id": chat_id, "action": "typing"})
-        except Exception:
-            pass
-        audio = self._download(media.get("file_id"), 15 * 1024 * 1024)
-        res = self.service.dispatch_request("voice_command", {
-            "audio_b64": base64.b64encode(audio).decode("ascii"), "mime": str(media.get("mime_type") or "audio/ogg"),
-            "source": "telegram", "owner": bool(private)})
-        if res.get("error"):
-            self.send(chat_id, f"⚠️ {res['error']}")
+        # v12.9: duas etapas. A transcrição (segundos) responde logo com "Ouvi"; a resposta do agente vem depois, com o
+        # "digitando..." mantido no Telegram. Antes, no notebook sem GPU, a demora do modelo parecia falha da transcrição.
+        with self._typing(chat_id):
+            audio = self._download(media.get("file_id"), 15 * 1024 * 1024)
+            heard_res = self.service.dispatch_request("voice_transcribe", {
+                "audio_b64": base64.b64encode(audio).decode("ascii"), "mime": str(media.get("mime_type") or "audio/ogg"),
+                "owner": bool(private)})
+        if heard_res.get("error"):
+            self.send(chat_id, f"⚠️ Transcrição: {heard_res['error']}")
             return
-        heard = str(res.get("heard") or "")
-        if res.get("ignored") or not heard:
+        heard = " ".join(str(heard_res.get("text") or "").split())
+        if not heard:
             self.send(chat_id, "🎙️ Não consegui entender o áudio.")
             return
         self.send(chat_id, f"🎙️ Ouvi: “{heard}”")
+        with self._typing(chat_id):
+            res = self.service.dispatch_request("voice_command", {"text": heard, "from_audio": True, "source": "telegram",
+                                                                  "owner": bool(private)})
+        if res.get("error"):
+            self.send(chat_id, f"⚠️ Resposta: {res['error']}")
+            return
         if res.get("live"):
             self.send(chat_id, f"🔴 {res.get('response') or 'Respondendo na live.'}")
             return
@@ -431,7 +460,10 @@ class TelegramBridge:
             ]))
         elif cmd == "/modelo":
             if not arg:
-                self.send(chat_id, "Use: /modelo <tag>, por exemplo /modelo qwen2.5:7b")
+                llm = self._dispatch("status").get("llm") or {}
+                current = f"azure:{llm.get('active_model')}" if llm.get("active_provider") == "azure" else llm.get("active_model")
+                self.send(chat_id, f"Modelo atual: {current}\nPara trocar: /modelo azure:NOME-DA-IMPLANTACAO (Azure) "
+                                   "ou /modelo qwen2.5:3b (local)")
                 return
             res = self._dispatch("configure_llm", {"provider": "ollama", "model_name": arg, "pull_model_async": True})
             self.send(chat_id, res.get("activation_note") or f"Modelo selecionado: {res.get('active_model')}")

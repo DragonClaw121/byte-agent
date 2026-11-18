@@ -117,7 +117,7 @@ class TwitchAuth:
         body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": self.refresh_token,
                                        "client_id": self.client_id, "client_secret": self.client_secret}).encode("ascii")
         try:
-            req = urllib.request.Request(self.token_url, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            req = urllib.request.Request(self.token_url, data=body, headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "byte-agent/twitch"})
             with urllib.request.urlopen(req, timeout=15.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             self.access_token = self._strip(data["access_token"])

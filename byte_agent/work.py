@@ -149,7 +149,7 @@ class WorkAssistant:
     # ------------------------------------------------------------------ LLM (sem ferramentas)
     def _llm(self, messages: List[Dict[str, str]], max_tokens: int, json_format: bool = False, temperature: float = 0.3) -> str:
         llm = self.service.llm
-        if llm.connection_mode == "offline" or not llm.ollama_online:
+        if llm.connection_mode == "offline" or not (llm.llm_ready() if hasattr(llm, "llm_ready") else llm.ollama_online):
             return ""
         model = llm._resolve_valid_ollama_model()
         if not llm._find_installed_match(model):

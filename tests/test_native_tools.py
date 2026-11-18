@@ -3,6 +3,7 @@ import http.server
 import json
 import socketserver
 import threading
+import time
 
 import pytest
 
@@ -18,6 +19,7 @@ class FakeOllama:
         self.stream_reply = "Resposta em modo texto, tudo certo por aqui."
         self.stream_queue = []     # respostas de stream em ordem; vazia = stream_reply
         self.json_replies = []     # respostas para chamadas com format=json (triagem, roteiros)
+        self.stream_delay = 0.0    # segundos até o 1º token no stream (simula processador lento)
         self.requests = []
         self.loaded = {}
         outer = self
@@ -58,6 +60,8 @@ class FakeOllama:
                         content = outer.json_replies.pop(0) if outer.json_replies else '{"tasks": [], "memories": []}'
                         self._json({"message": {"content": content}})
                     else:
+                        if outer.stream_delay:
+                            time.sleep(outer.stream_delay)
                         self.send_response(200)
                         self.end_headers()
                         content = outer.stream_queue.pop(0) if outer.stream_queue else outer.stream_reply
@@ -254,3 +258,28 @@ def test_failed_model_switch_is_announced_outside_the_panel(env):
     service.llm._rollback_to_working_model("pull model manifest: file does not exist", 0.0, requested="mimo2.6:9b-q4_k_m")
     messages = [m["message"] for m in service.db.pop_undelivered_proactive_messages()]
     assert len(messages) == 1 and "mimo2.6:9b-q4_k_m" in messages[0] and "file does not exist" in messages[0] and TOOL_MODEL in messages[0]
+
+
+def test_cpu_only_machines_wait_longer_for_the_first_token(tmp_path, monkeypatch):
+    """v12.8: no notebook sem GPU, o 1º token demorava mais que os 12 s pensados para GPU e dava "timed out"."""
+    from byte_agent import headless
+    fake = FakeOllama()
+    service = headless.build_service(tmp_path, ollama_url=fake.url, model=TOOL_MODEL, web=False)
+    try:
+        llm = service.llm
+        llm._hw_cache = (time.monotonic() + 3600, {"gpu_detected": False})        # máquina sem GPU NVIDIA
+        llm.ollama_loaded_vram = [TOOL_MODEL]                                      # modelo já carregado (limite curto)
+        fake.stream_delay = 2.0
+        msgs = [{"role": "user", "content": "oi"}]
+        monkeypatch.setenv("BYTE_CPU_TIMEOUT_S", "0")
+        text, _, reason = llm._call_ollama_chat_stream(TOOL_MODEL, msgs, ttft_timeout_s=1.0)
+        assert text == "" and "timed out" in reason.lower()
+        monkeypatch.setenv("BYTE_CPU_TIMEOUT_S", "6")
+        assert llm.cpu_wait_floor_s() == 6.0
+        text, _, reason = llm._call_ollama_chat_stream(TOOL_MODEL, msgs, ttft_timeout_s=1.0)
+        assert text == fake.stream_reply and reason == "stop"
+        llm._hw_cache = (time.monotonic() + 3600, {"gpu_detected": True})         # com GPU, nada muda
+        assert llm.cpu_wait_floor_s() == 0.0
+    finally:
+        service.shutdown()
+        fake.httpd.shutdown()

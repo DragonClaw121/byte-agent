@@ -29,6 +29,10 @@ deploy/                Dockerfile, docker-compose.yml e unidade systemd
 
 ## 1. Rodar no seu computador
 
+**Windows + WSL, do zero (instalação, Tailscale, agentes e atualizações):** [docs/guia-completo.md](docs/guia-completo.md).
+**Online 24/7 na Azure (servidor pequeno + Azure OpenAI):** [docs/azure.md](docs/azure.md).
+**Online 24/7 na Azure sem VM (Container Apps):** [docs/azure-conteiner.md](docs/azure-conteiner.md).
+
 Pré-requisito: [Ollama](https://ollama.com/download) instalado (no Linux a Byte instala sozinha se faltar).
 
 ```bash
@@ -38,6 +42,9 @@ python -m byte_agent
 ```
 
 O terminal mostra o endereço do painel (`http://127.0.0.1:8765/ui?token=...`). Os dados ficam em `~/.byte-agent`.
+
+No Linux/WSL, `scripts/byte.sh` resume a rotina: `bash scripts/byte.sh iniciar | parar | atualizar | backup | status`
+(segredos em `~/.byte-env`, fora do repositório).
 
 ## 2. Falar com a Byte pelo Telegram
 
