@@ -176,3 +176,13 @@ aparelho não tocar o áudio, usam a voz do navegador/celular com o tom e a velo
   (ex.: `zh-CN-XiaoxiaoMultilingualNeural`, `en-US-AvaMultilingualNeural`): a Byte manda a voz falar em
   português do Brasil (v13.12; outro idioma: `BYTE_VOZ_IDIOMA`). Use o nome exato da Galeria de Voz; se não existir,
   o agente usa a voz padrão.
+
+## Estilo de fala (v13.13)
+Vozes do Azure que têm estilos (a Xiaoxiao tem vários) podem falar alegre, carinhosa, gentil... A Byte usa
+`cheerful` com intensidade 1.3 por padrão. Por agente:
+```
+az containerapp update -g byte-rg -n byte --set-env-vars BYTE_VOZ_BYTE_ESTILO=affectionate BYTE_VOZ_BYTE_INTENSIDADE=1.5 -o none
+```
+Estilos comuns: `cheerful` (alegre), `affectionate` (carinhosa), `gentle` (gentil), `excited` (empolgada),
+`friendly` (amigável), `calm` (calma). Intensidade de 0.1 a 2.0. Vazio (`BYTE_VOZ_BYTE_ESTILO=`) desliga.
+Se a voz não tiver o estilo, ela fala com a mesma voz sem estilo. No manifesto: `"voz": {"estilo": "...", "intensidade": 1.3}`.

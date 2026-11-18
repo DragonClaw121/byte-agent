@@ -49,17 +49,18 @@ RESPONSE_MODES = ("auto", "sempre", "nunca")
 
 # v12.4: cada agente tem a própria voz. "voz_servidor" é o nome da voz no serviço de TTS (ex.: Kokoro pf_dora);
 # "tom" e "velocidade" (0.5 a 2.0) valem para a voz do navegador/celular, e "velocidade" também para o servidor.
-_VOICE_LOOK = {"voz_servidor": "", "tom": 1.0, "velocidade": 1.0}
+_VOICE_LOOK = {"voz_servidor": "", "tom": 1.0, "velocidade": 1.0, "estilo": "", "intensidade": 1.0}
 VOICE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     # assistente (Kronus): a voz é a peça central; respostas curtas e mãos livres
     "assistente": {"ativo": True, "responder_com_voz": "auto", "palavras_chave": [], "somente_dono": False, "na_live": False, **_VOICE_LOOK},
     "trabalho": {"ativo": True, "responder_com_voz": "auto", "palavras_chave": [], "somente_dono": False, "na_live": False, **_VOICE_LOOK},
     # vtuber (Byte): só o dono comanda por voz; durante a live, ela responde em voz alta na própria live
-    "vtuber": {"ativo": True, "responder_com_voz": "auto", "palavras_chave": [], "somente_dono": True, "na_live": True, **_VOICE_LOOK},
+    "vtuber": {"ativo": True, "responder_com_voz": "auto", "palavras_chave": [], "somente_dono": True, "na_live": True,
+               **dict(_VOICE_LOOK, estilo="cheerful", intensidade=1.3)},       # v13.13: alegre e doce, não competitiva
 }
 # Matrix: voz do servidor = BYTE_VOICE_TTS_VOICE (a voz padrão); serena, um pouco mais pausada
 MATRIX_VOICE = {"ativo": True, "responder_com_voz": "auto", "palavras_chave": ["matrix", "matriz"], "somente_dono": False,
-                "na_live": False, "voz_servidor": "", "tom": 1.0, "velocidade": 1.1}
+                "na_live": False, "voz_servidor": "", "tom": 1.0, "velocidade": 1.1, "estilo": "", "intensidade": 1.0}
 
 # como cada tipo de agente responde quando a pergunta chega por voz
 VOICE_DIRECTIVES = {
@@ -142,6 +143,19 @@ def validate_voice(raw: Any, kind: str, name: str) -> Dict[str, Any]:
             if not 0.5 <= value <= 2.0:
                 raise ValueError(f"'voz.{key}' deve ficar entre 0.5 e 2.0.")
             base[key] = round(value, 2)
+    if "estilo" in raw:
+        style = str(raw["estilo"] or "").strip().lower()
+        if not re.fullmatch(r"[a-z-]{0,30}", style):
+            raise ValueError("'voz.estilo' deve ser um estilo do Azure (ex.: cheerful, affectionate, gentle) ou vazio.")
+        base["estilo"] = style
+    if "intensidade" in raw:
+        try:
+            degree = float(raw["intensidade"])
+        except (TypeError, ValueError):
+            raise ValueError("'voz.intensidade' deve ser um número entre 0.1 e 2.0.") from None
+        if not 0.1 <= degree <= 2.0:
+            raise ValueError("'voz.intensidade' deve ficar entre 0.1 e 2.0.")
+        base["intensidade"] = round(degree, 2)
     if base["na_live"] and kind != "vtuber":
         raise ValueError("'voz.na_live' só vale para agentes do tipo 'vtuber'.")
     return base
@@ -166,6 +180,18 @@ def policy_for(manifest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     speed = _env_speed(pol["nome"])
     if speed:
         pol["velocidade"] = speed
+    pol.setdefault("estilo", VOICE_DEFAULTS.get(pol.get("tipo"), {}).get("estilo", ""))
+    pol.setdefault("intensidade", 1.0)
+    key = "BYTE_VOZ_" + re.sub(r"[^A-Z0-9]", "_", fold(pol["nome"]).upper())
+    style = os.environ.get(key + "_ESTILO")
+    if style is not None and re.fullmatch(r"[a-zA-Z-]{0,30}", style.strip()):
+        pol["estilo"] = style.strip().lower()                  # vazio = sem estilo
+    try:
+        degree = float(os.environ.get(key + "_INTENSIDADE", "").replace(",", ".") or 0)
+    except ValueError:
+        degree = 0
+    if degree:
+        pol["intensidade"] = round(min(2.0, max(0.1, degree)), 2)
     return pol
 
 
@@ -441,7 +467,8 @@ class Synthesizer:
         return {"http": "API de voz", "azure": "Azure AI Speech",
                 "command": "comando local (BYTE_TTS_COMMAND)"}.get(self.backend)
 
-    def synthesize(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None) -> Tuple[bytes, str]:
+    def synthesize(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None,
+                   style: Optional[str] = None, style_degree: Optional[float] = None) -> Tuple[bytes, str]:
         """Devolve (áudio, mime). Prefere OGG/Opus (nota de voz do Telegram) e cai para MP3/WAV.
         voice/speed: a voz do agente ativo; se o serviço não conhecer essa voz, usa a voz padrão."""
         text = speech_text(text)
@@ -459,14 +486,23 @@ class Synthesizer:
         if self.backend == "azure":
             default = self.azure_voice(None)
             wanted = self.azure_voice(voice)
+            # tenta: voz do agente com estilo -> mesma voz sem estilo -> voz padrão
+            attempts = []
+            if style:
+                attempts.append((wanted, style))
+            attempts.append((wanted, None))
             if wanted != default:
+                attempts.append((default, None))
+            for i, (v, st) in enumerate(attempts):
                 try:
-                    return self._azure(text, wanted, speed)
+                    return self._azure(text, v, speed, st, style_degree)
                 except VoiceError as err:
-                    if "HTTP 4" not in str(err) or "HTTP 401" in str(err) or "HTTP 403" in str(err):
+                    last = i == len(attempts) - 1
+                    if last or "HTTP 4" not in str(err) or "HTTP 401" in str(err) or "HTTP 403" in str(err):
                         raise
-                    self.last_voice_error = f"voz '{wanted}' recusada pelo Azure; usando a padrão"
-            return self._azure(text, default, speed)
+                    self.last_voice_error = (f"estilo '{st}' recusado pela voz '{v}'; sem estilo" if st
+                                             else f"voz '{v}' recusada pelo Azure; usando a padrão")
+            raise VoiceError("O Azure Speech não devolveu áudio.")
         if self.backend == "command":
             return self._command(text)
         raise VoiceError("Fala das respostas não configurada (AZURE_SPEECH_KEY + AZURE_SPEECH_REGION, BYTE_VOICE_TTS_URL "
@@ -507,7 +543,8 @@ class Synthesizer:
                 return KOKORO_TO_AZURE[cand]
         return AZURE_DEFAULT_VOICE
 
-    def _azure(self, text: str, voice: str, speed: Optional[float] = None) -> Tuple[bytes, str]:
+    def _azure(self, text: str, voice: str, speed: Optional[float] = None, style: Optional[str] = None,
+               style_degree: Optional[float] = None) -> Tuple[bytes, str]:
         lang = "-".join(voice.split("-")[:2])
         # v13.12: vozes "Multilingual" de outro idioma (ex.: zh-CN-XiaoxiaoMultilingualNeural) recebem a ordem de
         # falar em português do Brasil; sem isso, leriam o texto com o sotaque de origem.
@@ -521,6 +558,9 @@ class Synthesizer:
             body = f'<prosody rate="{rate:+d}%">{body}</prosody>'
         if speak_lang.lower() != lang.lower():
             body = f'<lang xml:lang="{_xml(speak_lang)}">{body}</lang>'
+        if style and re.fullmatch(r"[a-z-]{1,30}", style):
+            degree = f' styledegree="{min(2.0, max(0.01, float(style_degree))):.2f}"' if style_degree else ""
+            body = f'<mstts:express-as style="{style}"{degree}>{body}</mstts:express-as>'
         ssml = (f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
                 f'xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="{lang}">'
                 f'<voice name="{voice}">{body}</voice></speak>')
@@ -653,7 +693,8 @@ def handle_command(service: Any, payload: Dict[str, Any], kit: VoiceKit,
     if wants_audio and kit.synthesizer.available and out["speech"]:
         try:
             data, mime = kit.synthesizer.synthesize(out["speech"], voice=policy.get("voz_servidor") or None,
-                                                    speed=policy.get("velocidade"))
+                                                    speed=policy.get("velocidade"), style=policy.get("estilo") or None,
+                                                    style_degree=policy.get("intensidade"))
             out["audio_b64"], out["audio_mime"] = base64.b64encode(data).decode("ascii"), mime
         except Exception as err:                            # sem áudio, a resposta em texto continua valendo
             out["audio_error"] = f"{type(err).__name__}: {str(err)[:160]}"

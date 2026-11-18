@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.12"
+BYTE_VERSION = "13.13"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -6667,7 +6667,8 @@ class ByteEcosystemService:
         if not speech:
             return {"error": "Nada para falar."}
         policy = _voice.policy_for(ACTIVE_AGENT)
-        data, mime = kit.synthesizer.synthesize(speech, voice=policy.get("voz_servidor") or None, speed=policy.get("velocidade"))
+        data, mime = kit.synthesizer.synthesize(speech, voice=policy.get("voz_servidor") or None, speed=policy.get("velocidade"),
+                                                style=policy.get("estilo") or None, style_degree=policy.get("intensidade"))
         return {"audio_b64": base64.b64encode(data).decode("ascii"), "audio_mime": mime, "chars": len(speech)}
 
     def voice_status(self) -> Dict[str, Any]:

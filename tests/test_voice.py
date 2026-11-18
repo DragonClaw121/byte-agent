@@ -40,8 +40,9 @@ class FakeSynth:
     def __init__(self):
         self.calls = []
 
-    def synthesize(self, text, voice=None, speed=None):
+    def synthesize(self, text, voice=None, speed=None, style=None, style_degree=None):
         self.calls.append((text, voice, speed))
+        self.styles = getattr(self, "styles", []) + [(style, style_degree)]
         return b"OggS-fake", "audio/ogg"
 
     def describe(self):

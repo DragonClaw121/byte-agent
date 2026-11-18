@@ -9,6 +9,7 @@ from byte_agent import voice
 
 class FakeSpeech(http.server.BaseHTTPRequestHandler):
     calls = []
+    reject_styles = False
     known = {"pt-BR-FranciscaNeural", "pt-BR-ThalitaNeural", "pt-BR-AntonioNeural", "pt-BR-ValerioNeural"}
 
     def log_message(self, *a):
@@ -20,7 +21,7 @@ class FakeSpeech(http.server.BaseHTTPRequestHandler):
                                  "ctype": self.headers.get("Content-Type"), "ssml": body})
         if self.headers.get("Ocp-Apim-Subscription-Key") != "chave-certa":
             self.send_response(401); self.send_header("Content-Length", "0"); self.end_headers(); return
-        if not any(f'name="{v}"' in body for v in self.known):
+        if not any(f'name="{v}"' in body for v in self.known) or (FakeSpeech.reject_styles and "express-as" in body):
             self.send_response(400); self.send_header("Content-Length", "0"); self.end_headers(); return
         data = b"OggS-audio"
         self.send_response(200)
@@ -33,6 +34,7 @@ class FakeSpeech(http.server.BaseHTTPRequestHandler):
 @pytest.fixture()
 def speech_url():
     FakeSpeech.calls = []
+    FakeSpeech.reject_styles = False
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeSpeech)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_port}/cognitiveservices/v1"
@@ -163,3 +165,33 @@ def test_foreign_multilingual_voice_is_told_to_speak_brazilian_portuguese(speech
     assert '<lang xml:lang="pt-BR"><prosody rate="+10%">' in ssml and '<sub alias="laive">live</sub>' in ssml
     s.synthesize("Oi", voice="pt-BR-AntonioNeural")                       # voz brasileira: sem <lang>
     assert "<lang" not in FakeSpeech.calls[-1]["ssml"]
+
+
+def test_byte_speaks_cheerful_by_default_and_style_is_configurable(speech_url, monkeypatch):
+    byte = {"tipo": "vtuber", "nome": "Byte", "voz": voice.validate_voice({"voz_servidor": "pf_dora"}, "vtuber", "Byte")}
+    pol = voice.policy_for(byte)
+    assert pol["estilo"] == "cheerful" and pol["intensidade"] == 1.3
+    assert voice.policy_for(None)["estilo"] == ""                          # Matrix: sem estilo
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    s.synthesize("Oi chat!", voice="zh-CN-XiaoxiaoMultilingualNeural", speed=1.0, style=pol["estilo"], style_degree=pol["intensidade"])
+    ssml = FakeSpeech.calls[-1]["ssml"]
+    assert '<mstts:express-as style="cheerful" styledegree="1.30"><lang xml:lang="pt-BR">' in ssml
+    monkeypatch.setenv("BYTE_VOZ_BYTE_ESTILO", "affectionate")
+    monkeypatch.setenv("BYTE_VOZ_BYTE_INTENSIDADE", "1,6")
+    assert (voice.policy_for(byte)["estilo"], voice.policy_for(byte)["intensidade"]) == ("affectionate", 1.6)
+    monkeypatch.setenv("BYTE_VOZ_BYTE_ESTILO", "")                        # vazio desliga o estilo
+    assert voice.policy_for(byte)["estilo"] == ""
+    with pytest.raises(ValueError, match="estilo"):
+        voice.validate_voice({"estilo": "<script>"}, "vtuber", "Byte")
+    with pytest.raises(ValueError, match="intensidade"):
+        voice.validate_voice({"intensidade": 5}, "vtuber", "Byte")
+
+
+def test_style_refused_keeps_the_same_voice_without_style(speech_url):
+    FakeSpeech.known = FakeSpeech.known | {"zh-CN-XiaoxiaoMultilingualNeural"}
+    FakeSpeech.reject_styles = True
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    data, _ = s.synthesize("Oi", voice="zh-CN-XiaoxiaoMultilingualNeural", style="cheerful", style_degree=1.3)
+    assert data and "estilo 'cheerful' recusado" in s.last_voice_error
+    last = FakeSpeech.calls[-1]["ssml"]
+    assert 'name="zh-CN-XiaoxiaoMultilingualNeural"' in last and "express-as" not in last   # mesma voz, sem estilo
