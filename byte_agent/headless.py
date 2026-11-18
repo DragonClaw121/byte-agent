@@ -67,6 +67,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         engine.install_web_access(service, data_dir)
     if profile:
         engine.install_integrations_and_push(service)
+        from . import objetivos
+        objetivos.install(service)                          # v13.9: objetivos de longo prazo, em etapas
     return service
 
 

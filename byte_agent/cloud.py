@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -70,6 +71,24 @@ def _clean_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 pending_ids.remove(m["tool_call_id"])
         out.append(m)
     return out
+
+
+# v13.9: tokens gastos HOJE por todos os clientes deste processo (base do orçamento diário da autonomia)
+_DAILY_LOCK = threading.Lock()
+_DAILY = {"day": "", "tokens": 0}
+
+
+def add_daily_tokens(n: int) -> None:
+    day = time.strftime("%Y-%m-%d")
+    with _DAILY_LOCK:
+        if _DAILY["day"] != day:
+            _DAILY["day"], _DAILY["tokens"] = day, 0
+        _DAILY["tokens"] += max(0, int(n or 0))
+
+
+def tokens_today() -> int:
+    with _DAILY_LOCK:
+        return _DAILY["tokens"] if _DAILY["day"] == time.strftime("%Y-%m-%d") else 0
 
 
 class AzureOpenAIClient:
@@ -164,6 +183,7 @@ class AzureOpenAIClient:
             self.usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
             self.usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
             self.usage["calls"] += 1
+            add_daily_tokens(int(usage.get("prompt_tokens") or 0) + int(usage.get("completion_tokens") or 0))
             self.last_error = None
             return dict(choice.get("message") or {}), str(choice.get("finish_reason") or "stop")
         raise CloudLLMError("Azure OpenAI não respondeu.")

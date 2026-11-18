@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.8"
+BYTE_VERSION = "13.9"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -4553,6 +4553,9 @@ class ProactiveAutonomyEngine:
         self._initial_greeting_sent = False
         # v10.4: quem executa as tarefas agendadas (definido pelo serviço, que é dono das ferramentas)
         self.mission_runner: Optional[Any] = None
+        # v13.9: trabalhos que avançam sozinhos a cada volta do relógio (ex.: objetivos de longo prazo)
+        self.background_jobs: List[Any] = []
+        self.budget_ok: Optional[Any] = None             # v13.9: orçamento diário de tokens da autonomia
         self._gen_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -4595,6 +4598,11 @@ class ProactiveAutonomyEngine:
                 self.process_due_reminders()
             except Exception:
                 pass
+            for job in list(self.background_jobs):       # pedidos explícitos (objetivos): valem mesmo sem iniciativas
+                try:
+                    job()
+                except Exception:
+                    pass
             if not self.autonomous_mode_enabled or self.llm.connection_mode == "offline":
                 continue
             if not self.llm.ollama_gpu_warm:
@@ -4602,6 +4610,8 @@ class ProactiveAutonomyEngine:
             now = time.monotonic()
             idle_sec = now - self.last_user_activity_ts
             since_last_proactive = now - self.last_proactive_ts
+            if callable(self.budget_ok) and not self.budget_ok():
+                continue                                 # orçamento do dia esgotado: sem iniciativas espontâneas
             if (idle_sec >= self.idle_threshold_sec and since_last_proactive >= self.min_interval_sec
                     and self._unanswered < self.max_unanswered):
                 try:
@@ -7393,6 +7403,13 @@ pygame.time.Clock().tick(60)</textarea>
   <div id="b90-tab-ctx" class="b90-tab-content">
     <div class="b90-grid">
       <div class="b90-card">
+        <h3>🧩 Objetivos (a Byte trabalha sozinha, em etapas)</h3>
+        <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
+          <input id="b90-new-goal" class="b90-input" style="flex:1; min-width:220px;" placeholder="Ex.: pesquise 3 cursos de Python gratuitos e me entregue um comparativo" onkeydown="if(event.key==='Enter')window.b90AddGoal()" />
+          <button id="b90-goal-btn" class="b90-btn-pri" style="margin-top:0;" onclick="window.b90AddGoal()">+ Objetivo</button>
+        </div>
+        <div id="b90-goal-feedback" style="font-size:0.74rem; color:var(--muted); font-family:monospace; white-space:pre-wrap;"></div>
+        <div id="b90-goals-list" style="margin-bottom:12px;"></div>
         <h3>🗓️ Agenda & Tarefas (Extraídas em Background Assíncrono pela LLM)</h3>
         <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:6px; margin-bottom:10px;">
           <input id="b90-new-task" class="b90-input" placeholder="Ex: Reunião de alinhamento sexta às 15h..." />
@@ -8082,9 +8099,53 @@ pygame.time.Clock().tick(60)</textarea>
     }
   }
 
+  // v13.9: objetivos de longo prazo
+  function b90RenderGoals(st) {
+    const box = document.getElementById('b90-goals-list');
+    if (!box) return;
+    const g = st.goals;
+    if (!g || !g.goals) { box.innerHTML = '<span style="color:var(--muted);font-size:0.78rem;">Objetivos indisponíveis neste agente.</span>'; return; }
+    const icon = { done: '✅', running: '⏳', failed: '⚠️', pending: '▫️' };
+    const rows = g.goals.map(goal => `<div class="b90-msg-b" style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; gap:6px; align-items:center;">
+          <b>#${goal.id} ${b90EscapeHtml(goal.title)}</b>
+          <span style="white-space:nowrap; font-size:0.74rem;">${b90EscapeHtml(goal.status_label)} (${goal.progress})
+            ${goal.status === 'blocked' ? `<button class="b90-btn-ok" style="margin:0 0 0 4px;" onclick="window.b90GoalAction(${goal.id}, 'goal_resume')">Retomar</button>` : ''}
+            <button class="b90-btn-del" style="margin:0 0 0 4px;" onclick="window.b90GoalAction(${goal.id}, 'goal_cancel')">Cancelar</button></span>
+        </div>
+        ${goal.steps.map(x => `<div style="font-size:0.78rem;">${icon[x.status] || '▫️'} ${b90EscapeHtml(x.text)}</div>`).join('')}
+      </div>`).join('');
+    const left = g.budget && g.budget.left;
+    const budget = (left === null || left === undefined) ? '' :
+      `<div style="font-size:0.72rem; color:var(--muted);">Orçamento de hoje para a autonomia: ${Math.max(0, left).toLocaleString('pt-BR')} tokens</div>`;
+    box.innerHTML = (rows || '<span style="color:var(--muted);font-size:0.78rem;">Nenhum objetivo em andamento.</span>') + budget;
+  }
+  window.b90AddGoal = async function() {
+    const inp = document.getElementById('b90-new-goal'), btn = document.getElementById('b90-goal-btn');
+    const fb = document.getElementById('b90-goal-feedback');
+    const title = inp.value.trim();
+    if (title.length < 5) { fb.textContent = 'Descreva o objetivo (o que você quer receber no fim).'; return; }
+    btn.disabled = true; fb.textContent = '🧩 Planejando as etapas...';
+    const res = await b90Call('goal_create', { title });
+    btn.disabled = false;
+    if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
+    inp.value = ''; fb.textContent = res.text || 'Objetivo criado.';
+    const st = await b90Call('goal_list', {}, true);
+    if (!st.error) b90RenderGoals({ goals: st });
+  };
+  window.b90GoalAction = async function(id, action) {
+    if (action === 'goal_cancel' && !confirm('Cancelar o objetivo #' + id + '?')) return;
+    const res = await b90Call(action, { goal_id: id }, true);
+    const fb = document.getElementById('b90-goal-feedback');
+    fb.textContent = res.error ? '⚠️ ' + res.error : (action === 'goal_cancel' ? 'Objetivo cancelado.' : 'Retomado.');
+    const st = await b90Call('goal_list', {}, true);
+    if (!st.error) b90RenderGoals({ goals: st });
+  };
+
   function b90RenderState(st) {
     if (!st || !st.llm) return;
     b90RenderV10Extras(st);
+    b90RenderGoals(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');

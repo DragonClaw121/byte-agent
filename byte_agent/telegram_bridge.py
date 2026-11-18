@@ -34,6 +34,8 @@ HELP_TEXT = (
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
     "/rotina <HH:MM> <instrução> — todo dia, o agente executa e envia o resultado, ex.: /rotina 08:00 resuma minha agenda\n"
     "/lembretes — lista os agendamentos | /cancelar <id> — cancela um\n"
+    "/objetivo <o que você quer> — tarefa longa: o agente planeja em etapas e trabalha sozinho até entregar\n"
+    "/objetivos — progresso | /retomar <id> — continua um travado | /cancelar_objetivo <id>\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -505,6 +507,27 @@ class TelegramBridge:
                 return
             done = self._dispatch("cancel_reminder", {"reminder_id": int(arg.lstrip("#"))}).get("cancelled")
             self.send(chat_id, "Cancelado." if done else "Não encontrei esse lembrete pendente.")
+        elif cmd == "/objetivo":
+            if len(arg) < 5:
+                self.send(chat_id, "Use: /objetivo <o que você quer>, ex.: /objetivo pesquise 3 cursos de Python gratuitos "
+                                   "e me entregue um comparativo")
+                return
+            self.send(chat_id, "🧩 Planejando as etapas...")
+            res = self._dispatch("goal_create", {"title": arg})
+            self.send(chat_id, res.get("text") or f"Não consegui criar o objetivo: {res.get('error', 'erro desconhecido')}")
+        elif cmd == "/objetivos":
+            self.send(chat_id, self._dispatch("goal_list", {"all": arg.lower() == "todos"}).get("text")
+                      or "Os objetivos não estão disponíveis neste agente.")
+        elif cmd in {"/retomar", "/cancelar_objetivo"}:
+            if not arg.lstrip("#").isdigit():
+                self.send(chat_id, f"Use: {cmd} <id> (veja os ids em /objetivos)")
+                return
+            if cmd == "/retomar":
+                ok = self._dispatch("goal_resume", {"goal_id": int(arg.lstrip("#"))}).get("resumed")
+                self.send(chat_id, "Retomado: volto a trabalhar nele em instantes." if ok else "Não encontrei esse objetivo travado.")
+            else:
+                ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
+                self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
         elif cmd == "/live":
             director = self.stream_director
             if director is None:

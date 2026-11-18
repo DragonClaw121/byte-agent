@@ -200,3 +200,5 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 em tempo de execução pelo dicionário global do módulo; uma divisão mecânica quebraria esse recurso em silêncio.
 A ordem segura é: extrair o HTML/JS do painel para arquivos próprios, depois `VectorEngine`/`HybridContextReader`,
 depois o roteador, rodando `pytest` a cada extração.
+
+- **Objetivos (v13.9):** tarefas longas que a Byte executa sozinha, em etapas — [docs/objetivos.md](docs/objetivos.md)
