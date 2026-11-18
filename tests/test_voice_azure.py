@@ -152,3 +152,14 @@ def test_work_profile_panel_keeps_the_speech_filter_intact():
     finally:
         engine.apply_profile("pessoal")
     assert "replace(/[^\\n]*/g" not in html and "\\u{1F6E1}" in html
+
+
+def test_foreign_multilingual_voice_is_told_to_speak_brazilian_portuguese(speech_url):
+    FakeSpeech.known = FakeSpeech.known | {"zh-CN-XiaoxiaoMultilingualNeural"}
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    s.synthesize("Oi chat, bora pra live?", voice="zh-CN-XiaoxiaoMultilingualNeural", speed=1.1)
+    ssml = FakeSpeech.calls[-1]["ssml"]
+    assert 'name="zh-CN-XiaoxiaoMultilingualNeural"' in ssml and 'xml:lang="zh-CN"' in ssml
+    assert '<lang xml:lang="pt-BR"><prosody rate="+10%">' in ssml and '<sub alias="laive">live</sub>' in ssml
+    s.synthesize("Oi", voice="pt-BR-AntonioNeural")                       # voz brasileira: sem <lang>
+    assert "<lang" not in FakeSpeech.calls[-1]["ssml"]

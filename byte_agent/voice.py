@@ -509,13 +509,20 @@ class Synthesizer:
 
     def _azure(self, text: str, voice: str, speed: Optional[float] = None) -> Tuple[bytes, str]:
         lang = "-".join(voice.split("-")[:2])
+        # v13.12: vozes "Multilingual" de outro idioma (ex.: zh-CN-XiaoxiaoMultilingualNeural) recebem a ordem de
+        # falar em português do Brasil; sem isso, leriam o texto com o sotaque de origem.
+        target = os.environ.get("BYTE_VOZ_IDIOMA", "pt-BR").strip() or "pt-BR"
+        speak_lang = target if ("multilingual" in voice.lower() or lang.lower() == target.lower()) else lang
         body = _xml(text)
-        if lang.lower().startswith("pt"):
+        if speak_lang.lower().startswith("pt"):
             body = apply_pronunciations(body)
         if speed and abs(float(speed) - 1.0) > 0.01:
             rate = max(-50, min(100, int(round((float(speed) - 1.0) * 100))))
             body = f'<prosody rate="{rate:+d}%">{body}</prosody>'
-        ssml = (f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}">'
+        if speak_lang.lower() != lang.lower():
+            body = f'<lang xml:lang="{_xml(speak_lang)}">{body}</lang>'
+        ssml = (f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+                f'xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="{lang}">'
                 f'<voice name="{voice}">{body}</voice></speak>')
         last = ""
         for fmt, mime in (("ogg-24khz-16bit-mono-opus", "audio/ogg"), ("audio-24khz-48kbitrate-mono-mp3", "audio/mpeg")):

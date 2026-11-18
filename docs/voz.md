@@ -172,5 +172,7 @@ aparelho não tocar o áudio, usam a voz do navegador/celular com o tom e a velo
   Acrescente os seus: `BYTE_VOZ_PRONUNCIAS="Kronus=crônus;deploy=diplói"`.
 - Velocidade por agente: `BYTE_VOZ_MATRIX_VELOCIDADE=1.15` (0.5 a 2.0; também `_BYTE`, `_BIT`, `_KRONUS`).
   A Matrix agora fala em 1.1 por padrão.
-- Vozes "Multilingual" do Azure (ex.: `pt-BR-ThalitaMultilingualNeural`) costumam soar mais naturais e lidam melhor
-  com inglês; se o nome não existir na sua região, o agente usa a voz padrão.
+- Vozes "Multilingual" do Azure costumam soar mais naturais e lidam melhor com inglês. Pode ser de outro idioma
+  (ex.: `zh-CN-XiaoxiaoMultilingualNeural`, `en-US-AvaMultilingualNeural`): a Byte manda a voz falar em
+  português do Brasil (v13.12; outro idioma: `BYTE_VOZ_IDIOMA`). Use o nome exato da Galeria de Voz; se não existir,
+  o agente usa a voz padrão.
