@@ -524,8 +524,23 @@ class Supervisor:
         return 0
 
 
+def set_timezone(env: Dict[str, str]) -> Optional[str]:
+    """v13.14: o contêiner nasce em UTC; lembretes e agenda precisam do horário de Brasília (BYTE_FUSO)."""
+    name = env.get("BYTE_FUSO") or "America/Sao_Paulo"
+    if env.get("TZ"):
+        return env["TZ"]
+    if not Path("/usr/share/zoneinfo", name).is_file():
+        log(f"Aviso: o fuso {name} não está instalado no contêiner; os horários ficam em UTC.")
+        return None
+    env["TZ"] = os.environ["TZ"] = name
+    if hasattr(time, "tzset"):
+        time.tzset()
+    return name
+
+
 def main() -> int:
     env = dict(os.environ)
+    set_timezone(env)
     home = Path(env.get("HOME") or "/root")
     store = Path(env.get("BYTE_DADOS_PERSISTENTES", "/mnt/dados"))
     workdir = Path(env.get("BYTE_PASTA_TRABALHO", "/app"))

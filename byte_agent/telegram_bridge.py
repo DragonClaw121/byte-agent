@@ -37,6 +37,7 @@ HELP_TEXT = (
     "/objetivo <o que você quer> — tarefa longa: o agente planeja em etapas e trabalha sozinho até entregar\n"
     "/objetivos — progresso | /retomar <id> — continua um travado | /cancelar_objetivo <id>\n"
     "/avaliar — roda as avaliações de comportamento (nota por categoria e o que piorou desde a última)\n"
+    "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -564,6 +565,19 @@ class TelegramBridge:
             else:
                 ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
                 self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
+        elif cmd == "/gatilhos":
+            self.send(chat_id, self._dispatch("trigger_list").get("text") or "Gatilhos indisponíveis neste agente.")
+        elif cmd == "/gatilho":
+            name, _, state = arg.partition(" ")
+            if state.strip().lower() not in {"on", "off"}:
+                self.send(chat_id, "Use: /gatilho <nome> on|off (veja os nomes em /gatilhos)")
+                return
+            try:
+                self._dispatch("trigger_toggle", {"name": name.strip().lower(), "on": state.strip().lower() == "on"})
+            except RuntimeError as err:
+                self.send(chat_id, re.sub(r"^\w*Error: ", "", str(err)))
+                return
+            self.send(chat_id, f"Gatilho {name.strip().lower()}: {'ligado' if state.strip().lower() == 'on' else 'desligado'}.")
         elif cmd == "/avaliar":
             if not self._eval_lock.acquire(blocking=False):
                 self.send(chat_id, "Já há uma avaliação rodando; aguarde o placar.")

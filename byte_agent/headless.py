@@ -69,6 +69,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         engine.install_integrations_and_push(service)
         from . import objetivos
         objetivos.install(service)                          # v13.9: objetivos de longo prazo, em etapas
+        from . import gatilhos
+        gatilhos.install(service)                           # v13.14: gatilhos por evento (agenda, e-mail, tarefas)
     return service
 
 

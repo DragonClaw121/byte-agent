@@ -204,3 +204,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Objetivos (v13.9):** tarefas longas que a Byte executa sozinha, em etapas — [docs/objetivos.md](docs/objetivos.md)
 - **Avaliações de comportamento (v13.10):** nota por categoria e regressões — [docs/avaliacoes.md](docs/avaliacoes.md)
 - **Atualização automática da nuvem pelo GitHub (v13.10):** [docs/azure-conteiner.md](docs/azure-conteiner.md)
+- **Gatilhos (v13.14):** avisos por evento — agenda, e-mail novo, tarefa parada — [docs/gatilhos.md](docs/gatilhos.md)

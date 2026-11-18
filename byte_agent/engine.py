@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.13"
+BYTE_VERSION = "13.14"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7411,6 +7411,8 @@ pygame.time.Clock().tick(60)</textarea>
         </div>
         <div id="b90-goal-feedback" style="font-size:0.74rem; color:var(--muted); font-family:monospace; white-space:pre-wrap;"></div>
         <div id="b90-goals-list" style="margin-bottom:12px;"></div>
+        <h3>⚡ Gatilhos (a Byte avisa quando algo acontece)</h3>
+        <div id="b90-triggers-list" style="margin-bottom:12px; font-size:0.8rem;"></div>
         <h3>🗓️ Agenda & Tarefas (Extraídas em Background Assíncrono pela LLM)</h3>
         <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:6px; margin-bottom:10px;">
           <input id="b90-new-task" class="b90-input" placeholder="Ex: Reunião de alinhamento sexta às 15h..." />
@@ -8121,6 +8123,25 @@ pygame.time.Clock().tick(60)</textarea>
       `<div style="font-size:0.72rem; color:var(--muted);">Orçamento de hoje para a autonomia: ${Math.max(0, left).toLocaleString('pt-BR')} tokens</div>`;
     box.innerHTML = (rows || '<span style="color:var(--muted);font-size:0.78rem;">Nenhum objetivo em andamento.</span>') + budget;
   }
+  function b90RenderTriggers(st) {
+    const box = document.getElementById('b90-triggers-list');
+    if (!box) return;
+    const g = st.gatilhos;
+    if (!g || !g.triggers) { box.innerHTML = '<span style="color:var(--muted);">Gatilhos indisponíveis neste agente.</span>'; return; }
+    box.innerHTML = g.triggers.map(t => {
+      const state = !t.enabled ? 'desligado' : (t.configured ? 'ligado' : 'ligado (falta configurar)');
+      const err = t.last_error ? ` <span style="color:#f59e0b;">⚠️ ${b90EscapeHtml(t.last_error)}</span>` : '';
+      return `<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:3px;">
+        <span><b>${b90EscapeHtml(t.label)}</b> <span style="color:var(--muted);">(${b90EscapeHtml(t.name)}): ${state}</span>${err}</span>
+        <button class="${t.enabled ? 'b90-btn-del' : 'b90-btn-ok'}" style="margin:0;" onclick="window.b90ToggleTrigger('${b90EscapeHtml(t.name)}', ${!t.enabled})">${t.enabled ? 'Desligar' : 'Ligar'}</button>
+      </div>`; }).join('');
+  }
+  window.b90ToggleTrigger = async function(name, on) {
+    const res = await b90Call('trigger_toggle', { name, on }, true);
+    if (res.error) { alert(res.error); return; }
+    const st = await b90Call('trigger_list', {}, true);
+    if (!st.error) b90RenderTriggers({ gatilhos: st });
+  };
   window.b90AddGoal = async function() {
     const inp = document.getElementById('b90-new-goal'), btn = document.getElementById('b90-goal-btn');
     const fb = document.getElementById('b90-goal-feedback');
@@ -8147,6 +8168,7 @@ pygame.time.Clock().tick(60)</textarea>
     if (!st || !st.llm) return;
     b90RenderV10Extras(st);
     b90RenderGoals(st);
+    b90RenderTriggers(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');
