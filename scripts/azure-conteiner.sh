@@ -19,7 +19,8 @@ IMAGE="${IMAGE:-docker.io/library/python:3.12-slim}"
 CPU="${CPU:-0.25}"
 MEM="${MEM:-0.5Gi}"
 MODEL="${MODEL:-azure:byte-mini}"
-PAINEL_REMOTO="${PAINEL_REMOTO:-1}"   # 1 = painéis abrem pelo endereço HTTPS (só com o token)
+PAINEL_REMOTO="${PAINEL_REMOTO:-1}"
+GITHUB_REPO="${GITHUB_REPO:-DragonClaw121/byte-agent}"   # atualiza sozinho pelo GitHub (vazio = só pelo zip)   # 1 = painéis abrem pelo endereço HTTPS (só com o token)
 
 say() { printf '\n\033[1m[byte] %s\033[0m\n' "$*"; }
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }     # texto entre aspas simples para o YAML
@@ -218,6 +219,8 @@ properties:
             value: '1'
           - name: BYTE_PAINEL_REMOTO
             value: '$PAINEL_REMOTO'
+          - name: BYTE_GITHUB_REPO
+            value: '$GITHUB_REPO'
         volumeMounts:
           - volumeName: dados
             mountPath: /mnt/dados

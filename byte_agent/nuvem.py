@@ -8,6 +8,10 @@ rede. Então este supervisor:
   3. a cada BYTE_SINCRONIZAR_MIN minutos (padrão 5) e ao desligar, salva uma cópia consistente dos dados no
      armazenamento (bancos SQLite copiados pela API de backup, troca atômica do arquivo);
   4. religa um processo que cair;
+  6. com BYTE_GITHUB_REPO=dono/repositorio, atualiza sozinho: ao ligar e a cada BYTE_GITHUB_INTERVALO_H horas (padrão
+     6; 0 = só ao ligar) procura o commit mais novo do branch (BYTE_GITHUB_BRANCH, padrão main) cujos testes PASSARAM
+     no GitHub, baixa, instala e reinicia os agentes. Commit com teste falhando nunca é instalado. A cópia baixada
+     fica no armazenamento (byte-agent-github.zip): se o GitHub estiver fora do ar, a Byte liga com ela.
   5. com BYTE_PAINEL_REMOTO=1, abre os painéis pelo endereço HTTPS do contêiner: um roteador na porta pública manda
      cada pedido para o painel dono do token (principal ou Kronus). Sem token válido, tudo segue para o Kronus como
      antes (só /voz e a API). Os tokens ficam fixos em painel-tokens.json no armazenamento, para o favorito não mudar.
@@ -25,6 +29,7 @@ import http.server
 import io
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -36,8 +41,11 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+import urllib.error
 import urllib.parse
-from typing import Dict, List, Optional, Tuple
+import urllib.request
+import zipfile
+from typing import Callable, Dict, List, Optional, Tuple
 
 SNAPSHOT = "byte-dados.tar.gz"
 DATA_DIRS = (".byte-agent", ".byte-agent-trabalho", ".byte-agents")
@@ -277,15 +285,135 @@ class PanelRouter:
         self.server.server_close()
 
 
+# ---------------------------------------------------------------- atualização pelo GitHub
+GITHUB_API = "https://api.github.com"
+GITHUB_ZIP = "byte-agent-github.zip"
+GITHUB_VERSION_FILE = "github-versao.txt"
+MAX_ZIP_BYTES = 50 * 1024 * 1024
+_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+class GitHubUpdater:
+    """Instala o commit mais novo do branch que passou nos testes do GitHub Actions."""
+
+    def __init__(self, repo: str, store: Path, branch: str = "main", token: str = "", workflow: str = "testes",
+                 api: str = GITHUB_API, installer: Optional[Callable[[Path], None]] = None):
+        if not _REPO_RE.match(repo or ""):
+            raise ValueError("BYTE_GITHUB_REPO deve ser dono/repositorio (ex.: DragonClaw121/byte-agent).")
+        self.repo, self.store, self.branch, self.token = repo, store, branch or "main", token.strip()
+        self.workflow, self.api = workflow, api.rstrip("/")
+        self.installer = installer or self._pip_install
+        self.last_error: Optional[str] = None
+
+    def _get(self, url: str, timeout: float = 60.0, limit: int = 2 * 1024 * 1024) -> bytes:
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "byte-agent-atualizador/1.0",
+                   "X-GitHub-Api-Version": "2022-11-28"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as resp:
+            data = resp.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("resposta grande demais")
+        return data
+
+    def installed(self) -> str:
+        try:
+            return (self.store / GITHUB_VERSION_FILE).read_text().strip()
+        except OSError:
+            return ""
+
+    def latest_green(self) -> Optional[str]:
+        query = urllib.parse.urlencode({"branch": self.branch, "status": "success", "event": "push", "per_page": 20})
+        data = json.loads(self._get(f"{self.api}/repos/{self.repo}/actions/runs?{query}"))
+        for run in data.get("workflow_runs") or []:
+            if self.workflow and run.get("name") != self.workflow:
+                continue
+            sha = str(run.get("head_sha") or "")
+            if _SHA_RE.match(sha):
+                return sha
+        return None
+
+    def download(self, sha: str) -> Path:
+        raw = self._get(f"{self.api}/repos/{self.repo}/zipball/{sha}", timeout=180, limit=MAX_ZIP_BYTES)
+        tmp = self.store / (GITHUB_ZIP + ".novo")
+        tmp.write_bytes(raw)
+        try:
+            with zipfile.ZipFile(tmp) as zf:
+                names = zf.namelist()
+            tops = {n.split("/", 1)[0] for n in names}
+            if len(tops) != 1 or not any(n.endswith("/pyproject.toml") and n.count("/") == 1 for n in names) \
+                    or not any(n.endswith("/byte_agent/nuvem.py") for n in names):
+                raise ValueError("o arquivo baixado não parece a Byte")
+        except (zipfile.BadZipFile, ValueError):
+            tmp.unlink(missing_ok=True)
+            raise
+        final = self.store / GITHUB_ZIP
+        os.replace(tmp, final)
+        os.utime(final)                                  # o mais novo: é ele que a partida do contêiner instala
+        return final
+
+    @staticmethod
+    def _pip_install(zip_path: Path) -> None:
+        base = [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "--disable-pip-version-check"]
+        proc = subprocess.run(base + [f"{zip_path}[trabalho]"], capture_output=True, text=True, timeout=900)
+        if proc.returncode != 0:
+            proc = subprocess.run(base + [str(zip_path)], capture_output=True, text=True, timeout=900)
+        if proc.returncode != 0:
+            raise RuntimeError("pip falhou: " + (proc.stderr or proc.stdout)[-300:])
+
+    def check_and_install(self) -> Optional[str]:
+        """Instala se houver versão aprovada mais nova. Devolve o sha instalado, ou None se nada mudou."""
+        try:
+            sha = self.latest_green()
+            if not sha or sha == self.installed():
+                self.last_error = None
+                return None
+            log(f"Atualização: nova versão aprovada nos testes ({sha[:7]}); baixando do GitHub...")
+            zip_path = self.download(sha)
+            self.installer(zip_path)
+            (self.store / GITHUB_VERSION_FILE).write_text(sha + "\n")
+            self.last_error = None
+            log(f"Atualização: versão {sha[:7]} instalada.")
+            return sha
+        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, urllib.error.URLError,
+                subprocess.TimeoutExpired) as err:
+            self.last_error = f"{type(err).__name__}: {str(err)[:160]}"
+            log(f"Aviso: não consegui atualizar pelo GitHub agora ({self.last_error}); sigo com a versão atual.")
+            return None
+
+
+def updater_from_env(env: Dict[str, str], store: Path) -> Optional[GitHubUpdater]:
+    repo = env.get("BYTE_GITHUB_REPO", "").strip()
+    if not repo:
+        return None
+    try:
+        return GitHubUpdater(repo, store, branch=env.get("BYTE_GITHUB_BRANCH", "main").strip(),
+                             token=env.get("BYTE_GITHUB_TOKEN", ""), workflow=env.get("BYTE_GITHUB_WORKFLOW", "testes").strip())
+    except ValueError as err:
+        log(f"Aviso: {err} A atualização automática fica desligada.")
+        return None
+
+
+def restart_supervisor() -> None:
+    """Troca o processo do supervisor pela versão recém-instalada (mesmo PID, o contêiner nem percebe)."""
+    os.execv(sys.executable, [sys.executable, "-m", "byte_agent.nuvem"])
+
+
 def public_address(env: Dict[str, str]) -> str:
     name, suffix = env.get("CONTAINER_APP_NAME", ""), env.get("CONTAINER_APP_ENV_DNS_SUFFIX", "")
     return f"https://{name}.{suffix}" if name and suffix else "https://SEU-ENDERECO.azurecontainerapps.io"
 
 
 class Supervisor:
-    def __init__(self, home: Path, store: Path, workdir: Path, env: Dict[str, str], interval_s: float):
+    def __init__(self, home: Path, store: Path, workdir: Path, env: Dict[str, str], interval_s: float,
+                 updater: Optional[GitHubUpdater] = None, update_interval_s: float = 0.0,
+                 restart: Callable[[], None] = restart_supervisor):
         self.home, self.store, self.workdir, self.env = home, store, workdir, env
         self.interval_s = interval_s
+        self.updater, self.update_interval_s, self.restart = updater, update_interval_s, restart
+        self._update_thread: Optional[threading.Thread] = None
+        self._update_ready: Optional[str] = None
         self.children: Dict[str, subprocess.Popen] = {}
         self.child_env: Dict[str, Dict[str, str]] = {}
         self.router: Optional[PanelRouter] = None
@@ -318,6 +446,7 @@ class Supervisor:
         for name, cmd in procs.items():
             self.start_child(name, cmd)
         next_sync = time.monotonic() + self.interval_s
+        next_update = time.monotonic() + self.update_interval_s
         while not self._should_stop():
             for name, proc in list(self.children.items()):
                 if proc.poll() is not None and not self._should_stop():
@@ -328,8 +457,29 @@ class Supervisor:
             if time.monotonic() >= next_sync:
                 self.sync()
                 next_sync = time.monotonic() + self.interval_s
+            if self.updater is not None and self.update_interval_s > 0 and time.monotonic() >= next_update:
+                next_update = time.monotonic() + self.update_interval_s
+                self._check_update_in_background()
+            if self._update_ready:
+                log(f"Reiniciando os agentes na versão nova ({self._update_ready[:7]}).")
+                self.shutdown()
+                self.restart()
+                return 0
             self._pause(2)
         return self.shutdown()
+
+    def _check_update_in_background(self) -> None:
+        th = self._update_thread
+        if th is not None and th.is_alive():
+            return
+
+        def work() -> None:
+            sha = self.updater.check_and_install() if self.updater else None
+            if sha:
+                self._update_ready = sha
+
+        self._update_thread = threading.Thread(target=work, daemon=True, name="atualizador")
+        self._update_thread.start()
 
     def open_panels(self, procs: Dict[str, List[str]]) -> None:
         tokens = panel_tokens(self.store)
@@ -382,9 +532,17 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
     if (store / "agents").is_dir():                              # seus agentes personalizados (ex.: agents/bit.json)
         shutil.copytree(store / "agents", workdir / "agents", dirs_exist_ok=True)
+    updater = updater_from_env(env, store)
+    if updater is not None and updater.check_and_install():
+        restart_supervisor()                                     # liga já com a versão nova (não volta daqui)
     restore(home, store)
     interval = max(10.0, float(env.get("BYTE_SINCRONIZAR_MIN", "5") or 5) * 60.0)
-    return Supervisor(home, store, workdir, env, interval).run()
+    try:
+        hours = float(env.get("BYTE_GITHUB_INTERVALO_H", "6") or 0)
+    except ValueError:
+        hours = 6.0
+    update_every = max(0.25, hours) * 3600.0 if hours > 0 else 0.0
+    return Supervisor(home, store, workdir, env, interval, updater=updater, update_interval_s=update_every).run()
 
 
 if __name__ == "__main__":

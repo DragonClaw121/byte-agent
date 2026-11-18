@@ -189,3 +189,113 @@ def test_remote_panel_keeps_kronus_local_and_tokens_stable(tmp_path):
     assert oct((tmp_path / "painel-tokens.json").stat().st_mode)[-3:] == "600"
     assert nuvem.public_address({"CONTAINER_APP_NAME": "byte", "CONTAINER_APP_ENV_DNS_SUFFIX": "x.brazilsouth.azurecontainerapps.io"}) \
         == "https://byte.x.brazilsouth.azurecontainerapps.io"
+
+
+# ------------------------------------------------------------------ v13.10: atualização pelo GitHub
+GREEN = "a" * 40
+RED = "b" * 40
+
+
+def _zip_bytes(top="DragonClaw121-byte-agent-aaaaaaa", byte=True):
+    buf = io.BytesIO()
+    import zipfile
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{top}/pyproject.toml", "[project]\nname='byte-agent'\n")
+        if byte:
+            zf.writestr(f"{top}/byte_agent/nuvem.py", "# supervisor\n")
+    return buf.getvalue()
+
+
+class FakeGitHub:
+    def __init__(self, runs=None, archive=None):
+        import http.server
+        import json as _json
+        self.runs = runs if runs is not None else [{"name": "outro", "head_sha": RED}, {"name": "testes", "head_sha": GREEN}]
+        self.archive = archive if archive is not None else _zip_bytes()
+        self.calls, self.fail = [], False
+        outer = self
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                outer.calls.append(self.path)
+                if outer.fail:
+                    self.send_response(503); self.send_header("Content-Length", "0"); self.end_headers(); return
+                if "/actions/runs?" in self.path:
+                    assert "status=success" in self.path and "branch=main" in self.path
+                    raw = _json.dumps({"workflow_runs": outer.runs}).encode()
+                elif "/zipball/" in self.path:
+                    raw = outer.archive
+                else:
+                    self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
+                self.send_response(200); self.send_header("Content-Length", str(len(raw))); self.end_headers()
+                self.wfile.write(raw)
+
+        self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_port}"
+
+
+def test_updater_installs_only_the_newest_commit_that_passed_the_tests(tmp_path):
+    gh = FakeGitHub()
+    installed = []
+    up = nuvem.GitHubUpdater("DragonClaw121/byte-agent", tmp_path, api=gh.url, installer=installed.append)
+    try:
+        assert up.latest_green() == GREEN                                  # ignora outro workflow
+        assert up.check_and_install() == GREEN
+        assert installed == [tmp_path / nuvem.GITHUB_ZIP] and (tmp_path / nuvem.GITHUB_VERSION_FILE).read_text().strip() == GREEN
+        assert any(f"/zipball/{GREEN}" in c for c in gh.calls)
+        assert up.check_and_install() is None and len(installed) == 1     # já instalada: nada muda
+        gh.runs = []                                                        # nada aprovado: nada instala
+        (tmp_path / nuvem.GITHUB_VERSION_FILE).write_text("")
+        assert up.check_and_install() is None and len(installed) == 1
+    finally:
+        gh.srv.shutdown()
+
+
+def test_updater_rejects_strange_archives_and_survives_github_outages(tmp_path):
+    gh = FakeGitHub(archive=_zip_bytes(byte=False))
+    installed = []
+    up = nuvem.GitHubUpdater("DragonClaw121/byte-agent", tmp_path, api=gh.url, installer=installed.append)
+    try:
+        assert up.check_and_install() is None and installed == [] and "não parece a Byte" in up.last_error
+        assert not (tmp_path / nuvem.GITHUB_VERSION_FILE).exists() and not (tmp_path / nuvem.GITHUB_ZIP).exists()
+        gh.archive = b"isto nao e um zip"
+        assert up.check_and_install() is None and "BadZipFile" in up.last_error
+        gh.fail = True
+        assert up.check_and_install() is None and "HTTP" in up.last_error or "503" in up.last_error
+        def broken(_):
+            raise RuntimeError("pip falhou: sem rede")
+        gh.fail, gh.archive = False, _zip_bytes()
+        up.installer = broken
+        assert up.check_and_install() is None and not (tmp_path / nuvem.GITHUB_VERSION_FILE).exists()   # tenta de novo depois
+    finally:
+        gh.srv.shutdown()
+    assert nuvem.updater_from_env({}, tmp_path) is None
+    assert nuvem.updater_from_env({"BYTE_GITHUB_REPO": "nao e repo; rm -rf /"}, tmp_path) is None
+    assert nuvem.updater_from_env({"BYTE_GITHUB_REPO": "DragonClaw121/byte-agent"}, tmp_path).branch == "main"
+
+
+def test_supervisor_restarts_itself_when_a_new_version_is_installed(tmp_path, monkeypatch):
+    home, store = tmp_path / "home", tmp_path / "store"
+    make_home(home).close()
+    monkeypatch.setattr(nuvem, "commands", lambda env: {"principal": [sys.executable, "-c", "import time; time.sleep(60)"]})
+
+    class StubUpdater:
+        def __init__(self):
+            self.calls = 0
+        def check_and_install(self):
+            self.calls += 1
+            return GREEN
+
+    restarted = []
+    sup = nuvem.Supervisor(home, store, tmp_path, {}, interval_s=3600, updater=StubUpdater(), update_interval_s=0.5,
+                           restart=lambda: restarted.append(True))
+    monkeypatch.setattr(sup, "_pause", lambda seconds: time.sleep(min(seconds, 0.2)))
+    threading.Timer(15.0, sup.stopping.set).start()                     # trava de segurança do teste
+    assert sup.run() == 0
+    assert restarted == [True] and sup.updater.calls == 1
+    assert all(p.poll() is not None for p in sup.children.values())      # agentes encerrados antes de reiniciar
+    assert (store / nuvem.SNAPSHOT).is_file()                            # e os dados salvos

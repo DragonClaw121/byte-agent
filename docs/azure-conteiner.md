@@ -210,3 +210,18 @@ az containerapp logs show -g byte-rg -n byte --tail 300 | grep -o 'Painel [^"]*'
 Trate esses links como senha: quem tiver o link controla a Byte. Para trocar os tokens, apague
 `painel-tokens.json` do compartilhamento e reinicie. Para desligar o painel remoto:
 `az containerapp update -g byte-rg -n byte --set-env-vars BYTE_PAINEL_REMOTO=0`.
+
+## Atualização automática pelo GitHub (v13.10)
+Com `BYTE_GITHUB_REPO=DragonClaw121/byte-agent`, a Byte se atualiza sozinha: ao ligar e a cada 6 horas ela procura
+o commit mais novo do `main` cujos **testes passaram** no GitHub Actions, baixa, instala e reinicia os agentes (os
+dados são salvos antes). Commit com teste falhando nunca é instalado. Para ligar (uma vez):
+```
+az containerapp update -g byte-rg -n byte --set-env-vars BYTE_GITHUB_REPO=DragonClaw121/byte-agent -o none
+```
+- `BYTE_GITHUB_INTERVALO_H` muda o intervalo (padrão 6; `0` = só ao ligar). `BYTE_GITHUB_BRANCH` muda o branch.
+- Para forçar agora: reinicie a revisão (ela confere ao ligar).
+- A cópia baixada fica no compartilhamento (`byte-agent-github.zip`, versão em `github-versao.txt`): se o GitHub
+  estiver fora do ar, a Byte liga com ela.
+- Repositório privado: crie um token de acesso fino só de leitura (Contents e Actions) e grave como segredo
+  `BYTE_GITHUB_TOKEN`.
+- Para voltar ao modo manual (zip), remova a variável: `az containerapp update -g byte-rg -n byte --remove-env-vars BYTE_GITHUB_REPO`.
