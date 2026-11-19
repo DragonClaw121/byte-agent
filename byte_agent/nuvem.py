@@ -565,6 +565,7 @@ def main() -> int:
     set_timezone(env)
     home = Path(env.get("HOME") or "/root")
     store = Path(env.get("BYTE_DADOS_PERSISTENTES", "/mnt/dados"))
+    env["BYTE_DADOS_PERSISTENTES"] = str(store)     # v13.18: os agentes precisam saber (/atualizar, /avaliar)
     workdir = Path(env.get("BYTE_PASTA_TRABALHO", "/app"))
     workdir.mkdir(parents=True, exist_ok=True)
     if (store / "agents").is_dir():                              # seus agentes personalizados (ex.: agents/bit.json)

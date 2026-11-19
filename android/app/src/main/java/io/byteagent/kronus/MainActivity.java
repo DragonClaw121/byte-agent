@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView title, state, log;
+    private TextView title, state, log, diag;
     private Button mic, disconnect;
     private CheckBox useWatch;
     private LinearLayout setup;
@@ -211,6 +211,16 @@ public class MainActivity extends Activity {
         useWatch.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("watch", on).apply());
         root.addView(useWatch);
 
+        diag = new TextView(this);
+        diag.setTextColor(muted);
+        diag.setTextSize(13);
+        root.addView(diag);
+
+        Button test = new Button(this);
+        test.setText("Testar som do relógio");
+        test.setOnClickListener(v -> testWatch());
+        root.addView(test);
+
         ScrollView scroll = new ScrollView(this);
         log = new TextView(this);
         log.setTextColor(ink);
@@ -246,6 +256,36 @@ public class MainActivity extends Activity {
 
     private void say(String text) {
         ui.post(() -> state.setText(text));
+    }
+
+    private void info(String text) {
+        ui.post(() -> diag.setText(text));
+    }
+
+    /** Bipe e uma frase pelo canal de ligação: mostra se o relógio recebe o som, sem depender do servidor. */
+    private void testWatch() {
+        if (busy) return;
+        busy = true;
+        new Thread(() -> {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            boolean watch = routeToWatch(am) != null;
+            info(routeInfo);
+            try {
+                android.media.ToneGenerator tone = new android.media.ToneGenerator(AudioManager.STREAM_VOICE_CALL, 90);
+                tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 500);
+                Thread.sleep(700);
+                tone.release();
+                JSONObject fake = new JSONObject();
+                fake.put("speech", watch ? "Teste do relógio. Se você está me ouvindo no pulso, deu certo."
+                                         : "Não achei o relógio. Este som saiu pelo celular.");
+                speak(fake, watch);
+            } catch (Exception e) {
+                info(routeInfo + " — erro no teste: " + e.getMessage());
+            } finally {
+                releaseWatch(am, watch);
+                busy = false;
+            }
+        }).start();
     }
 
     private void addLog(String who, String text) {
@@ -323,40 +363,56 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ áudio do relógio (Bluetooth)
-    private boolean routeToWatch(AudioManager am) {
-        if (!prefs.getBoolean("watch", true)) return false;
+    /** Liga o áudio do relógio (como numa ligação). Devolve o nome do aparelho, ou null (e explica em routeInfo). */
+    private String routeInfo = "";
+
+    private String routeToWatch(AudioManager am) {
+        if (!prefs.getBoolean("watch", true)) {
+            routeInfo = "📱 Áudio: celular (opção do relógio desligada)";
+            return null;
+        }
+        StringBuilder seen = new StringBuilder();
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
+                    seen.append(seen.length() == 0 ? "" : ", ").append(d.getProductName()).append(" (tipo ").append(d.getType()).append(")");
                     if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
                         am.setMode(AudioManager.MODE_IN_COMMUNICATION);
                         if (am.setCommunicationDevice(d)) {
-                            Thread.sleep(700);          // o relógio leva um instante para abrir o canal de voz
-                            return true;
+                            Thread.sleep(800);          // o relógio leva um instante para abrir o canal de voz
+                            routeInfo = "⌚ Áudio: " + d.getProductName() + " (Bluetooth)";
+                            return String.valueOf(d.getProductName());
                         }
                     }
                 }
-                return false;
             }
-            if (!am.isBluetoothScoAvailableOffCall()) return false;
-            am.setMode(AudioManager.MODE_IN_COMMUNICATION);
-            am.startBluetoothSco();
-            am.setBluetoothScoOn(true);
-            for (int i = 0; i < 30 && !am.isBluetoothScoOn(); i++) Thread.sleep(100);
-            return am.isBluetoothScoOn();
+            // método antigo (Android 11 ou menos, e plano B em celulares que não listam o relógio acima)
+            if (am.isBluetoothScoAvailableOffCall()) {
+                am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                am.startBluetoothSco();
+                am.setBluetoothScoOn(true);
+                for (int i = 0; i < 40 && !am.isBluetoothScoOn(); i++) Thread.sleep(100);
+                if (am.isBluetoothScoOn()) {
+                    Thread.sleep(500);
+                    routeInfo = "⌚ Áudio: relógio (Bluetooth, modo antigo)";
+                    return "relógio";
+                }
+                am.stopBluetoothSco();
+            }
         } catch (Exception e) {
-            return false;
+            seen.append(" [erro: ").append(e.getClass().getSimpleName()).append("]");
         }
+        am.setMode(AudioManager.MODE_NORMAL);
+        routeInfo = "📱 Áudio: celular — não achei o relógio. Aparelhos de voz: " + (seen.length() == 0 ? "nenhum" : seen);
+        return null;
     }
 
     private void releaseWatch(AudioManager am, boolean routed) {
         try {
             if (routed) {
                 if (Build.VERSION.SDK_INT >= 31) am.clearCommunicationDevice();
-                else {
-                    am.setBluetoothScoOn(false);
-                    am.stopBluetoothSco();
-                }
+                am.setBluetoothScoOn(false);
+                am.stopBluetoothSco();
             }
             am.setMode(AudioManager.MODE_NORMAL);
         } catch (Exception ignored) {
@@ -378,9 +434,10 @@ public class MainActivity extends Activity {
 
     private void converse() {
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        boolean watch = routeToWatch(am);
+        boolean watch = routeToWatch(am) != null;
+        info(routeInfo);
         try {
-            say(watch ? "Ouvindo pelo relógio..." : "Ouvindo...");
+            say(watch ? "Ouvindo pelo relógio..." : "Ouvindo pelo celular...");
             byte[] pcm = record(watch);
             ui.post(() -> mic.setText("🎙️"));
             if (pcm == null) {

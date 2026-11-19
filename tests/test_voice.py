@@ -427,3 +427,31 @@ def test_telegram_says_what_it_heard_before_the_slow_reply(tmp_path, fake, monke
     finally:
         rt.stop()
         tg.httpd.shutdown()
+
+
+def test_voice_download_retries_slow_telegram(tmp_path, fake, monkeypatch):
+    """v13.18: um getFile lento (ex.: agente se atualizando) não perde mais a nota de voz."""
+    rt = runtime(tmp_path, fake, monkeypatch)
+    tg = FakeTelegram()
+    bridge = TelegramBridge(rt.service, token=TOKEN, allowed_chat_ids=[OWNER], api_base=tg.url)
+    real_api = bridge._api
+    fails = {"n": 1}
+
+    def flaky(method, payload=None, timeout_s=20.0):
+        if method == "getFile" and fails["n"] > 0:
+            fails["n"] -= 1
+            raise TimeoutError("The read operation timed out")
+        return real_api(method, payload, timeout_s)
+
+    monkeypatch.setattr(bridge, "_api", flaky)
+    monkeypatch.setattr(bridge._stop, "wait", lambda s=None: False)          # sem esperar de verdade no teste
+    try:
+        tg.files["voz1"] = b"OggS-nota"
+        assert bridge._download("voz1", 1000) == b"OggS-nota"                 # 1ª falhou, 2ª deu certo
+        fails["n"] = 10
+        with pytest.raises(RuntimeError, match="Mande de novo"):
+            bridge._download("voz1", 1000)
+    finally:
+        bridge.stop()
+        tg.httpd.shutdown()
+        rt.stop()

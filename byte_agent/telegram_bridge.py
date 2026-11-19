@@ -372,16 +372,28 @@ class TelegramBridge:
                 stop.set()
         return keep()
 
-    def _download(self, file_id: Any, limit: int) -> bytes:
-        info = self._api("getFile", {"file_id": file_id}).get("result") or {}
-        file_path = str(info.get("file_path") or "")
-        if not file_path or ".." in file_path:
-            raise RuntimeError("Não consegui obter o arquivo no Telegram.")
-        with urllib.request.urlopen(f"{self.api_base}/file/bot{self._token}/{file_path}", timeout=60.0) as resp:
-            data = resp.read(limit + 1)
-        if len(data) > limit:
-            raise RuntimeError("Arquivo grande demais.")
-        return data
+    def _download(self, file_id: Any, limit: int, attempts: int = 3) -> bytes:
+        """v13.18: baixa o arquivo do Telegram com novas tentativas (rede lenta ou servidor ocupado não perdem o áudio)."""
+        last: Optional[BaseException] = None
+        for attempt in range(attempts):
+            try:
+                info = self._api("getFile", {"file_id": file_id}, timeout_s=30.0).get("result") or {}
+                file_path = str(info.get("file_path") or "")
+                if not file_path or ".." in file_path:
+                    raise RuntimeError("Não consegui obter o arquivo no Telegram.")
+                with urllib.request.urlopen(f"{self.api_base}/file/bot{self._token}/{file_path}", timeout=60.0) as resp:
+                    data = resp.read(limit + 1)
+                if len(data) > limit:
+                    raise RuntimeError("Arquivo grande demais.")
+                return data
+            except RuntimeError:
+                raise
+            except (OSError, urllib.error.URLError) as err:          # inclui TimeoutError
+                last = err
+                if attempt < attempts - 1 and not self._stop.wait(2.0 * (attempt + 1)):
+                    continue
+        raise RuntimeError("Não consegui baixar o áudio do Telegram (rede lenta ou o agente estava se atualizando). "
+                           "Mande de novo em instantes.") from last
 
     def _handle_voice(self, chat_id: int, media: Dict[str, Any], private: bool) -> None:
         """Nota de voz -> transcrição -> resposta do agente (texto, cartões de aprovação e, se configurado, áudio).
