@@ -35,6 +35,19 @@ fazem; não usa a operadora nem custa nada): o Android liga o relógio e mantém
   **D/D0** = modo antigo, sem chamada. **Testar som do relógio** faz uma chamada de teste: 1 bipe = C1, 2 = C2.
 - Se o Android recusar a chamada, o app usa o modo antigo sozinho.
 
+## Kronus te liga (v1.11)
+Ligue **"📞 Kronus pode me ligar para avisar"**. O app fica atento aos avisos do servidor (uma notificação discreta
+"Kronus atento" fica fixa; é exigência do Android) e:
+- **lembretes** e **compromissos chegando** tocam como **chamada recebida**; atenda no relógio (se ele aceitar
+  atender chamadas de apps) ou na notificação do celular. O Kronus lê o aviso com a voz dele e, depois do bipe, ouve a
+  sua resposta (ex.: "me lembra de novo em 10 minutos");
+- se ninguém atender em 30 s, vira **chamada perdida** com o texto na notificação; os demais avisos chegam como
+  notificação comum (dá para incluí-los nas chamadas). O Telegram continua recebendo tudo.
+- **Teste:** "Testar: Kronus me liga (em 5 s)".
+- **Xiaomi/Redmi/Poco:** em Configurações → Apps → Kronus, ligue **Início automático** e em **Economia de bateria**
+  escolha **Sem restrições**; senão o sistema fecha o app e as chamadas não chegam. No app do relógio, permita as
+  notificações do Kronus para ele vibrar no pulso.
+
 ## Reconhecimento de voz melhor
 O microfone do relógio numa chamada tem qualidade de telefone. O modelo `whisper-large-v3` (sem "turbo") do Groq é
 mais preciso nesse tipo de áudio e continua gratuito:

@@ -63,6 +63,7 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final int RATE = 16000;
     private static final int REQ_PERMS = 7;
+    static final String ACTION_ANSWER = "io.byteagent.kronus.ATENDER";
     private static final Pattern LINK = Pattern.compile("(https://[A-Za-z0-9.\\-]+(?::\\d+)?)/voz#parear=(\\d{6})");
     private static final Pattern CODE = Pattern.compile("^\\s*(\\d{6})\\s*$");
 
@@ -93,12 +94,28 @@ public class MainActivity extends Activity {
         autoListen = isVoiceIntent(getIntent());
         refresh();
         askPermissions();
+        handleAnswer(getIntent());
+    }
+
+    /** Chamada do Kronus atendida pela notificação: aparece sobre a tela de bloqueio SÓ nesse caso. */
+    private void handleAnswer(Intent intent) {
+        if (intent == null || !ACTION_ANSWER.equals(intent.getAction())) {
+            if (Build.VERSION.SDK_INT >= 27) setShowWhenLocked(false);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
+        say("Atendendo o Kronus...");
+        KronusCallService.answerIncoming();
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        handleAnswer(intent);
         if (isVoiceIntent(intent)) {
             autoListen = true;
             maybeAutoListen();
@@ -106,8 +123,21 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onPause() {
+        KronusCallService.uiListener = null;
+        super.onPause();
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
+        KronusCallService.uiListener = new Voz.Ui() {
+            @Override public void state(String text) { say(text); }
+            @Override public void log(String who, String text) { addLog(who, text); }
+        };
+        if (paired() && prefs.getBoolean("ligar", false) && !KronusWatchService.isRunning()) {
+            try { KronusWatchService.start(this); } catch (Exception ignored) { }
+        }
         checkStatus();
         maybeAutoListen();
     }
@@ -299,6 +329,52 @@ public class MainActivity extends Activity {
         follow.setChecked(prefs.getBoolean("seguir", false));
         follow.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("seguir", on).apply());
         root.addView(follow);
+
+        CheckBox calls = new CheckBox(this);
+        calls.setText("📞 Kronus pode me ligar para avisar (lembretes e compromissos)");
+        calls.setTextColor(ink);
+        calls.setChecked(prefs.getBoolean("ligar", false));
+        LinearLayout callOpts = new LinearLayout(this);
+        callOpts.setOrientation(LinearLayout.VERTICAL);
+        callOpts.setPadding(dp(24), 0, 0, 0);
+        String[][] kinds = {{"ligar_lembretes", "Lembretes", "1"}, {"ligar_agenda", "Compromissos chegando (agenda)", "1"},
+                {"ligar_outros", "Outros avisos (objetivos, tarefas paradas...)", "0"}};
+        for (String[] kind : kinds) {
+            CheckBox cb = new CheckBox(this);
+            cb.setText(kind[1]);
+            cb.setTextColor(muted);
+            cb.setChecked(prefs.getBoolean(kind[0], "1".equals(kind[2])));
+            cb.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean(kind[0], on).apply());
+            callOpts.addView(cb);
+        }
+        callOpts.setVisibility(calls.isChecked() ? View.VISIBLE : View.GONE);
+        calls.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean("ligar", on).apply();
+            callOpts.setVisibility(on ? View.VISIBLE : View.GONE);
+            if (on) {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_PERMS);
+                KronusWatchService.start(this);
+                say("Kronus atento: lembretes vão tocar como chamada.");
+            } else {
+                KronusWatchService.stop(this);
+                say("O Kronus não vai mais ligar; os avisos seguem no Telegram.");
+            }
+        });
+        root.addView(calls);
+        root.addView(callOpts);
+
+        Button ringTest = new Button(this);
+        ringTest.setText("Testar: Kronus me liga (em 5 s)");
+        ringTest.setOnClickListener(v -> {
+            say("Em 5 segundos o Kronus vai ligar. Pode bloquear o celular.");
+            ui.postDelayed(() -> {
+                if (!KronusCallService.ring(this, "Isto é um teste do Kronus te liga. Se você atendeu pelo relógio, deu certo. "
+                        + "Pode me responder depois do bipe."))
+                    say("⚠️ Não consegui ligar: " + KronusCallService.lastError);
+            }, 5000);
+        });
+        root.addView(ringTest);
 
         Button replay = new Button(this);
         replay.setText("Ouvir minha última gravação");
@@ -856,7 +932,7 @@ public class MainActivity extends Activity {
 
     /** Os filtros de chamada (redutor de ruído, ganho automático, eco) "cortam" o começo da fala enquanto se ajustam;
      *  o app já ajusta o volume sozinho (normalize). Celulares sem esses filtros simplesmente ignoram. */
-    private static void disableVoiceEffects(int session) {
+    static void disableVoiceEffects(int session) {
         try {
             if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
                 android.media.audiofx.NoiseSuppressor ns = android.media.audiofx.NoiseSuppressor.create(session);
@@ -875,7 +951,7 @@ public class MainActivity extends Activity {
     }
 
     /** O microfone do relógio (canal de ligação) costuma ser baixo: sobe o volume até ~80% sem distorcer. */
-    private static byte[] normalize(byte[] pcm) {
+    static byte[] normalize(byte[] pcm) {
         ByteBuffer in = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN);
         int peak = 1;
         for (int i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs((int) in.getShort(i)));
@@ -1223,7 +1299,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.10");
+        con.setRequestProperty("User-Agent", "kronus-android/1.11");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

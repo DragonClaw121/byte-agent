@@ -31,6 +31,9 @@ public class KronusCallService extends ConnectionService {
     static volatile KronusConnection current;
     static volatile CountDownLatch activeLatch = new CountDownLatch(1);
     static volatile String lastError = "";
+    static volatile KronusConnection incoming;              // chamada recebida tocando ("Kronus te liga")
+    static volatile Voz.Ui uiListener;                      // a tela, quando aberta, acompanha a chamada
+    static final int RING_TIMEOUT_MS = 30000;
 
     static PhoneAccountHandle handle(Context c) {
         return new PhoneAccountHandle(new ComponentName(c, KronusCallService.class), "kronus");
@@ -76,6 +79,35 @@ public class KronusCallService extends ConnectionService {
         return current;
     }
 
+    /** "Kronus te liga": cria uma chamada recebida com o texto do aviso. false se não deu (vira notificação). */
+    static boolean ring(Context c, String text) {
+        if (current != null || incoming != null) return false;          // já em chamada com o Kronus
+        try {
+            TelecomManager tm = c.getSystemService(TelecomManager.class);
+            if (!tm.isIncomingCallPermitted(handle(c))) return false;    // outra chamada (ex.: da operadora) em andamento
+            Bundle inner = new Bundle();
+            inner.putString("aviso", text);
+            Bundle extras = new Bundle();
+            extras.putBundle(TelecomManager.EXTRA_INCOMING_CALL_EXTRAS, inner);
+            extras.putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, Uri.fromParts(SCHEME, "Kronus", null));
+            tm.addNewIncomingCall(handle(c), extras);
+            return true;
+        } catch (Exception e) {
+            lastError = "o Android recusou a chamada recebida (" + e.getClass().getSimpleName() + ")";
+            return false;
+        }
+    }
+
+    static void answerIncoming() {
+        KronusConnection k = incoming;
+        if (k != null) k.onAnswer();
+    }
+
+    static void declineIncoming() {
+        KronusConnection k = incoming;
+        if (k != null) k.onReject();
+    }
+
     static void end() {
         KronusConnection k = current;
         if (k != null) k.hangUp();
@@ -96,6 +128,33 @@ public class KronusCallService extends ConnectionService {
     }
 
     @Override
+    public Connection onCreateIncomingConnection(PhoneAccountHandle h, ConnectionRequest request) {
+        Bundle extras = request.getExtras();
+        String text = extras == null ? "" : extras.getString("aviso", "");
+        KronusConnection k = new KronusConnection();
+        k.ctx = getApplicationContext();
+        k.announce = text;
+        k.ringing = true;
+        k.setConnectionProperties(Connection.PROPERTY_SELF_MANAGED);
+        k.setAudioModeIsVoip(true);
+        k.setAddress(Uri.fromParts(SCHEME, "Kronus", null), TelecomManager.PRESENTATION_ALLOWED);
+        k.setCallerDisplayName("Kronus", TelecomManager.PRESENTATION_ALLOWED);
+        k.setRinging();
+        incoming = k;
+        new Thread(() -> {                                  // ninguém atendeu em 30 s: chamada perdida
+            Voz.sleep(RING_TIMEOUT_MS);
+            if (k.ringing) k.missed();
+        }, "kronus-toque").start();
+        return k;
+    }
+
+    @Override
+    public void onCreateIncomingConnectionFailed(PhoneAccountHandle h, ConnectionRequest request) {
+        Bundle extras = request.getExtras();
+        KronusWatchService.notifyInfo(getApplicationContext(), extras == null ? "Aviso do Kronus" : extras.getString("aviso", "Aviso do Kronus"));
+    }
+
+    @Override
     public void onCreateOutgoingConnectionFailed(PhoneAccountHandle h, ConnectionRequest request) {
         lastError = "o Android recusou a chamada";
         activeLatch.countDown();
@@ -107,6 +166,66 @@ public class KronusCallService extends ConnectionService {
         volatile boolean bluetooth = false;
         volatile boolean ended = false;
         volatile String routeName = "";
+        // chamada recebida
+        volatile boolean ringing = false;
+        String announce = "";
+        Context ctx;
+
+        @Override
+        public void onShowIncomingCallUi() {
+            if (ctx != null) KronusWatchService.showIncoming(ctx, announce);
+        }
+
+        /** Atendeu (no relógio, se ele aceitar, ou na notificação/tela do celular). */
+        @Override
+        public synchronized void onAnswer() {
+            if (!ringing) return;
+            ringing = false;
+            if (ctx != null) KronusWatchService.clearIncoming(ctx);
+            setActive();
+            current = this;
+            if (incoming == this) incoming = null;
+            final Context c = ctx;
+            new Thread(() -> {
+                Voz v = new Voz(c, ui());
+                try {
+                    v.announceAndListen(this, announce);
+                } finally {
+                    v.close();
+                }
+            }, "kronus-aviso").start();
+        }
+
+        @Override
+        public synchronized void onReject() {
+            if (!ringing) return;
+            ringing = false;
+            endRinging(DisconnectCause.REJECTED, null);
+        }
+
+        synchronized void missed() {
+            if (!ringing) return;
+            ringing = false;
+            endRinging(DisconnectCause.MISSED, "📞 Chamada perdida do Kronus: ");
+        }
+
+        private void endRinging(int cause, String prefix) {
+            if (ctx != null) {
+                KronusWatchService.clearIncoming(ctx);
+                KronusWatchService.notifyInfo(ctx, (prefix == null ? "" : prefix) + announce);   // o aviso não se perde
+            }
+            ended = true;
+            setDisconnected(new DisconnectCause(cause));
+            destroy();
+            if (incoming == this) incoming = null;
+        }
+
+        private static Voz.Ui ui() {
+            return new Voz.Ui() {
+                @Override public void state(String text) { Voz.Ui u = uiListener; if (u != null) u.state(text); }
+                @Override public void log(String who, String text) { Voz.Ui u = uiListener; if (u != null) u.log(who, text); }
+            };
+        }
 
         @SuppressWarnings("deprecation")
         @Override
@@ -148,7 +267,8 @@ public class KronusCallService extends ConnectionService {
 
         @Override
         public void onDisconnect() {
-            hangUp();
+            if (ringing) onReject();
+            else hangUp();
         }
 
         @Override

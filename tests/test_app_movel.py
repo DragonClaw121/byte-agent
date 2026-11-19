@@ -173,3 +173,26 @@ def test_speak_route_can_return_wav_for_the_app(tmp_path, monkeypatch):
     finally:
         rt.stop()
         fake.httpd.shutdown()
+
+
+def test_android_app_has_its_own_notification_queue(tmp_path, monkeypatch):
+    """v13.22: o app (Kronus te liga) e a página /voz recebem cada um a sua cópia do aviso."""
+    import test_voice as tv
+    fake = tv.FakeOllama()
+    rt = tv.runtime(tmp_path, fake, monkeypatch)
+    try:
+        token = rt.service.device_registry.pair(rt.service.device_registry.new_code()["code"], "Android app")
+        rt.service.db.enqueue_proactive_message("reminder", "⏰ Lembrete: tomar remédio")
+
+        def get(q):
+            req = urllib.request.Request(f"http://127.0.0.1:{rt.port}/api/v1/notifications{q}",
+                                         headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return [(n["type"], n["text"]) for n in json.loads(resp.read())["notifications"]]
+
+        assert get("?canal=app") == [("reminder", "⏰ Lembrete: tomar remédio")]
+        assert get("?canal=app") == []
+        assert get("") == [("reminder", "⏰ Lembrete: tomar remédio")]          # a /voz ainda recebe a dela
+    finally:
+        rt.stop()
+        fake.httpd.shutdown()

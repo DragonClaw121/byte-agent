@@ -9,6 +9,14 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- v1.8: a conversa vira uma chamada do próprio app (como apps de voz), sem operadora -->
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <!-- v1.11: "Kronus te liga" — serviço atento aos avisos, notificação de chamada e religar depois de reiniciar -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:label="Kronus"
@@ -49,5 +57,21 @@
                 <action android:name="android.telecom.ConnectionService" />
             </intent-filter>
         </service>
+
+        <service
+            android:name=".KronusWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|microphone|phoneCall">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Assistente pessoal: recebe lembretes do servidor do usuário e os entrega como chamada no relógio." />
+        </service>
+
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.21"
+BYTE_VERSION = "13.22"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1413,7 +1413,7 @@ class UnifiedDatabase:
                 pass
         return item
 
-    PROACTIVE_CHANNELS = ("painel", "telegram", "api")
+    PROACTIVE_CHANNELS = ("painel", "telegram", "api", "app")      # "app": app Android (Kronus te liga), v13.22
     PROACTIVE_MAX_AGE_S = 2 * 86400.0
 
     def pop_undelivered_proactive_messages(self, channel: str = "painel") -> List[Dict[str, Any]]:
@@ -9824,7 +9824,9 @@ class ByteOmniServer:
                                           "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
                     return True
                 if method == "GET" and path == "/api/v1/notifications":
-                    items = service.db.pop_undelivered_proactive_messages("api")
+                    # v13.22: ?canal=app é a fila própria do app Android (não disputa avisos com a página /voz)
+                    canal = urllib.parse.parse_qs(parsed.query).get("canal", ["api"])[0]
+                    items = service.db.pop_undelivered_proactive_messages("app" if canal == "app" else "api")
                     self._send_json(200, {"agent": AGENT_NAME, "notifications": [
                         {"text": _CODE_FENCE_RE.sub("", str(i.get("message") or "")).strip(), "type": i.get("trigger_type"),
                          "created_at": i.get("created_at")} for i in items]})
