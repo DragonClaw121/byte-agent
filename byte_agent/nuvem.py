@@ -395,6 +395,20 @@ def updater_from_env(env: Dict[str, str], store: Path) -> Optional[GitHubUpdater
         return None
 
 
+UPDATE_FLAG = "atualizar-agora"
+
+
+def request_update(env: Dict[str, str]) -> Dict[str, str]:
+    """v13.17: /atualizar no Telegram. O agente roda em outro processo; deixa um sinal no armazenamento que o
+    supervisor confere a cada volta."""
+    store = env.get("BYTE_DADOS_PERSISTENTES", "").strip()
+    if not store or not env.get("BYTE_GITHUB_REPO", "").strip():
+        raise PermissionError("A atualização pelo GitHub só existe na nuvem (BYTE_GITHUB_REPO).")
+    Path(store, UPDATE_FLAG).write_text(str(int(time.time())))
+    return {"text": "🔄 Conferindo o GitHub agora. Se houver versão nova aprovada nos testes, instalo e reinicio "
+                    "(2 a 3 minutos) e aviso aqui. Se nenhum aviso chegar, já está na versão mais nova."}
+
+
 def restart_supervisor() -> None:
     """Troca o processo do supervisor pela versão recém-instalada (mesmo PID, o contêiner nem percebe)."""
     os.execv(sys.executable, [sys.executable, "-m", "byte_agent.nuvem"])
@@ -457,6 +471,14 @@ class Supervisor:
             if time.monotonic() >= next_sync:
                 self.sync()
                 next_sync = time.monotonic() + self.interval_s
+            flag = self.store / UPDATE_FLAG
+            if self.updater is not None and flag.exists():
+                try:
+                    flag.unlink()
+                except OSError:
+                    pass
+                log("Atualização pedida pelo Telegram (/atualizar).")
+                self._check_update_in_background()
             if self.updater is not None and self.update_interval_s > 0 and time.monotonic() >= next_update:
                 next_update = time.monotonic() + self.update_interval_s
                 self._check_update_in_background()

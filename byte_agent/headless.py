@@ -73,6 +73,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         gatilhos.install(service)                           # v13.14: gatilhos por evento (agenda, e-mail, tarefas)
         from . import app_movel
         app_movel.install(service)                          # v13.16: aparelhos pareados (app do Kronus)
+        from . import nuvem as _nuvem
+        service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service
 
 
@@ -130,6 +132,17 @@ def run_avatar_check(env: Any, data_dir: Path, say: str, list_hotkeys: bool) -> 
         if speech is not None and speech.last_error:
             print(f"Voz: {speech.last_error}")
     return 0
+
+
+def announce_version(service: Any) -> bool:
+    """v13.17: ligou numa versão diferente da última anunciada -> avisa no painel e no Telegram (a 1ª vez só registra)."""
+    db = service.db
+    last = db.get_setting("versao_anunciada")
+    db.set_setting("versao_anunciada", engine.BYTE_VERSION)
+    if last and last != engine.BYTE_VERSION:
+        db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{engine.BYTE_VERSION}.", brain_used="ATUALIZAÇÃO")
+        return True
+    return False
 
 
 def parse_chat_ids(raw: str) -> List[int]:
@@ -365,6 +378,8 @@ class Runtime:
                 raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
             self.server.token = self.args.ui_token
         self.service.api_enabled = bool(channels["api_token"])     # v13.16: /parear só onde há app/API
+        if self.manifest is None:
+            announce_version(self.service)
         port = self.port = self.server.start()
         print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{self.args.host}:{port}/ui?token={self.server.token}", flush=True)
         self._announce()

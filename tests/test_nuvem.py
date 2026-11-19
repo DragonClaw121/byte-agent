@@ -299,3 +299,40 @@ def test_supervisor_restarts_itself_when_a_new_version_is_installed(tmp_path, mo
     assert restarted == [True] and sup.updater.calls == 1
     assert all(p.poll() is not None for p in sup.children.values())      # agentes encerrados antes de reiniciar
     assert (store / nuvem.SNAPSHOT).is_file()                            # e os dados salvos
+
+
+def test_update_on_request_from_telegram(tmp_path, monkeypatch):
+    import pytest
+    home, store = tmp_path / "home", tmp_path / "store"
+    make_home(home).close()
+    store.mkdir()
+    with pytest.raises(PermissionError, match="só existe na nuvem"):
+        nuvem.request_update({})
+    out = nuvem.request_update({"BYTE_DADOS_PERSISTENTES": str(store), "BYTE_GITHUB_REPO": "DragonClaw121/byte-agent"})
+    assert "Conferindo o GitHub" in out["text"] and (store / nuvem.UPDATE_FLAG).exists()
+    monkeypatch.setattr(nuvem, "commands", lambda env: {"principal": [sys.executable, "-c", "import time; time.sleep(60)"]})
+
+    class Stub:
+        calls = 0
+        def check_and_install(self):
+            Stub.calls += 1
+            return None                                                   # nada novo: não reinicia
+
+    sup = nuvem.Supervisor(home, store, tmp_path, {}, interval_s=3600, updater=Stub(), update_interval_s=0,
+                           restart=lambda: (_ for _ in ()).throw(AssertionError("não devia reiniciar")))
+    monkeypatch.setattr(sup, "_pause", lambda seconds: time.sleep(min(seconds, 0.2)))
+    threading.Timer(2.0, sup.stopping.set).start()
+    assert sup.run() == 0
+    assert Stub.calls == 1 and not (store / nuvem.UPDATE_FLAG).exists()   # conferiu uma vez e apagou o sinal
+
+
+def test_new_version_is_announced_once(tmp_path, monkeypatch):
+    from byte_agent import engine, headless
+    db = engine.UnifiedDatabase(tmp_path / "byte.db", engine.VectorEngine())
+    svc = type("S", (), {"db": db})()
+    assert headless.announce_version(svc) is False                       # 1ª vez: só registra
+    assert headless.announce_version(svc) is False                       # mesma versão: nada
+    db.set_setting("versao_anunciada", "13.0")
+    assert headless.announce_version(svc) is True
+    msg = db.pop_undelivered_proactive_messages("telegram")[-1]["message"]
+    assert msg == f"✅ Atualizei: v13.0 → v{engine.BYTE_VERSION}."

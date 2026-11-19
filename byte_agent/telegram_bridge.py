@@ -39,6 +39,7 @@ HELP_TEXT = (
     "/avaliar — roda as avaliações de comportamento (nota por categoria e o que piorou desde a última)\n"
     "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
     "/parear — código para conectar o app do celular/relógio | /dispositivos — aparelhos conectados | /desparear <id>\n"
+    "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -566,6 +567,8 @@ class TelegramBridge:
             else:
                 ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
                 self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
+        elif cmd == "/atualizar":
+            self.send(chat_id, self._dispatch("request_update").get("text") or "Pedido enviado.")
         elif cmd == "/parear":
             self.send(chat_id, self._dispatch("device_pair_code").get("text") or "Pareamento indisponível.")
         elif cmd == "/dispositivos":
