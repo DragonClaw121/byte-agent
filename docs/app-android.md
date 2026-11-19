@@ -23,6 +23,12 @@ Diferente do app da página `/voz`, o app nativo consegue usar o **microfone e o
   voz") → escolha **Kronus**. Em alguns celulares a opção fica em "Assistente de voz".
   Se o Kronus não aparecer nessa lista, o atalho ainda funciona pelo ícone do app.
 
+## Som pelo modo música do relógio (recomendado)
+Relógios como o Jiditech só usam o "canal de ligação" para o microfone, e esse canal é ruim para tocar respostas.
+Ligue o **modo música / player** do relógio (o que controla as músicas do celular): com ele ativo, o app ouve você
+pelo microfone do relógio e toca a resposta pelo **áudio de mídia**, que sai inteiro e sem cortes. A opção
+"Tocar as respostas pelo modo música" vem ligada; o topo do app mostra 🎵 quando o modo música está ativo.
+
 ## Atualizar
 Cada versão nova do app é publicada no mesmo link. Baixe e instale por cima: a conexão é mantida.
 

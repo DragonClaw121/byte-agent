@@ -131,7 +131,9 @@ public class MainActivity extends Activity {
                     server = "🔴 Sem conexão com o Kronus (" + msg + ")";
                 }
             }
-            String text = server + "\n" + watch;
+            AudioDeviceInfo m = musicOutput();
+            String text = server + "\n" + watch + "\n" + (m != null ? "🎵 Modo música ativo: " + m.getProductName()
+                    : "🎵 Modo música do relógio desligado (respostas pelo canal de ligação)");
             ui.post(() -> conn.setText(text));
         }).start();
     }
@@ -260,6 +262,13 @@ public class MainActivity extends Activity {
         useWatch.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("watch", on).apply());
         root.addView(useWatch);
 
+        CheckBox music = new CheckBox(this);
+        music.setText("Tocar as respostas pelo modo música do relógio (quando ativo)");
+        music.setTextColor(muted);
+        music.setChecked(prefs.getBoolean("music", true));
+        music.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("music", on).apply());
+        root.addView(music);
+
         diag = new TextView(this);
         diag.setTextColor(muted);
         diag.setTextSize(13);
@@ -311,14 +320,14 @@ public class MainActivity extends Activity {
         ui.post(() -> diag.setText(text));
     }
 
-    /** Teste em 3 etapas pelo canal de ligação, com o resultado de cada uma na tela:
-     *  1) bipe do sistema, 2) tom gerado pelo app (caminho novo de reprodução), 3) a frase (voz do Android em arquivo). */
+    /** Teste em etapas, com o resultado de cada uma na tela:
+     *  1) bipe (canal de ligação), 2) tom pelo canal de ligação à moda antiga, 3) tom pelo modo música, 4) a frase. */
     private void testWatch() {
         if (busy) return;
         busy = true;
         new Thread(() -> {
             AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            boolean watch = routeToWatch(am) != null;
+            boolean call = routeToWatch(am) != null;
             StringBuilder r = new StringBuilder(routeInfo);
             try {
                 android.media.ToneGenerator tone = new android.media.ToneGenerator(AudioManager.STREAM_VOICE_CALL, 90);
@@ -327,26 +336,43 @@ public class MainActivity extends Activity {
                 tone.release();
                 r.append("\n1) bipe: tocado");
                 info(r.toString());
-                boolean toneOk = playWav(toneWav(), watch);
-                r.append("\n2) tom do app: ").append(toneOk ? playInfo : "falhou — " + playInfo);
-                info(r.toString());
-                String phrase = watch ? "Teste do relógio. Se você está me ouvindo no pulso, deu certo."
-                                      : "Não achei o relógio. Este som saiu pelo celular.";
-                byte[] wav = ttsReady ? ttsToWav(phrase) : null;
-                if (wav == null) {
-                    r.append("\n3) frase: a voz do Android não gerou o arquivo; usando a voz direta");
-                    speakDirect(phrase, watch);
-                } else if (playWav(wav, watch)) {
-                    r.append("\n3) frase: ").append(playInfo);
+                if (call) {
+                    boolean ok = playWav(toneWav(), CALL);
+                    r.append("\n2) tom pelo canal de ligação: ").append(ok ? playInfo : "falhou — " + playInfo);
                 } else {
-                    r.append("\n3) frase: ").append(playInfo).append(" — usando a voz direta");
-                    speakDirect(phrase, watch);
+                    r.append("\n2) tom pelo canal de ligação: relógio não encontrado");
+                }
+                info(r.toString());
+                AudioDeviceInfo music = musicOutput();
+                if (music != null) {
+                    if (call) {
+                        releaseWatch(am, true);
+                        call = false;
+                        sleep(900);
+                    }
+                    boolean ok = playWav(toneWav(), MUSIC);
+                    r.append("\n3) tom pelo modo música (").append(music.getProductName()).append("): ")
+                            .append(ok ? playInfo : "falhou — " + playInfo);
+                } else {
+                    r.append("\n3) tom pelo modo música: não ativo (ligue o player de música no relógio)");
+                }
+                info(r.toString());
+                int route = music != null && prefs.getBoolean("music", true) ? MUSIC : (call ? CALL : PHONE);
+                if (route == CALL && !call) route = PHONE;
+                String phrase = "Teste do Kronus. Se você está me ouvindo no pulso, deu certo.";
+                byte[] wav = ttsReady ? ttsToWav(phrase) : null;
+                if (wav != null && playWav(wav, route)) {
+                    r.append("\n4) frase: ").append(playInfo);
+                } else {
+                    r.append("\n4) frase: ").append(wav == null ? "a voz do Android não gerou o arquivo" : playInfo)
+                            .append(" — usando a voz direta");
+                    speakDirect(phrase, route);
                 }
                 info(r.toString());
             } catch (Exception e) {
                 info(r + "\nerro no teste: " + e.getMessage());
             } finally {
-                releaseWatch(am, watch);
+                releaseWatch(am, call);
                 busy = false;
             }
         }).start();
@@ -565,9 +591,10 @@ public class MainActivity extends Activity {
             if (!heard.isEmpty()) addLog("Você", heard);
             if (!reply.isEmpty()) addLog(prefs.getString("agent", "Kronus"), reply);
             say("Respondendo...");
-            if (watch) watch = ensureWatch(am);
             playInfo = "";
-            speak(res, watch);
+            int route = prepareOutput(am, watch);
+            if (route == MUSIC) watch = false;          // a ligação já foi fechada
+            speak(res, route);
             if (!playInfo.isEmpty()) info(routeInfo + "\n🔊 " + playInfo);
             say("Toque para falar.");
         } catch (Exception e) {
@@ -664,29 +691,57 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    /** Toca a voz do servidor (a mesma do Telegram); se não der, usa a voz do Android.
-     *  v1.2: tudo sai por um AudioTrack no canal de ligação, apontado para o relógio (como o bipe, que sempre funcionou),
-     *  com meio segundo de silêncio antes (o Bluetooth "engole" o começo do som). */
-    private void speak(JSONObject res, boolean watch) {
+    // ------------------------------------------------------------------ saída do som
+    // v1.4: três caminhos, do melhor para o pior.
+    //  MUSIC: modo música/player do relógio (Bluetooth de mídia): som bom, sem cortes. Exige fechar o canal de ligação.
+    //  CALL:  canal de ligação, do jeito antigo (o mesmo do bipe, que funciona), com 1 s de abertura.
+    //  PHONE: alto-falante do celular.
+    static final int MUSIC = 0, CALL = 1, PHONE = 2;
+    private static final String[] ROUTE_NAME = {"relógio (modo música)", "relógio (canal de ligação)", "celular"};
+
+    private volatile String playInfo = "";
+
+    private AudioDeviceInfo musicOutput() {
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
+            if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP) return d;
+        return null;
+    }
+
+    /** Decide por onde tocar a resposta e prepara o áudio. Devolve a rota escolhida. */
+    private int prepareOutput(AudioManager am, boolean callOpen) {
+        if (prefs.getBoolean("music", true) && musicOutput() != null) {
+            if (callOpen) {
+                releaseWatch(am, true);                 // fecha a ligação: com ela aberta o Android pausa o áudio de mídia
+                sleep(900);
+            }
+            return MUSIC;
+        }
+        if (callOpen) return ensureWatch(am) ? CALL : PHONE;
+        return PHONE;
+    }
+
+    /** Toca a resposta do servidor (a mesma voz do Telegram); se não der, a voz do Android pelo mesmo caminho. */
+    private void speak(JSONObject res, int route) {
         String b64 = res.optString("audio_b64", "");
         String text = res.optString("speech", res.optString("reply", ""));
         String mime = res.optString("audio_mime", "audio/ogg");
         if (!b64.isEmpty() && !"null".equals(b64)) {
             try {
                 byte[] audio = Base64.decode(b64, Base64.DEFAULT);
-                if (mime.contains("wav") && playWav(audio, watch)) return;
-                if (!mime.contains("wav") && playFile(audio, mime, watch)) return;
+                if (mime.contains("wav") && playWav(audio, route)) return;
+                if (!mime.contains("wav") && playFile(audio, mime, route)) return;
             } catch (Exception ignored) {
                 // cai para a voz do Android
             }
         }
         if (text.isEmpty() || !ttsReady) return;
         byte[] wav = ttsToWav(text);
-        if (wav != null && playWav(wav, watch)) return;
-        speakDirect(text, watch);                         // último recurso: a voz do Android tocando sozinha
+        if (wav != null && playWav(wav, route)) return;
+        speakDirect(text, route);                         // último recurso: a voz do Android tocando sozinha
     }
 
-    private void speakDirect(String text, boolean watch) {
+    private void speakDirect(String text, int route) {
         if (!ttsReady || text.isEmpty()) return;
         tts.setLanguage(new Locale("pt", "BR"));
         CountDownLatch done = new CountDownLatch(1);
@@ -696,7 +751,7 @@ public class MainActivity extends Activity {
             @Override public void onError(String id) { done.countDown(); }
         });
         Bundle params = new Bundle();
-        params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, watch ? AudioManager.STREAM_VOICE_CALL : AudioManager.STREAM_MUSIC);
+        params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, route == CALL ? AudioManager.STREAM_VOICE_CALL : AudioManager.STREAM_MUSIC);
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "direta");
         try {
             done.await(60, TimeUnit.SECONDS);
@@ -704,37 +759,41 @@ public class MainActivity extends Activity {
         }
     }
 
-    private AudioDeviceInfo scoOutput() {
-        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        if (Build.VERSION.SDK_INT >= 31) {
-            AudioDeviceInfo d = am.getCommunicationDevice();
-            if (d != null && d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return d;
+    @SuppressWarnings("deprecation")
+    private AudioTrack newTrack(int route, int rate, int mask, int bufBytes) {
+        if (route == CALL) {
+            // o mesmo "tipo" de som do bipe (canal de ligação clássico): é o que este relógio aceita
+            return new AudioTrack(AudioManager.STREAM_VOICE_CALL, rate, mask, AudioFormat.ENCODING_PCM_16BIT, bufBytes, AudioTrack.MODE_STREAM);
         }
-        for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
-            if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return d;
-        return null;
+        AudioTrack t = new AudioTrack.Builder()
+                .setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(route == MUSIC ? AudioAttributes.USAGE_MEDIA : AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate).setChannelMask(mask).build())
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(bufBytes)
+                .build();
+        if (route == MUSIC) {
+            AudioDeviceInfo d = musicOutput();
+            if (d != null) t.setPreferredDevice(d);
+        }
+        return t;
     }
 
-    private AudioAttributes attrs(boolean watch) {
-        return new AudioAttributes.Builder()
-                .setUsage(watch ? AudioAttributes.USAGE_VOICE_COMMUNICATION : AudioAttributes.USAGE_ASSISTANT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
-    }
-
-    /** O que a última reprodução fez (aparece na linha de diagnóstico). */
-    private volatile String playInfo = "";
-
-    /** WAV PCM 16 bits -> AudioTrack no relógio (ou no celular). false = não tocou voz de verdade (usa a reserva). */
-    private boolean playWav(byte[] wav, boolean watch) {
+    /** WAV PCM 16 bits -> AudioTrack pela rota. false = não tocou voz de verdade (quem chamou usa a reserva). */
+    private boolean playWav(byte[] wav, int route) {
         ByteBuffer b = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);
-        if (wav.length < 44 || b.getInt(0) != 0x46464952 || b.getInt(8) != 0x45564157) return false;   // "RIFF" "WAVE"
-        int rate = 0, channels = 1, bits = 16, dataAt = -1, dataLen = 0;
-        int pos = 12;
+        if (wav.length < 44 || b.getInt(0) != 0x46464952 || b.getInt(8) != 0x45564157) {   // "RIFF" "WAVE"
+            playInfo = "não é um arquivo WAV";
+            return false;
+        }
+        int rate = 0, channels = 1, bits = 16, dataAt = -1, dataLen = 0, pos = 12;
         while (pos + 8 <= wav.length) {
             int id = b.getInt(pos), len = b.getInt(pos + 4);
             if (id == 0x20746d66) {                        // "fmt "
                 int format = b.getShort(pos + 8) & 0xFFFF;
-                if (format != 1 && format != 0xFFFE) {      // PCM ou PCM "estendido"
+                if (format != 1 && format != 0xFFFE) {
                     playInfo = "formato de áudio não suportado (" + format + ")";
                     return false;
                 }
@@ -744,8 +803,7 @@ public class MainActivity extends Activity {
             } else if (id == 0x61746164) {                 // "data"
                 dataAt = pos + 8;
                 int rest = wav.length - dataAt;
-                // alguns motores de voz deixam o tamanho zerado (ou inválido) no cabeçalho: vale o resto do arquivo
-                dataLen = (len <= 0 || len > rest) ? rest : len;
+                dataLen = (len <= 0 || len > rest) ? rest : len;   // tamanho zerado/inválido: vale o resto do arquivo
                 break;
             }
             if (len < 0 || pos + 8 + len > wav.length) break;
@@ -755,33 +813,30 @@ public class MainActivity extends Activity {
             playInfo = "arquivo de voz inválido (taxa " + rate + ", " + bits + " bits)";
             return false;
         }
-        if (dataLen < rate / 5 * 2 * Math.max(1, channels)) {   // menos de 0,2 s de voz
+        int frameBytes = 2 * Math.max(1, channels);
+        if (dataLen < rate / 5 * frameBytes) {            // menos de 0,2 s
             playInfo = "arquivo de voz vazio (" + dataLen + " bytes)";
             return false;
         }
         int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
-        int frameBytes = 2 * Math.max(1, channels);
         int minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT);
-        AudioTrack track = new AudioTrack.Builder()
-                .setAudioAttributes(attrs(watch))
-                .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(rate).setChannelMask(mask).build())
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(Math.max(minBuf * 2, rate * frameBytes / 2))
-                .build();
+        AudioTrack track;
+        try {
+            track = newTrack(route, rate, mask, Math.max(minBuf * 2, rate * frameBytes / 2));
+        } catch (Exception e) {
+            playInfo = "o Android recusou o canal de áudio (" + e.getClass().getSimpleName() + ")";
+            return false;
+        }
         try {
             if (track.getState() != AudioTrack.STATE_INITIALIZED) {
                 playInfo = "o Android não abriu o canal de áudio";
                 return false;
             }
-            String where = "celular";
-            if (watch) {
-                AudioDeviceInfo sco = scoOutput();
-                if (sco != null && track.setPreferredDevice(sco)) where = "relógio";
-                else where = "relógio (sem preferência aceita)";
-            }
             track.play();
-            byte[] silence = new byte[(rate * frameBytes / 2) / frameBytes * frameBytes];   // 0,5 s
+            // abertura em silêncio: o canal de ligação demora a "acordar"; o de música, menos
+            double lead = route == CALL ? 1.0 : route == MUSIC ? 0.6 : 0.15;
+            int leadBytes = ((int) (rate * lead)) * frameBytes;
+            byte[] silence = new byte[Math.max(frameBytes, leadBytes)];
             track.write(silence, 0, silence.length);
             int written = 0;
             while (written < dataLen) {
@@ -792,12 +847,12 @@ public class MainActivity extends Activity {
                 if (w <= 0) break;
                 written += w;
             }
-            track.write(silence, 0, silence.length / 2);   // um respiro no fim para não cortar a última palavra
-            long frames = (silence.length + written + silence.length / 2) / frameBytes;
+            byte[] tail = new byte[(rate / 2) * frameBytes];          // meio segundo no fim: não corta a última palavra
+            track.write(tail, 0, tail.length);
+            long frames = (silence.length + written + tail.length) / frameBytes;
             long deadline = System.currentTimeMillis() + frames * 1000L / rate + 3000;
             while (track.getPlaybackHeadPosition() < frames && System.currentTimeMillis() < deadline) sleep(50);
-            double secs = written / (double) (rate * frameBytes);
-            playInfo = String.format(Locale.US, "tocou %.1f s de voz (%d Hz) no %s", secs, rate, where);
+            playInfo = String.format(Locale.US, "tocou %.1f s (%d Hz) pelo %s", written / (double) (rate * frameBytes), rate, ROUTE_NAME[route]);
             return written > 0;
         } catch (Exception e) {
             playInfo = "erro ao tocar: " + e.getClass().getSimpleName();
@@ -808,9 +863,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Tom de 0,6 s gerado pelo próprio app, em WAV: testa o caminho de reprodução sem depender da voz. */
+    /** Tom de 1 s gerado pelo próprio app, em WAV: testa um caminho de som sem depender da voz. */
     private static byte[] toneWav() {
-        int rate = 16000, n = rate * 6 / 10;
+        int rate = 16000, n = rate;
         ByteBuffer b = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN);
         b.put("RIFF".getBytes(StandardCharsets.US_ASCII)).putInt(36 + n * 2).put("WAVE".getBytes(StandardCharsets.US_ASCII));
         b.put("fmt ".getBytes(StandardCharsets.US_ASCII)).putInt(16).putShort((short) 1).putShort((short) 1)
@@ -820,19 +875,23 @@ public class MainActivity extends Activity {
         return b.array();
     }
 
-    /** Formatos comprimidos (servidor antigo): MediaPlayer apontado para o relógio. */
-    private boolean playFile(byte[] audio, String mime, boolean watch) {
+    /** Formatos comprimidos (servidor antigo): MediaPlayer pela rota. */
+    @SuppressWarnings("deprecation")
+    private boolean playFile(byte[] audio, String mime, int route) {
         try {
             File f = new File(getCacheDir(), mime.contains("mpeg") ? "resposta.mp3" : "resposta.ogg");
             try (FileOutputStream fo = new FileOutputStream(f)) {
                 fo.write(audio);
             }
             MediaPlayer mp = new MediaPlayer();
-            mp.setAudioAttributes(attrs(watch));
+            if (route == CALL) mp.setAudioStreamType(AudioManager.STREAM_VOICE_CALL);
+            else mp.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(route == MUSIC ? AudioAttributes.USAGE_MEDIA : AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
             mp.setDataSource(f.getAbsolutePath());
-            if (watch && Build.VERSION.SDK_INT >= 28) {
-                AudioDeviceInfo sco = scoOutput();
-                if (sco != null) mp.setPreferredDevice(sco);
+            if (route == MUSIC && Build.VERSION.SDK_INT >= 28) {
+                AudioDeviceInfo d = musicOutput();
+                if (d != null) mp.setPreferredDevice(d);
             }
             mp.prepare();
             CountDownLatch done = new CountDownLatch(1);
@@ -841,6 +900,7 @@ public class MainActivity extends Activity {
             mp.start();
             done.await(90, TimeUnit.SECONDS);
             mp.release();
+            playInfo = "tocou o áudio do servidor pelo " + ROUTE_NAME[route];
             return true;
         } catch (Exception e) {
             return false;
@@ -852,6 +912,7 @@ public class MainActivity extends Activity {
         try {
             tts.setLanguage(new Locale("pt", "BR"));
             File f = new File(getCacheDir(), "fala.wav");
+            if (f.exists()) f.delete();
             CountDownLatch done = new CountDownLatch(1);
             tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                 @Override public void onStart(String id) { }
@@ -860,6 +921,7 @@ public class MainActivity extends Activity {
             });
             if (tts.synthesizeToFile(text, new Bundle(), f, "arquivo") != TextToSpeech.SUCCESS) return null;
             if (!done.await(30, TimeUnit.SECONDS) || !f.exists()) return null;
+            sleep(150);                                    // o motor termina de gravar o arquivo logo depois do aviso
             byte[] data = new byte[(int) f.length()];
             try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
                 int off = 0, n;
@@ -877,7 +939,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.3");
+        con.setRequestProperty("User-Agent", "kronus-android/1.4");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");
