@@ -250,6 +250,20 @@ def stt_prompt() -> str:
     return DEFAULT_STT_PROMPT if value is None else " ".join(value.split())[:200]
 
 
+# v13.21: frases que o Whisper costuma "inventar" a partir de ruído ou silêncio (legendas de vídeos do treino dele).
+# Só a frase inteira é descartada: "obrigado, era isso" continua valendo; "Obrigado." sozinho, vindo de ruído, não.
+PHANTOM_PHRASES = {
+    "obrigado", "obrigada", "obrigado por assistir", "obrigada por assistir", "tchau", "tchau tchau",
+    "legendas pela comunidade amara org", "legenda adriana zanotto", "inscreva se no canal", "e ai", "hum", "uhum",
+    "musica", "aplausos", "risos", "sub titles by the amara org community", "thank you", "thanks for watching", "you",
+}
+
+
+def is_phantom(text: str) -> bool:
+    norm = re.sub(r"[^a-z0-9]+", " ", fold(text or "")).strip()
+    return not norm or norm in PHANTOM_PHRASES
+
+
 def echoes_prompt(text: str) -> bool:
     """Com áudio quase mudo o Whisper às vezes devolve a própria dica: isso não é fala de verdade."""
     prompt = stt_prompt()
@@ -301,7 +315,7 @@ class Transcriber:
             raise VoiceError("Áudio grande demais (limite de 15 MB).")
         if self.backend in {"http", "local"}:
             text = self._http(audio, mime) if self.backend == "http" else self._local(audio, mime)
-            return "" if echoes_prompt(text) else text
+            return "" if echoes_prompt(text) or is_phantom(text) else text
         raise VoiceError("Transcrição de voz não configurada: defina BYTE_STT_URL (ex.: Groq, gratuito) ou instale faster-whisper. "
                          "Guia: docs/voz.md")
 

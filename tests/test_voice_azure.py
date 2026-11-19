@@ -230,3 +230,10 @@ def test_wav_output_for_the_android_app(speech_url):
     assert mime == "audio/wav" and FakeSpeech.calls[-1]["fmt"] == "riff-16khz-16bit-mono-pcm"
     s.synthesize("Oi", voice="pt-BR-AntonioNeural")
     assert FakeSpeech.calls[-1]["fmt"] == "ogg-24khz-16bit-mono-opus"           # Telegram continua em OGG
+
+
+def test_whisper_phantom_phrases_are_ignored():
+    for junk in ("Obrigado.", "Tchau!", "Legendas pela comunidade Amara.org", "  ", "Música"):
+        assert voice.is_phantom(junk), junk
+    for real in ("Obrigado, era isso.", "Kronus, que horas são?", "Tchau Kronus, até amanhã"):
+        assert not voice.is_phantom(real), real

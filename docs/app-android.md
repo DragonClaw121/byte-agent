@@ -27,10 +27,20 @@ Diferente do app da página `/voz`, o app nativo consegue usar o **microfone e o
 Relógios como o Jiditech só aceitam som em ligações, e fora de uma ligação o celular abre e fecha o canal sozinho
 (a fala cortava). Agora, ao tocar no 🎙️, o app faz uma **chamada do próprio app** para o Kronus (como apps de voz
 fazem; não usa a operadora nem custa nada): o Android liga o relógio e mantém o canal aberto até o fim.
-- Fale; ele responde; você pode continuar. Silêncio de alguns segundos (ou desligar no relógio) encerra.
+- Fale; ele responde e a chamada encerra. Com "Continuar a conversa depois da resposta" ligado, ele volta a ouvir
+  (um bipe avisa) e só aceita fala clara; silêncio ou desligar no relógio encerra.
+- "Ouvir minha última gravação" toca no celular o que o app enviou: se o áudio estiver ruim, é o microfone do
+  relógio; se estiver bom e a transcrição errar, troque o modelo de transcrição (abaixo).
 - Métodos: **C1** = chamada + voz do Kronus (a do Azure); **C2** = chamada + voz do Android (padrão);
   **D/D0** = modo antigo, sem chamada. **Testar som do relógio** faz uma chamada de teste: 1 bipe = C1, 2 = C2.
 - Se o Android recusar a chamada, o app usa o modo antigo sozinho.
+
+## Reconhecimento de voz melhor
+O microfone do relógio numa chamada tem qualidade de telefone. O modelo `whisper-large-v3` (sem "turbo") do Groq é
+mais preciso nesse tipo de áudio e continua gratuito:
+```
+az containerapp update -g byte-rg -n byte --set-env-vars BYTE_STT_MODEL=whisper-large-v3 -o none
+```
 
 ## Atualizar
 Cada versão nova do app é publicada no mesmo link. Baixe e instale por cima: a conexão é mantida.

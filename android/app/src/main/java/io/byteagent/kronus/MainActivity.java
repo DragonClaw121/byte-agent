@@ -293,6 +293,18 @@ public class MainActivity extends Activity {
         diag.setTextSize(13);
         root.addView(diag);
 
+        CheckBox follow = new CheckBox(this);
+        follow.setText("Continuar a conversa depois da resposta (escuta de novo)");
+        follow.setTextColor(muted);
+        follow.setChecked(prefs.getBoolean("seguir", false));
+        follow.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("seguir", on).apply());
+        root.addView(follow);
+
+        Button replay = new Button(this);
+        replay.setText("Ouvir minha última gravação");
+        replay.setOnClickListener(v -> replayLast());
+        root.addView(replay);
+
         Button test = new Button(this);
         test.setText("Testar som do relógio");
         test.setOnClickListener(v -> testWatch());
@@ -331,6 +343,26 @@ public class MainActivity extends Activity {
         if (ok) say("Toque para falar.");
     }
 
+    /** Toca no celular o que o app enviou da última vez: mostra se o problema é o áudio do relógio ou a transcrição. */
+    private void replayLast() {
+        byte[] pcm = lastRecording;
+        if (pcm == null || busy) {
+            say(pcm == null ? "Ainda não há gravação: fale com o Kronus primeiro." : "Aguarde terminar.");
+            return;
+        }
+        new Thread(() -> {
+            say(String.format(Locale.US, "Tocando sua última gravação (%.1f s)...", pcm.length / (double) (RATE * 2)));
+            playTrack(new Pcm(toShorts(pcm), RATE), false, false);
+            say("Toque para falar.");
+        }).start();
+    }
+
+    private static short[] toShorts(byte[] pcm) {
+        short[] out = new short[pcm.length / 2];
+        ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(out);
+        return out;
+    }
+
     private void say(String text) {
         ui.post(() -> state.setText(text));
     }
@@ -365,7 +397,8 @@ public class MainActivity extends Activity {
                     prefs.edit().putString("metodo", test[i]).apply();
                     String phrase = "Método " + test[i] + ". Esta é uma frase de teste mais longa, com pausas, vírgulas e "
                             + "pontos. Se você me ouviu inteira no relógio, escolha o método " + test[i] + ".";
-                    playInCall(null, phrase);
+                    byte[] sample = "C1".equals(test[i]) ? serverVoice(phrase) : null;   // C1: a voz do Kronus de verdade
+                    playInCall(sample, phrase);
                     r.append("\n").append(i + 1).append(i == 0 ? " bipe" : " bipes").append(" → ").append(test[i]).append(": ")
                             .append(playInfo.isEmpty() ? "voz do Android" : playInfo);
                     info(r.toString());
@@ -628,11 +661,14 @@ public class MainActivity extends Activity {
             sleep(500);
             info(bt ? "📞 Em chamada com o Kronus pelo relógio" + (k.routeName.isEmpty() ? "" : " (" + k.routeName + ")")
                     : "📞 Em chamada, mas o Android deixou o áudio no celular");
-            for (int turn = 0; turn < 6 && !k.ended; turn++) {
+            boolean follow = prefs.getBoolean("seguir", false);
+            int misses = 0;
+            for (int turn = 0; turn < (follow ? 4 : 1) && !k.ended; turn++) {
                 listening = true;
                 ui.post(() -> mic.setText("⏹️"));
                 say(turn == 0 ? "Fale agora..." : "Pode continuar (ou fique em silêncio para desligar)...");
-                byte[] pcm = record(true, turn == 0 ? 8000 : 6000);
+                if (turn > 0) beeps(1);                      // avisa que voltou a ouvir
+                byte[] pcm = record(true, turn == 0 ? 8000 : 5000, turn > 0);
                 listening = false;
                 ui.post(() -> mic.setText("📞"));
                 if (pcm == null || k.ended) break;
@@ -640,6 +676,7 @@ public class MainActivity extends Activity {
                 JSONObject res = http(prefs.getString("server", "") + "/api/v1/voice?audio=wav", "audio/wav", wav(pcm),
                         prefs.getString("token", ""));
                 if (res.optBoolean("ignored")) {
+                    if (++misses >= 2 || turn > 0) break;      // ruído virando "fala": encerra em vez de insistir
                     playInCall(null, "Não entendi. Pode repetir?");
                     continue;
                 }
@@ -668,6 +705,21 @@ public class MainActivity extends Activity {
             ui.post(() -> mic.setText("🎙️"));
         }
         return true;
+    }
+
+    /** Pede ao servidor a frase na voz do Kronus (WAV). null se não der. */
+    private byte[] serverVoice(String text) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put("text", text);
+            body.put("format", "wav");
+            JSONObject res = http(prefs.getString("server", "") + "/api/v1/speak", "application/json",
+                    body.toString().getBytes(StandardCharsets.UTF_8), prefs.getString("token", ""));
+            String b64 = res.optString("audio_b64", "");
+            return b64.isEmpty() || !res.optString("audio_mime", "").contains("wav") ? null : Base64.decode(b64, Base64.DEFAULT);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** Fala dentro da chamada: C1 = voz do servidor tocada pelo app; C2 = voz do Android. Um cai no outro se falhar. */
@@ -725,10 +777,18 @@ public class MainActivity extends Activity {
 
     /** Grava até a pessoa parar de falar (1,6 s de silêncio), no máximo 20 s. Devolve null se não houve fala. */
     private byte[] record(boolean watch) {
-        return record(watch, 8000);
+        return record(watch, 8000, false);
     }
 
     private byte[] record(boolean watch, long noSpeechMs) {
+        return record(watch, noSpeechMs, false);
+    }
+
+    /** A última gravação enviada (para "Ouvir minha última gravação"). */
+    private volatile byte[] lastRecording;
+
+    /** strict=true (continuação da conversa): exige fala mais longa e mais alta que o ruído, para não pegar o ambiente. */
+    private byte[] record(boolean watch, long noSpeechMs, boolean strict) {
         int source = watch ? MediaRecorder.AudioSource.VOICE_COMMUNICATION : MediaRecorder.AudioSource.VOICE_RECOGNITION;
         int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         AudioRecord rec;
@@ -742,7 +802,9 @@ public class MainActivity extends Activity {
         long start = System.currentTimeMillis(), lastVoice = 0;
         double floor = Double.MAX_VALUE;
         boolean heard = false;
-        int loudBlocks = 0;
+        int loudBlocks = 0, speechStart = 0;
+        int needBlocks = strict ? 7 : 4;                  // 350 ms (continuação) ou 200 ms de fala seguida
+        double factor = strict ? 4.5 : 3.5, minLevel = strict ? 450 : (watch ? 260 : 350);
         rec.startRecording();
         try {
             while (listening) {
@@ -761,11 +823,13 @@ public class MainActivity extends Activity {
                     floor = Math.min(floor, rms);
                     continue;
                 }
-                double threshold = Math.max(watch ? 220 : 350, (floor == Double.MAX_VALUE ? 0 : floor) * 3.0);
+                double threshold = Math.max(minLevel, (floor == Double.MAX_VALUE ? 0 : floor) * factor);
                 if (rms > threshold) {
                     loudBlocks++;
-                    if (loudBlocks >= 2 && !heard) {        // 100 ms seguidos acima do ruído: é fala
+                    if (loudBlocks >= needBlocks && !heard) {   // fala sustentada acima do ruído
                         heard = true;
+                        // a gravação enviada começa 0,3 s antes da fala (sem o ruído do começo)
+                        speechStart = Math.max(0, out.size() - (needBlocks * n * 2) - (RATE * 2 * 3 / 10));
                         say("Ouvindo você... (pare de falar para enviar)");
                     }
                     lastVoice = now;
@@ -780,7 +844,13 @@ public class MainActivity extends Activity {
             rec.stop();
             rec.release();
         }
-        return heard ? normalize(out.toByteArray()) : null;
+        if (!heard) return null;
+        byte[] all = out.toByteArray();
+        int from = speechStart - (speechStart % 2);
+        byte[] cut = java.util.Arrays.copyOfRange(all, from, all.length);
+        byte[] result = normalize(cut);
+        lastRecording = result;
+        return result;
     }
 
     /** O microfone do relógio (canal de ligação) costuma ser baixo: sobe o volume até ~80% sem distorcer. */
@@ -834,8 +904,8 @@ public class MainActivity extends Activity {
     private volatile String playInfo = "";
 
     private String method() {
-        String m = prefs.getString("metodo", "C2");
-        return java.util.Arrays.asList(METHODS).contains(m) ? m : "C2";
+        String m = prefs.getString("metodo", "C1");
+        return java.util.Arrays.asList(METHODS).contains(m) ? m : "C1";
     }
 
     /** Bipes que funcionam no relógio: anunciam qual método vem a seguir. */
@@ -1132,7 +1202,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.8");
+        con.setRequestProperty("User-Agent", "kronus-android/1.9");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

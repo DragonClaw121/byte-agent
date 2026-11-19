@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.20"
+BYTE_VERSION = "13.21"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -6682,7 +6682,7 @@ class ByteEcosystemService:
             self.voice_kit = _voice.VoiceKit.from_env(read_secret=_read_secret)
         return self.voice_kit
 
-    def voice_speak(self, text: str) -> Dict[str, Any]:
+    def voice_speak(self, text: str, fmt: str = "ogg") -> Dict[str, Any]:
         """v13.8: fala um texto com a voz do SERVIDOR do agente ativo (Azure Speech/Kokoro), para o painel e a /voz
         soarem igual ao Telegram. Texto limpo e curto (speech_text) para não gastar a cota de caracteres."""
         from byte_agent import voice as _voice
@@ -6694,7 +6694,8 @@ class ByteEcosystemService:
             return {"error": "Nada para falar."}
         policy = _voice.policy_for(ACTIVE_AGENT)
         data, mime = kit.synthesizer.synthesize(speech, voice=policy.get("voz_servidor") or None, speed=policy.get("velocidade"),
-                                                style=policy.get("estilo") or None, style_degree=policy.get("intensidade"))
+                                                style=policy.get("estilo") or None, style_degree=policy.get("intensidade"),
+                                                fmt="wav" if fmt == "wav" else "ogg")
         return {"audio_b64": base64.b64encode(data).decode("ascii"), "audio_mime": mime, "chars": len(speech)}
 
     def voice_status(self) -> Dict[str, Any]:
@@ -9773,7 +9774,8 @@ class ByteOmniServer:
                         self._send_json(400, {"error": 'Envie JSON {"text": "..."}'})
                         return True
                     try:
-                        res = service.voice_speak(str(body.get("text") or "")[:4000])
+                        res = service.voice_speak(str(body.get("text") or "")[:4000],
+                                                  "wav" if body.get("format") == "wav" else "ogg")   # v13.21: app Android
                     except Exception as err:
                         res = {"error": f"{type(err).__name__}: {str(err)[:160]}"}
                     self._send_json(200 if not res.get("error") else 503, res)
