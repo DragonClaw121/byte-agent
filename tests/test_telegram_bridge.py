@@ -74,7 +74,7 @@ class FakeDB:
     def __init__(self):
         self.outbox = []
 
-    def pop_undelivered_proactive_messages(self):
+    def pop_undelivered_proactive_messages(self, channel="painel"):
         items, self.outbox = self.outbox, []
         return items
 

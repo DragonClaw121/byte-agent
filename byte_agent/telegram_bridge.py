@@ -279,7 +279,7 @@ class TelegramBridge:
         """Entrega as iniciativas autônomas da Byte nos chats autorizados."""
         if not self.allowed or self._stop.is_set() or self._service_closed():
             return 0
-        items = self.service.db.pop_undelivered_proactive_messages()
+        items = self.service.db.pop_undelivered_proactive_messages("telegram")
         for item in items:
             for chat_id in self.allowed:
                 # rotinas (ex.: triagem da manhã) podem trazer rascunhos de e-mail: chegam com os botões de aprovação

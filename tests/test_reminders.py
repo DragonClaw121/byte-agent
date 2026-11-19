@@ -206,3 +206,24 @@ def test_telegram_live_kill_switch(env):
     bridge.poll_once()
     assert bridge.stream_director.paused is False and "ativa" in tg.sent[-1]["text"]
     tg.httpd.shutdown()
+
+
+def test_each_channel_gets_its_own_copy_of_a_reminder(tmp_path):
+    """v13.15: antes a fila era única e o painel aberto 'roubava' o lembrete do Telegram."""
+    from datetime import datetime, timedelta, timezone
+    import pytest
+    from byte_agent import engine
+    db = engine.UnifiedDatabase(tmp_path / "byte.db", engine.VectorEngine())
+    db.enqueue_proactive_message("reminder", "⏰ Lembrete: beber água")
+    assert [m["message"] for m in db.pop_undelivered_proactive_messages()] == ["⏰ Lembrete: beber água"]      # painel
+    assert db.pop_undelivered_proactive_messages() == []
+    assert [m["message"] for m in db.pop_undelivered_proactive_messages("telegram")] == ["⏰ Lembrete: beber água"]
+    assert [m["message"] for m in db.pop_undelivered_proactive_messages("api")] == ["⏰ Lembrete: beber água"]
+    assert db.pop_undelivered_proactive_messages("telegram") == []
+    old = db.enqueue_proactive_message("reminder", "aviso de três dias atrás")
+    with db.connection() as conn:
+        conn.execute("UPDATE proactive_outbox SET created_at = ? WHERE id = ?",
+                     ((datetime.now(timezone.utc) - timedelta(days=3)).isoformat(), old["id"]))
+    assert db.pop_undelivered_proactive_messages("telegram") == []          # canal novo não recebe o histórico
+    with pytest.raises(ValueError):
+        db.pop_undelivered_proactive_messages("whatsapp")

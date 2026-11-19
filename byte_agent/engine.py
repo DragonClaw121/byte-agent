@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.14"
+BYTE_VERSION = "13.15"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -824,6 +824,11 @@ class UnifiedDatabase:
                     delivered INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS proactive_delivery (
+                    message_id INTEGER NOT NULL,
+                    channel TEXT NOT NULL,
+                    PRIMARY KEY (message_id, channel)
+                );
 
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1400,16 +1405,29 @@ class UnifiedDatabase:
                 pass
         return item
 
-    def pop_undelivered_proactive_messages(self) -> List[Dict[str, Any]]:
+    PROACTIVE_CHANNELS = ("painel", "telegram", "api")
+    PROACTIVE_MAX_AGE_S = 2 * 86400.0
+
+    def pop_undelivered_proactive_messages(self, channel: str = "painel") -> List[Dict[str, Any]]:
+        """v13.15: cada canal (painel, Telegram, página /voz e relógio) recebe a SUA cópia de cada aviso. Antes a fila
+        era única: o painel aberto (ou o /status) "pegava" o lembrete e ele não chegava no Telegram.
+        Só entrega avisos dos últimos 2 dias (um canal novo não recebe o histórico inteiro de uma vez)."""
+        if channel not in self.PROACTIVE_CHANNELS:
+            raise ValueError(f"canal desconhecido: {channel}")
+        cutoff = datetime.fromtimestamp(time.time() - self.PROACTIVE_MAX_AGE_S, timezone.utc).isoformat()
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT id, trigger_type, brain_used, message, created_at FROM proactive_outbox WHERE delivered = 0 ORDER BY id ASC"
-            ).fetchall()
+                "SELECT o.id, o.trigger_type, o.brain_used, o.message, o.created_at FROM proactive_outbox o "
+                "WHERE o.created_at >= ? AND NOT EXISTS (SELECT 1 FROM proactive_delivery d WHERE d.message_id = o.id "
+                "AND d.channel = ?) ORDER BY o.id ASC LIMIT 200", (cutoff, channel)).fetchall()
             items = [dict(r) for r in rows]
             if items:
+                conn.executemany("INSERT OR IGNORE INTO proactive_delivery (message_id, channel) VALUES (?, ?)",
+                                 [(i["id"], channel) for i in items])
                 ids = [i["id"] for i in items]
-                placeholders = ",".join("?" for _ in ids)
-                conn.execute(f"UPDATE proactive_outbox SET delivered = 1 WHERE id IN ({placeholders})", ids)
+                conn.execute(f"UPDATE proactive_outbox SET delivered = 1 WHERE id IN ({','.join('?' for _ in ids)})", ids)
+            conn.execute("DELETE FROM proactive_delivery WHERE message_id IN (SELECT id FROM proactive_outbox "
+                         "WHERE created_at < ?)", (cutoff,))
         return items
 
 
@@ -9706,7 +9724,7 @@ class ByteOmniServer:
                                           "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
                     return True
                 if method == "GET" and path == "/api/v1/notifications":
-                    items = service.db.pop_undelivered_proactive_messages()
+                    items = service.db.pop_undelivered_proactive_messages("api")
                     self._send_json(200, {"agent": AGENT_NAME, "notifications": [
                         {"text": _CODE_FENCE_RE.sub("", str(i.get("message") or "")).strip(), "type": i.get("trigger_type"),
                          "created_at": i.get("created_at")} for i in items]})
