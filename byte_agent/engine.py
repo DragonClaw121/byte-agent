@@ -775,6 +775,8 @@ class UnifiedDatabase:
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.execute("PRAGMA temp_store = MEMORY")
             conn.execute("PRAGMA cache_size = -16000")
+            had_delivery = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'proactive_delivery'").fetchone()
+            had_outbox = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'proactive_outbox'").fetchone()
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS conversation_sessions (
                     session_id TEXT PRIMARY KEY,
@@ -867,6 +869,12 @@ class UnifiedDatabase:
                     created_at TEXT NOT NULL
                 );
             """)
+            if had_outbox and not had_delivery:
+                # v13.15: o que já tinha sido entregue (fila única antiga) conta como entregue em TODOS os canais, senão
+                # a primeira partida reenviaria os avisos dos últimos 2 dias em cada canal
+                conn.executemany("INSERT OR IGNORE INTO proactive_delivery (message_id, channel) "
+                                 "SELECT id, ? FROM proactive_outbox WHERE delivered = 1",
+                                 [(ch,) for ch in ("painel", "telegram", "api")])
             cols_t = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
             if "scheduled_slot" not in cols_t:
                 conn.execute("ALTER TABLE tasks ADD COLUMN scheduled_slot TEXT NOT NULL DEFAULT 'Sem horário fixo'")

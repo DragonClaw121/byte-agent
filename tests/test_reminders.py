@@ -227,3 +227,21 @@ def test_each_channel_gets_its_own_copy_of_a_reminder(tmp_path):
     assert db.pop_undelivered_proactive_messages("telegram") == []          # canal novo não recebe o histórico
     with pytest.raises(ValueError):
         db.pop_undelivered_proactive_messages("whatsapp")
+
+
+def test_upgrade_does_not_resend_old_messages_and_keeps_pending_reminders(tmp_path):
+    import time as _time
+    from byte_agent import engine
+    path = tmp_path / "byte.db"
+    db = engine.UnifiedDatabase(path, engine.VectorEngine())
+    db.enqueue_proactive_message("reminder", "já entregue antes da atualização")
+    db.pop_undelivered_proactive_messages()
+    db.enqueue_proactive_message("reminder", "ainda na fila")
+    db.add_reminder("reunião com o time", _time.time() + 3600)
+    with db.connection() as conn:                                  # banco como era na v13.14 (sem a tabela nova)
+        conn.execute("DROP TABLE proactive_delivery")
+    db._conn.close()
+    db2 = engine.UnifiedDatabase(path, engine.VectorEngine())
+    assert [m["message"] for m in db2.pop_undelivered_proactive_messages("telegram")] == ["ainda na fila"]
+    assert [m["message"] for m in db2.pop_undelivered_proactive_messages("painel")] == ["ainda na fila"]
+    assert [r["text"] for r in db2.list_reminders()] == ["reunião com o time"]            # lembrete pendente intacto
