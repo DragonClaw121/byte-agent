@@ -24,10 +24,11 @@ Diferente do app da página `/voz`, o app nativo consegue usar o **microfone e o
   Se o Kronus não aparecer nessa lista, o atalho ainda funciona pelo ícone do app.
 
 ## Som no relógio (canal de ligação)
-Relógios como o Jiditech só aceitam som no "canal de ligação", e cada celular se comporta de um jeito nele. O app tem
-4 métodos de tocar a resposta nesse canal (A, B, C, D). Toque em **Testar som do relógio**: cada método é anunciado
-por bipes (1 bipe = A, 2 = B, 3 = C, 4 = D) e depois fala "Método X". Escolha no app o método cuja frase você ouviu
-no relógio.
+Relógios como o Jiditech só aceitam som no "canal de ligação" e, pelo que os testes mostraram, fecham o canal quando
+recebem silêncio absoluto (a fala sumia ou cortava nas pausas). Por isso o app toca um ruído de fundo baixinho no
+lugar do silêncio. Métodos: **E** (voz do Kronus pelo app, a melhor), **F** (voz do Android com ruído de fundo) e
+**D** (voz do Android direta). Toque em **Testar som do relógio**: 1 bipe = E, 2 = F, 3 = D; escolha no app o que
+saiu inteiro no relógio.
 
 ## Atualizar
 Cada versão nova do app é publicada no mesmo link. Baixe e instale por cima: a conexão é mantida.
