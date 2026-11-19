@@ -198,3 +198,8 @@ A página `/voz` virou um aplicativo instalável, sem token gigante:
 
 Cada aparelho ganha um acesso próprio: `/dispositivos` lista, `/desparear <id>` desliga um sem afetar os outros.
 O `KRONUS_API_TOKEN` continua valendo para integrações (ex.: Atalhos do iPhone).
+
+## Dica de vocabulário na transcrição (v13.19)
+A transcrição recebe a lista de nomes esperados (`BYTE_STT_PROMPT`, padrão "Kronus, Matrix, Byte, Bit."), o que
+ajuda a acertar os nomes dos agentes. Se o Whisper "devolver" só a dica (acontece com áudio mudo), a fala é
+ignorada. Para desligar: `BYTE_STT_PROMPT=` (vazio).

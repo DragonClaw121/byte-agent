@@ -195,3 +195,30 @@ def test_style_refused_keeps_the_same_voice_without_style(speech_url):
     assert data and "estilo 'cheerful' recusado" in s.last_voice_error
     last = FakeSpeech.calls[-1]["ssml"]
     assert 'name="zh-CN-XiaoxiaoMultilingualNeural"' in last and "express-as" not in last   # mesma voz, sem estilo
+
+
+def test_transcription_gets_vocabulary_hint_and_ignores_prompt_echo(monkeypatch):
+    sent = {}
+
+    def fake_urlopen(req, timeout=0):
+        sent["body"] = req.data
+
+        class R:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self):
+                return json.dumps({"text": sent.get("reply", "Kronus, que horas são?")}).encode()
+        return R()
+
+    import json
+    monkeypatch.setattr(voice.urllib.request, "urlopen", fake_urlopen)
+    t = voice.Transcriber(url="https://stt.exemplo/v1", api_key="k")
+    assert t.transcribe(b"RIFF....", "audio/wav") == "Kronus, que horas são?"
+    assert b'name="prompt"' in sent["body"] and b"Kronus, Matrix, Byte, Bit." in sent["body"]
+    sent["reply"] = "Kronus, Matrix, Byte, Bit."                         # áudio mudo: Whisper repete a dica
+    assert t.transcribe(b"RIFF....", "audio/wav") == ""
+    monkeypatch.setenv("BYTE_STT_PROMPT", "")
+    t.transcribe(b"RIFF....", "audio/wav")
+    assert b'name="prompt"' not in sent["body"]                          # vazio desliga

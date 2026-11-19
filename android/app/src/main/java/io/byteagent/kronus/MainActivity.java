@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView title, state, log, diag;
+    private TextView title, conn, state, log, diag;
     private Button mic, disconnect;
     private CheckBox useWatch;
     private LinearLayout setup;
@@ -102,7 +102,51 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        checkStatus();
         maybeAutoListen();
+    }
+
+    /** Testa de verdade: o Kronus responde? o acesso ainda vale? o relógio está disponível? */
+    private void checkStatus() {
+        if (!paired()) {
+            ui.post(() -> conn.setText("⚪ Não conectado"));
+            return;
+        }
+        ui.post(() -> conn.setText("… verificando a conexão"));
+        new Thread(() -> {
+            String server, watch = watchAvailability();
+            try {
+                JSONObject st = http(prefs.getString("server", "") + "/api/v1/status", null, null, prefs.getString("token", ""));
+                server = st.optBoolean("online", true)
+                        ? "🟢 " + st.optString("agent", "Kronus") + " online (v" + st.optString("version", "?") + ")"
+                        : "🟡 " + st.optString("agent", "Kronus") + " no ar, mas o modelo está offline";
+            } catch (Exception e) {
+                String msg = String.valueOf(e.getMessage());
+                if (msg.startsWith("Acesso recusado")) {
+                    prefs.edit().remove("token").apply();
+                    ui.post(this::refresh);
+                    server = "🔴 Acesso removido: pareie de novo com /parear";
+                } else {
+                    server = "🔴 Sem conexão com o Kronus (" + msg + ")";
+                }
+            }
+            String text = server + "\n" + watch;
+            ui.post(() -> conn.setText(text));
+        }).start();
+    }
+
+    private String watchAvailability() {
+        if (!prefs.getBoolean("watch", true)) return "📱 Usando o microfone do celular";
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (Build.VERSION.SDK_INT >= 31) {
+            try {
+                for (AudioDeviceInfo d : am.getAvailableCommunicationDevices())
+                    if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return "⌚ Relógio disponível: " + d.getProductName();
+            } catch (Exception ignored) {
+            }
+            return "⌚ Relógio não encontrado (confira se está conectado ao celular)";
+        }
+        return am.isBluetoothScoAvailableOffCall() ? "⌚ Bluetooth de voz disponível" : "⌚ Relógio não encontrado";
     }
 
     @Override
@@ -153,6 +197,10 @@ public class MainActivity extends Activity {
         title.setTextSize(22);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
+        conn = new TextView(this);
+        conn.setTextColor(muted);
+        conn.setTextSize(13);
+        root.addView(conn);
 
         setup = new LinearLayout(this);
         setup.setOrientation(LinearLayout.VERTICAL);
@@ -355,6 +403,7 @@ public class MainActivity extends Activity {
                 ui.post(() -> {
                     input.setText("");
                     refresh();
+                    checkStatus();
                 });
             } catch (Exception e) {
                 say("⚠️ " + e.getMessage());
@@ -363,6 +412,50 @@ public class MainActivity extends Activity {
     }
 
     // ------------------------------------------------------------------ áudio do relógio (Bluetooth)
+    /** Espera o Android confirmar que o canal de voz Bluetooth abriu (o tempo varia de relógio para relógio). */
+    private boolean waitScoConnected(AudioManager am, long timeoutMs) {
+        final CountDownLatch up = new CountDownLatch(1);
+        android.content.BroadcastReceiver r = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                if (i.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED) up.countDown();
+            }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(r, f, Context.RECEIVER_EXPORTED);
+            else registerReceiver(r, f);
+            long end = System.currentTimeMillis() + timeoutMs;
+            while (System.currentTimeMillis() < end) {
+                if (up.await(100, TimeUnit.MILLISECONDS) || am.isBluetoothScoOn() || scoActive(am)) return true;
+            }
+            return false;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { unregisterReceiver(r); } catch (Exception ignored) { }
+        }
+    }
+
+    private static boolean scoActive(AudioManager am) {
+        if (Build.VERSION.SDK_INT < 31) return am.isBluetoothScoOn();
+        AudioDeviceInfo d = am.getCommunicationDevice();
+        return d != null && d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO;
+    }
+
+    /** Antes de tocar a resposta: o relógio pode ter fechado o canal enquanto o Kronus pensava. Reabre se preciso. */
+    private boolean ensureWatch(AudioManager am) {
+        if (scoActive(am) && am.getMode() == AudioManager.MODE_IN_COMMUNICATION) {
+            sleep(300);
+            return true;
+        }
+        return routeToWatch(am) != null;
+    }
+
+    private static void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException ignored) { }
+    }
+
     /** Liga o áudio do relógio (como numa ligação). Devolve o nome do aparelho, ou null (e explica em routeInfo). */
     private String routeInfo = "";
 
@@ -379,8 +472,9 @@ public class MainActivity extends Activity {
                     if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) {
                         am.setMode(AudioManager.MODE_IN_COMMUNICATION);
                         if (am.setCommunicationDevice(d)) {
-                            Thread.sleep(800);          // o relógio leva um instante para abrir o canal de voz
-                            routeInfo = "⌚ Áudio: " + d.getProductName() + " (Bluetooth)";
+                            boolean open = waitScoConnected(am, 4000);
+                            sleep(450);                 // o começo do som costuma ser cortado logo que o canal abre
+                            routeInfo = "⌚ Áudio: " + d.getProductName() + (open ? " (Bluetooth)" : " (Bluetooth, sem confirmação)");
                             return String.valueOf(d.getProductName());
                         }
                     }
@@ -391,9 +485,8 @@ public class MainActivity extends Activity {
                 am.setMode(AudioManager.MODE_IN_COMMUNICATION);
                 am.startBluetoothSco();
                 am.setBluetoothScoOn(true);
-                for (int i = 0; i < 40 && !am.isBluetoothScoOn(); i++) Thread.sleep(100);
-                if (am.isBluetoothScoOn()) {
-                    Thread.sleep(500);
+                if (waitScoConnected(am, 4000)) {
+                    sleep(450);
                     routeInfo = "⌚ Áudio: relógio (Bluetooth, modo antigo)";
                     return "relógio";
                 }
@@ -434,7 +527,8 @@ public class MainActivity extends Activity {
 
     private void converse() {
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        boolean watch = routeToWatch(am) != null;
+        final boolean routed = routeToWatch(am) != null;
+        boolean watch = routed;
         info(routeInfo);
         try {
             say(watch ? "Ouvindo pelo relógio..." : "Ouvindo pelo celular...");
@@ -455,19 +549,21 @@ public class MainActivity extends Activity {
             if (!heard.isEmpty()) addLog("Você", heard);
             if (!reply.isEmpty()) addLog(prefs.getString("agent", "Kronus"), reply);
             say("Respondendo...");
+            if (watch) watch = ensureWatch(am);
             speak(res, watch);
             say("Toque para falar.");
         } catch (Exception e) {
             say("⚠️ " + e.getMessage());
+            checkStatus();
         } finally {
-            releaseWatch(am, watch);
+            releaseWatch(am, routed || watch);
             listening = false;
             busy = false;
             ui.post(() -> mic.setText("🎙️"));
         }
     }
 
-    /** Grava até a pessoa parar de falar (1,3 s de silêncio), no máximo 15 s. Devolve null se não houve fala. */
+    /** Grava até a pessoa parar de falar (1,6 s de silêncio), no máximo 20 s. Devolve null se não houve fala. */
     private byte[] record(boolean watch) {
         int source = watch ? MediaRecorder.AudioSource.VOICE_COMMUNICATION : MediaRecorder.AudioSource.VOICE_RECOGNITION;
         int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
@@ -480,8 +576,9 @@ public class MainActivity extends Activity {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         short[] buf = new short[RATE / 20];               // blocos de 50 ms
         long start = System.currentTimeMillis(), lastVoice = 0;
-        double floor = -1;
+        double floor = Double.MAX_VALUE;
         boolean heard = false;
+        int loudBlocks = 0;
         rec.startRecording();
         try {
             while (listening) {
@@ -496,24 +593,45 @@ public class MainActivity extends Activity {
                 out.write(bb.array(), 0, n * 2);
                 double rms = Math.sqrt(sum / n);
                 long now = System.currentTimeMillis();
-                if (now - start < 300) {                    // primeiros 300 ms: mede o ruído do ambiente
-                    floor = floor < 0 ? rms : (floor + rms) / 2;
+                if (now - start < 400) {                    // início: o trecho MAIS silencioso é o ruído do ambiente
+                    floor = Math.min(floor, rms);
                     continue;
                 }
-                double threshold = Math.max(450, floor * 2.5);
+                double threshold = Math.max(watch ? 220 : 350, (floor == Double.MAX_VALUE ? 0 : floor) * 3.0);
                 if (rms > threshold) {
-                    heard = true;
+                    loudBlocks++;
+                    if (loudBlocks >= 2 && !heard) {        // 100 ms seguidos acima do ruído: é fala
+                        heard = true;
+                        say("Ouvindo você... (pare de falar para enviar)");
+                    }
                     lastVoice = now;
+                } else {
+                    loudBlocks = 0;
                 }
-                if (heard && now - lastVoice > 1300) break;
-                if (!heard && now - start > 7000) break;
-                if (now - start > 15000) break;
+                if (heard && now - lastVoice > 1600) break;
+                if (!heard && now - start > 8000) break;
+                if (now - start > 20000) break;
             }
         } finally {
             rec.stop();
             rec.release();
         }
-        return heard ? out.toByteArray() : null;
+        return heard ? normalize(out.toByteArray()) : null;
+    }
+
+    /** O microfone do relógio (canal de ligação) costuma ser baixo: sobe o volume até ~80% sem distorcer. */
+    private static byte[] normalize(byte[] pcm) {
+        ByteBuffer in = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN);
+        int peak = 1;
+        for (int i = 0; i + 1 < pcm.length; i += 2) peak = Math.max(peak, Math.abs((int) in.getShort(i)));
+        double gain = Math.min(8.0, (32767 * 0.8) / peak);
+        if (gain <= 1.05) return pcm;
+        ByteBuffer outBuf = ByteBuffer.allocate(pcm.length).order(ByteOrder.LITTLE_ENDIAN);
+        for (int i = 0; i + 1 < pcm.length; i += 2) {
+            int v = (int) Math.round(in.getShort(i) * gain);
+            outBuf.putShort((short) Math.max(-32768, Math.min(32767, v)));
+        }
+        return outBuf.array();
     }
 
     private static byte[] wav(byte[] pcm) {
@@ -579,14 +697,18 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestMethod("POST");
-        con.setDoOutput(true);
-        con.setRequestProperty("Content-Type", ctype);
-        con.setRequestProperty("User-Agent", "kronus-android/1.0");
+        con.setRequestProperty("User-Agent", "kronus-android/1.1");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
-        con.setFixedLengthStreamingMode(body.length);
-        try (OutputStream os = con.getOutputStream()) {
-            os.write(body);
+        if (body == null) {
+            con.setRequestMethod("GET");
+        } else {
+            con.setRequestMethod("POST");
+            con.setDoOutput(true);
+            con.setRequestProperty("Content-Type", ctype);
+            con.setFixedLengthStreamingMode(body.length);
+            try (OutputStream os = con.getOutputStream()) {
+                os.write(body);
+            }
         }
         int code = con.getResponseCode();
         InputStream is = code < 400 ? con.getInputStream() : con.getErrorStream();

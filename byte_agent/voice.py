@@ -241,6 +241,24 @@ def _ext_for(mime: str) -> str:
             "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/flac": ".flac"}.get(mime, ".ogg")
 
 
+DEFAULT_STT_PROMPT = "Kronus, Matrix, Byte, Bit."
+
+
+def stt_prompt() -> str:
+    """Dica de vocabulário para o Whisper (BYTE_STT_PROMPT; vazio desliga). Melhora nomes como "Kronus"."""
+    value = os.environ.get("BYTE_STT_PROMPT")
+    return DEFAULT_STT_PROMPT if value is None else " ".join(value.split())[:200]
+
+
+def echoes_prompt(text: str) -> bool:
+    """Com áudio quase mudo o Whisper às vezes devolve a própria dica: isso não é fala de verdade."""
+    prompt = stt_prompt()
+    if not prompt or not text:
+        return False
+    norm = lambda t: re.sub(r"[^a-z0-9]+", " ", fold(t)).strip()
+    return norm(text) == norm(prompt)
+
+
 class Transcriber:
     def __init__(self, url: str = "", model: str = "", api_key: str = "", language: str = "pt", backend: str = "auto",
                  timeout_s: float = 40.0):
@@ -281,10 +299,9 @@ class Transcriber:
             raise VoiceError("Áudio vazio.")
         if len(audio) > MAX_AUDIO_BYTES:
             raise VoiceError("Áudio grande demais (limite de 15 MB).")
-        if self.backend == "http":
-            return self._http(audio, mime)
-        if self.backend == "local":
-            return self._local(audio, mime)
+        if self.backend in {"http", "local"}:
+            text = self._http(audio, mime) if self.backend == "http" else self._local(audio, mime)
+            return "" if echoes_prompt(text) else text
         raise VoiceError("Transcrição de voz não configurada: defina BYTE_STT_URL (ex.: Groq, gratuito) ou instale faster-whisper. "
                          "Guia: docs/voz.md")
 
@@ -303,7 +320,11 @@ class Transcriber:
 
     def _http_once(self, audio: bytes, mime: str) -> str:
         endpoint = self.url if self.url.endswith("/audio/transcriptions") else self.url + "/audio/transcriptions"
-        body, ctype = _multipart({"model": self.model or "whisper-1", "language": self.language, "response_format": "json"},
+        fields = {"model": self.model or "whisper-1", "language": self.language, "response_format": "json"}
+        prompt = stt_prompt()
+        if prompt:
+            fields["prompt"] = prompt                      # v13.19: vocabulário esperado (nomes dos agentes)
+        body, ctype = _multipart(fields,
                                  "file", "voz" + _ext_for(mime), audio, (mime or "audio/ogg").split(";")[0])
         headers = {"Content-Type": ctype, "User-Agent": USER_AGENT, "Accept": "application/json"}
         if self.api_key:
