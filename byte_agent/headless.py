@@ -75,6 +75,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         app_movel.install(service)                          # v13.16: aparelhos pareados (app do Kronus)
         from . import permissoes
         permissoes.install(service)                         # v13.23: níveis de permissão e /atividade
+        from . import resumos
+        resumos.install(service)                            # v13.24: resumo da manhã e fechamento da semana
         from . import nuvem as _nuvem
         service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service

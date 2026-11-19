@@ -81,12 +81,18 @@ public class KronusCallService extends ConnectionService {
 
     /** "Kronus te liga": cria uma chamada recebida com o texto do aviso. false se não deu (vira notificação). */
     static boolean ring(Context c, String text) {
+        return ring(c, text, "");
+    }
+
+    /** speech: o que o Kronus FALA ao atender (ex.: resumo da manhã sem listas); vazio = o próprio texto. */
+    static boolean ring(Context c, String text, String speech) {
         if (current != null || incoming != null) return false;          // já em chamada com o Kronus
         try {
             TelecomManager tm = c.getSystemService(TelecomManager.class);
             if (!tm.isIncomingCallPermitted(handle(c))) return false;    // outra chamada (ex.: da operadora) em andamento
             Bundle inner = new Bundle();
             inner.putString("aviso", text);
+            inner.putString("fala", speech == null ? "" : speech);
             Bundle extras = new Bundle();
             extras.putBundle(TelecomManager.EXTRA_INCOMING_CALL_EXTRAS, inner);
             extras.putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, Uri.fromParts(SCHEME, "Kronus", null));
@@ -134,6 +140,7 @@ public class KronusCallService extends ConnectionService {
         KronusConnection k = new KronusConnection();
         k.ctx = getApplicationContext();
         k.announce = text;
+        k.speech = extras == null ? "" : extras.getString("fala", "");
         k.ringing = true;
         k.setConnectionProperties(Connection.PROPERTY_SELF_MANAGED);
         k.setAudioModeIsVoip(true);
@@ -169,6 +176,7 @@ public class KronusCallService extends ConnectionService {
         // chamada recebida
         volatile boolean ringing = false;
         String announce = "";
+        String speech = "";
         Context ctx;
 
         @Override
@@ -189,7 +197,7 @@ public class KronusCallService extends ConnectionService {
             new Thread(() -> {
                 Voz v = new Voz(c, ui());
                 try {
-                    v.announceAndListen(this, announce);
+                    v.announceAndListen(this, speech == null || speech.isEmpty() ? announce : speech);
                 } finally {
                     v.close();
                 }

@@ -172,7 +172,7 @@ def test_installed_in_the_service_and_telegram(tmp_path, fake, monkeypatch):
     tg = FakeTelegram()
     bridge = TelegramBridge(service, token=TOKEN, allowed_chat_ids=[OWNER], api_base=tg.url)
     try:
-        assert service.trigger_engine and len(service.proactive_engine.background_jobs) == 2      # objetivos + gatilhos
+        assert service.trigger_engine and len(service.proactive_engine.background_jobs) == 3      # objetivos + gatilhos + resumos
         bridge.handle_update({"update_id": 1, "message": {"chat": {"id": OWNER}, "text": "/gatilhos"}})
         assert "tarefa_parada — tarefa parada: ligado" in tg.sent[-1]["text"] and "agenda" in tg.sent[-1]["text"]
         bridge.handle_update({"update_id": 2, "message": {"chat": {"id": OWNER}, "text": "/gatilho tarefa_parada off"}})

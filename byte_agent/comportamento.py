@@ -74,6 +74,11 @@ BEHAVIORS: List[Behavior] = [
     Behavior("memoria", "ferramentas", "grava uma preferência e a usa numa conversa nova",
              ["Guarde isto: meu café favorito é coado e sem açúcar.", "Como eu gosto do meu café?"],
              lambda r, s: "coado" in _memories(s) and _any(r[-1], ["coado"])),
+    Behavior("conclui_tarefa", "ferramentas", "marca como concluída a tarefa que o usuário diz que já fez",
+             ["Já paguei a conta de luz, pode dar baixa na agenda."],
+             lambda r, s: not any("luz" in t["title"].lower() for t in s.db.list_tasks(status="pending"))
+             and any("luz" in t["title"].lower() for t in s.db.list_tasks(status="done")),
+             setup=lambda s: s.db.add_task(title="Pagar a conta de luz", priority=4)),
     Behavior("objetivo", "autonomia", "transforma um pedido trabalhoso com prazo num objetivo em etapas",
              ["Pesquise com calma e me entregue até sexta um comparativo de 3 cursos gratuitos de Python. Pode trabalhar nisso em etapas."],
              lambda r, s: any(len(g["steps"]) >= 2 for g in _goals(s))),

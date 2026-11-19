@@ -27,7 +27,7 @@ AGENT_TYPES = {
 
 # Habilidade -> ferramentas que ela libera. get_datetime fica sempre ligada.
 SKILLS: Dict[str, Tuple[str, ...]] = {
-    "agenda": ("list_tasks", "add_task"),
+    "agenda": ("list_tasks", "add_task", "complete_task"),
     "memoria": ("search_memories", "add_memory"),
     "lembretes": ("schedule_reminder", "list_reminders", "cancel_reminder"),
     "web": ("web_search", "fetch_url", "deep_research"),

@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.23"
+BYTE_VERSION = "13.24"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1331,6 +1331,41 @@ class UnifiedDatabase:
         if ok:
             self.record_audit("task_deleted", "delete_task", "success", {"task_id": tid})
         return ok
+
+    def complete_task(self, task_id: int) -> Optional[Dict[str, Any]]:
+        """v13.24: marca a tarefa como CONCLUÍDA (antes só dava para apagar). Ela some da agenda, mas entra no
+        fechamento da semana. Concluídas com mais de 90 dias são apagadas."""
+        tid = int(task_id)
+        now = self.now_iso()
+        with self.connection() as conn:
+            row = conn.execute("SELECT id, title FROM tasks WHERE id = ? AND status = 'pending'", (tid,)).fetchone()
+            if not row:
+                return None
+            conn.execute("UPDATE tasks SET status = 'done', completed_at = ? WHERE id = ?", (now, tid))
+            cutoff = datetime.fromtimestamp(time.time() - 90 * 86400, timezone.utc).isoformat()
+            conn.execute("DELETE FROM tasks WHERE status = 'done' AND completed_at < ?", (cutoff,))
+        self._tasks_cache = None
+        self.record_audit("task_done", "complete_task", "success", {"task_id": tid, "title": row["title"]})
+        return {"id": tid, "title": row["title"], "status": "done", "completed_at": now}
+
+    def find_pending_task(self, query: str) -> Optional[Dict[str, Any]]:
+        """Tarefa pendente pelo id ("12", "#12") ou pelo título (a mais parecida que contenha as palavras)."""
+        q = str(query or "").strip().lstrip("#")
+        pending = self.list_tasks(status="pending")
+        if q.isdigit():
+            return next((t for t in pending if int(t["id"]) == int(q)), None)
+        folded = q.lower().translate(TRANSLATION_TABLE)
+        words = [w for w in re.findall(r"\w+", folded) if len(w) > 2]
+        if not words:
+            return None
+        scored = []
+        for t in pending:
+            title = t["title"].lower().translate(TRANSLATION_TABLE)
+            hits = sum(1 for w in words if w in title)
+            if hits:
+                scored.append((hits / len(words), t))
+        scored.sort(key=lambda x: -x[0])
+        return scored[0][1] if scored and scored[0][0] >= 0.5 else None
 
     # ---------- v10.4: lembretes e tarefas agendadas ----------
     REMINDER_REPEATS = {"none": 0, "daily": 86400, "weekly": 604800}
@@ -6269,6 +6304,11 @@ class ByteEcosystemService:
                          "title": {"type": "string", "description": "O que deve ser feito"},
                          "scheduled_slot": {"type": "string", "description": "Data/horário em texto, ex.: 'amanhã 10h'"},
                          "priority": {"type": "integer", "description": "1 (baixa) a 5 (alta)"}}}},
+        "complete_task": {"auto": True, "description": ("Marca uma tarefa da agenda como CONCLUÍDA quando o usuário diz que "
+                                                        "já fez (ex.: 'paguei a conta de luz'). Use o id de list_tasks ou o título."),
+                          "parameters": {"type": "object", "properties": {
+                              "task_id": {"type": "integer", "description": "id da tarefa (de list_tasks)"},
+                              "title": {"type": "string", "description": "título da tarefa, se não souber o id"}}}},
         "search_memories": {"auto": True, "description": "Busca fatos e preferências que o usuário pediu para lembrar.",
                             "parameters": {"type": "object", "required": ["query"], "properties": {
                                 "query": {"type": "string", "description": "Assunto a procurar"}}}},
@@ -6335,7 +6375,7 @@ class ByteEcosystemService:
     _EMAIL_INTENT_RE = re.compile(r"\b(e-?mails?|caixa de entrada|inbox)\b")
     _INTERNAL_INTENT_RE = re.compile(
         r"\b(agenda\w*|tarefas?|compromissos?|lembr\w*|lembretes?|prazos?|rotinas?|reuni\w+|pendent\w*|pendencias?|"
-        r"memori\w*|anot\w+|guard\w+|prefir\w*|prefer\w*|hoje|amanha|ontem|semana|"
+        r"memori\w*|anot\w+|guard\w+|prefir\w*|prefer\w*|hoje|amanha|ontem|semana|conclu\w*|termin\w+|finaliz\w*|"
         r"que horas|que dia|horario\w*|data de hoje|sobre mim|o que (?:eu )?tenho)\b")
     LARGE_MODEL_BYTES = 4 * 1024 ** 3
 
@@ -6364,7 +6404,7 @@ class ByteEcosystemService:
 
     # v11.2 — ferramentas que gravam dados sem aprovação. Depois que o pedido leu conteúdo da internet ("tainted"),
     # elas ficam bloqueadas: uma página com instruções escondidas não consegue plantar tarefas, memórias ou lembretes.
-    TAINT_BLOCKED_TOOLS = frozenset({"add_task", "add_memory", "schedule_reminder", "cancel_reminder"})
+    TAINT_BLOCKED_TOOLS = frozenset({"add_task", "complete_task", "add_memory", "schedule_reminder", "cancel_reminder"})
 
     def _permission_gate(self, name: str, args: Dict[str, Any], turn: Dict[str, Any]) -> Optional[str]:
         """v13.23 (Fase 1.3): aplica o nível escolhido pelo usuário para o tipo de ação. None = pode executar."""
@@ -6449,6 +6489,13 @@ class ByteEcosystemService:
                                            notes="Criada pela LLM via ferramenta nativa", auto_extracted=True)
                 turn["wrote"] = True
                 return json.dumps({"criada": True, "id": created.get("id"), "titulo": title, "quando": slot}, ensure_ascii=False)
+            if name == "complete_task":
+                task = self.db.find_pending_task(str(args.get("task_id") or args.get("title") or ""))
+                if task is None:
+                    return "ERRO: não achei essa tarefa pendente. Use list_tasks para ver os ids."
+                done = self.db.complete_task(int(task["id"]))
+                turn["wrote"] = True
+                return json.dumps({"concluida": bool(done), "id": task["id"], "titulo": task["title"]}, ensure_ascii=False)
             if name == "search_memories":
                 query = str(args.get("query", "")).strip()
                 hits = self.context_reader.top_memories(self.db, query, limit=6, min_score=0.1) if query else []
@@ -6914,7 +6961,7 @@ class ByteEcosystemService:
             "tokens_per_sec": gen["tokens_per_sec"],
             "memories_activated": relevant_memories,
             "tasks_activated": relevant_tasks,
-            "all_tasks": self.db.list_tasks(),
+            "all_tasks": self.db.list_tasks(status="pending"),
             "context_window": self.context_manager.get_window_list(),
             "last_assistant_output": self.context_manager.get_last_assistant_output(),
             "telemetry_feed": self.realtime_telemetry_feed[:8],
@@ -6942,7 +6989,7 @@ class ByteEcosystemService:
                         "proactive_count": self.proactive_engine.proactive_count,
                         "pending_proactive_messages": self.db.pop_undelivered_proactive_messages(),
                     },
-                    "tasks": self.db.list_tasks(),
+                    "tasks": self.db.list_tasks(status="pending"),
                     "memories": self.db.list_memories(),
                     "reminders": self.db.list_reminders(),
                     "context_window": self.context_manager.get_window_list(),
@@ -6972,7 +7019,7 @@ class ByteEcosystemService:
                 res = {
                     "messages": self.db.pop_undelivered_proactive_messages(),
                     "context_window": self.context_manager.get_window_list(),
-                    "tasks": self.db.list_tasks(),
+                    "tasks": self.db.list_tasks(status="pending"),
                     "memories": self.db.list_memories(),
                     "llm": self.llm.get_status(),
                 }
@@ -7141,6 +7188,8 @@ class ByteEcosystemService:
                 )
             elif action == "del_task":
                 res = {"deleted": self.db.delete_task(int(payload["task_id"]))}
+            elif action == "done_task":
+                res = {"done": self.db.complete_task(int(payload["task_id"]))}
             elif action == "add_memory":
                 res = self.db.add_memory_direct(content=payload.get("content", ""), importance=int(payload.get("importance", 5)))
             elif action == "clear_memories":
@@ -7503,6 +7552,13 @@ pygame.time.Clock().tick(60)</textarea>
         <div id="b90-perms-list" style="margin-bottom:6px; font-size:0.8rem;"></div>
         <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90ShowActivity()">Ver atividade recente</button>
         <pre id="b90-activity-box" class="b90-pre" style="display:none; max-height:180px; margin-top:6px;"></pre>
+        <h3>☀️ Resumos (manhã e fechamento da semana)</h3>
+        <div id="b90-brief-box" style="margin-bottom:6px; font-size:0.8rem;"></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90BriefNow('manha')">Ver resumo de hoje</button>
+          <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90BriefNow('semana')">Ver fechamento da semana</button>
+        </div>
+        <pre id="b90-brief-preview" class="b90-pre" style="display:none; max-height:260px; margin-top:6px;"></pre>
         <h3>🗓️ Agenda & Tarefas (Extraídas em Background Assíncrono pela LLM)</h3>
         <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:6px; margin-bottom:10px;">
           <input id="b90-new-task" class="b90-input" placeholder="Ex: Reunião de alinhamento sexta às 15h..." />
@@ -8247,6 +8303,47 @@ pygame.time.Clock().tick(60)</textarea>
     const st = await b90Call('permission_list', {}, true);
     if (!st.error) b90RenderPermissions({ permissoes: st });
   };
+  const B90_DIAS = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+  function b90RenderBriefings(st) {
+    const box = document.getElementById('b90-brief-box');
+    const r = st.resumos;
+    if (!box) return;
+    if (!r || !r.manha) { box.innerHTML = '<span style="color:var(--muted);">Resumos indisponíveis neste agente.</span>'; return; }
+    if ((box.contains(document.activeElement) && document.activeElement !== document.body)) return;
+    const m = r.manha, w = r.semana;
+    const dias = B90_DIAS.map((d, i) => `<option value="${i}" ${Number(w.dia) === i ? 'selected' : ''}>${d}</option>`).join('');
+    const row = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px;';
+    box.innerHTML = `
+      <div style="${row}"><label><input type="checkbox" id="b90-bm-on" ${m.ativo ? 'checked' : ''}> Manhã</label>
+        <input type="time" id="b90-bm-hora" class="b90-input" style="width:auto;" value="${b90EscapeHtml(m.hora)}">
+        <select id="b90-bm-dias" class="b90-select" style="width:auto;"><option value="todos" ${m.dias === 'todos' ? 'selected' : ''}>todos os dias</option>
+          <option value="uteis" ${m.dias === 'uteis' ? 'selected' : ''}>segunda a sexta</option></select></div>
+      <div style="${row}"><label><input type="checkbox" id="b90-bw-on" ${w.ativo ? 'checked' : ''}> Semana</label>
+        <select id="b90-bw-dia" class="b90-select" style="width:auto;">${dias}</select>
+        <input type="time" id="b90-bw-hora" class="b90-input" style="width:auto;" value="${b90EscapeHtml(w.hora)}"></div>
+      <div style="${row}"><input id="b90-b-cidade" class="b90-input" style="flex:1; min-width:140px;" placeholder="Cidade do clima (opcional)" value="${b90EscapeHtml(r.cidade || '')}">
+        <input id="b90-b-news" class="b90-input" style="flex:2; min-width:160px;" placeholder="Temas de notícias, separados por vírgula (opcional)" value="${b90EscapeHtml(r.noticias || '')}"></div>
+      <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SaveBriefings()">Salvar horários</button>
+      <span id="b90-brief-fb" style="color:var(--muted); font-size:0.74rem; margin-left:6px;">${r.agenda ? '' : 'Sem agenda iCal (BYTE_AGENDA_ICS): o resumo usa só tarefas e lembretes.'}</span>`;
+  }
+  window.b90SaveBriefings = async function() {
+    const v = id => document.getElementById(id);
+    const changes = { manha: { ativo: v('b90-bm-on').checked, hora: v('b90-bm-hora').value || '07:30', dias: v('b90-bm-dias').value },
+      semana: { ativo: v('b90-bw-on').checked, dia: Number(v('b90-bw-dia').value), hora: v('b90-bw-hora').value || '18:00' },
+      cidade: v('b90-b-cidade').value.trim() || 'off', noticias: v('b90-b-news').value.trim() || 'off' };
+    const res = await b90Call('briefing_set', { changes }, true);
+    const fb = document.getElementById('b90-brief-fb');
+    if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
+    document.activeElement && document.activeElement.blur && document.activeElement.blur();
+    b90RenderBriefings({ resumos: res });
+    document.getElementById('b90-brief-fb').textContent = '✅ Salvo.';
+  };
+  window.b90BriefNow = async function(kind) {
+    const pre = document.getElementById('b90-brief-preview');
+    pre.style.display = 'block'; pre.textContent = kind === 'semana' ? '📊 Fechando a semana...' : '☀️ Juntando o resumo...';
+    const res = await b90Call('briefing_now', { kind }, true);
+    pre.textContent = res.error ? ('⚠️ ' + res.error) : (res.text || '');
+  };
   window.b90ShowActivity = async function() {
     const box = document.getElementById('b90-activity-box');
     const res = await b90Call('activity_list', { limit: 20 }, true);
@@ -8287,6 +8384,7 @@ pygame.time.Clock().tick(60)</textarea>
     b90RenderGoals(st);
     b90RenderTriggers(st);
     b90RenderPermissions(st);
+    b90RenderBriefings(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');
@@ -8405,7 +8503,8 @@ pygame.time.Clock().tick(60)</textarea>
           <span style="color:#38bdf8; font-size:0.75rem;">(🗓️ ${b90EscapeHtml(t.scheduled_slot || 'Sem horário')})</span>
           ${t.auto_extracted ? '<span style="color:#c084fc; font-size:0.72rem; font-weight:700;">[Extraído em Background pela LLM]</span>' : ''}
         </div>
-        <button class="b90-btn-del" onclick="window.b90DelTask(${t.id})">X</button>
+        <span style="display:flex; gap:4px;"><button class="b90-btn-ok" style="margin:0;" title="Concluída" onclick="window.b90DoneTask(${t.id})">✓</button>
+        <button class="b90-btn-del" style="margin:0;" title="Apagar" onclick="window.b90DelTask(${t.id})">X</button></span>
       </div>
     `).join('') || '<pre class="b90-pre">Sem compromissos na agenda.</pre>';
 
@@ -9274,6 +9373,7 @@ pygame.time.Clock().tick(60)</textarea>
   window.b90CancelReminder = async function(id) { await b90Call('cancel_reminder', { reminder_id: id }); await window.b90Refresh(); };
 
   window.b90DelTask = async function(id) { await b90Call('del_task', { task_id: id }); await window.b90Refresh(); };
+  window.b90DoneTask = async function(id) { await b90Call('done_task', { task_id: id }); await window.b90Refresh(); };
   window.b90DelMem = async function(id) { await b90Call('del_memory', { memory_id: id }); await window.b90Refresh(); };
 
   // Heartbeat a cada 4s para atualizar agenda extraída em background e iniciativas proativas
@@ -9918,8 +10018,10 @@ class ByteOmniServer:
                     # v13.22: ?canal=app é a fila própria do app Android (não disputa avisos com a página /voz)
                     canal = urllib.parse.parse_qs(parsed.query).get("canal", ["api"])[0]
                     items = service.db.pop_undelivered_proactive_messages("app" if canal == "app" else "api")
+                    spoken = service.db.get_setting("fala_avisos", {}) or {}          # v13.24: versão falada (resumos)
                     self._send_json(200, {"agent": AGENT_NAME, "notifications": [
                         {"text": _CODE_FENCE_RE.sub("", str(i.get("message") or "")).strip(), "type": i.get("trigger_type"),
+                         "speech": str(spoken.get(str(i.get("id")), "") or ""),
                          "created_at": i.get("created_at")} for i in items]})
                     return True
                 if method == "POST" and path == "/api/v1/message":

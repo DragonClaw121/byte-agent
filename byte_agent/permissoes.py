@@ -20,7 +20,7 @@ LEVEL_LABEL = {"sugerir": "só sugerir", "aprovar": "pedir aprovação", "automa
 
 CATEGORIES: Dict[str, Dict[str, Any]] = {
     "lembretes": {"label": "Lembretes e rotinas", "tools": {"schedule_reminder", "cancel_reminder"}, "default": "automatico"},
-    "tarefas": {"label": "Tarefas da agenda", "tools": {"add_task"}, "default": "automatico"},
+    "tarefas": {"label": "Tarefas da agenda", "tools": {"add_task", "complete_task"}, "default": "automatico"},
     "memorias": {"label": "Memórias (fatos e preferências)", "tools": {"add_memory"}, "default": "automatico"},
     "objetivos": {"label": "Objetivos de longo prazo", "tools": {"criar_objetivo"}, "default": "automatico"},
     "codigo": {"label": "Rodar código", "tools": {"run_python", "run_shell"}, "default": "aprovar", "floor": "aprovar"},
@@ -80,6 +80,8 @@ def describe_call(tool: str, args: Dict[str, Any]) -> str:
     if tool == "add_task":
         slot = f" ({a.get('scheduled_slot')})" if a.get("scheduled_slot") else ""
         return f"Criar a tarefa \"{str(a.get('title', ''))[:120]}\"{slot}"
+    if tool == "complete_task":
+        return f"Marcar como concluída a tarefa {('#' + str(a['task_id'])) if a.get('task_id') else chr(34) + str(a.get('title', ''))[:120] + chr(34)}"
     if tool == "add_memory":
         return f"Guardar na memória: \"{str(a.get('content', ''))[:140]}\""
     if tool == "schedule_reminder":

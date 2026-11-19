@@ -28,7 +28,7 @@ HELP_TEXT = (
     "/status — modelo ativo, GPU e servidor\n"
     "/modelo — mostra o modelo | /modelo azure:nemotron (Azure) ou /modelo qwen2.5:7b (local) — troca\n"
     "/agenda — tarefas pendentes\n"
-    "/tarefa <texto> — adiciona uma tarefa\n"
+    "/tarefa <texto> — adiciona uma tarefa | /feito <id> — marca como concluída\n"
     "/memorias — lista as memórias\n"
     "/lembrar <fato> — grava uma memória\n"
     "/lembrete <quando> <texto> — ex.: /lembrete 30m beber água | /lembrete amanhã 09:00 reunião\n"
@@ -40,6 +40,8 @@ HELP_TEXT = (
     "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
     "/parear — código para conectar o app do celular/relógio | /dispositivos — aparelhos conectados | /desparear <id>\n"
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
+    "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
+    "/semana — fechamento da semana agora | /semana sexta 18:00 | /semana on|off\n"
     "/permissoes — o que o agente faz sozinho | /permissao <tipo> sugerir|aprovar|automatico | /atividade — o que ele fez\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
@@ -523,8 +525,16 @@ class TelegramBridge:
             self.send(chat_id, res.get("activation_note") or f"Modelo selecionado: {res.get('active_model')}")
         elif cmd == "/agenda":
             tasks = self._dispatch("status").get("tasks") or []
-            self.send(chat_id, "\n".join(f"• [P{t['priority']}] {t['title']} ({t.get('scheduled_slot') or 'sem horário'})" for t in tasks)
-                      or "Sem compromissos na agenda.")
+            self.send(chat_id, "\n".join(f"{'#' + str(t['id']) + ' ' if t.get('id') else ''}[P{t['priority']}] {t['title']} ({t.get('scheduled_slot') or 'sem horário'})"
+                                          for t in tasks if t.get("status", "pending") == "pending")
+                      + ("\n\nJá fez alguma? /feito <id>" if tasks else "") or "Sem compromissos na agenda.")
+        elif cmd == "/feito":
+            if not arg:
+                self.send(chat_id, "Use: /feito <id ou parte do título> (veja os ids em /agenda)")
+                return
+            done = self._dispatch("task_done_find", {"query": arg}).get("done")
+            self.send(chat_id, f"✅ Concluída: {done['title']}. Entra no fechamento da semana." if done
+                      else "Não achei essa tarefa pendente. Veja os ids em /agenda.")
         elif cmd == "/tarefa":
             if not arg:
                 self.send(chat_id, "Use: /tarefa <texto>")
@@ -595,6 +605,15 @@ class TelegramBridge:
             self.send(chat_id, "Feito.\n\n" + (text or ""))
         elif cmd == "/atividade":
             self.send(chat_id, self._dispatch("activity_list", {"limit": 20}).get("text") or "Nada registrado.")
+        elif cmd in {"/resumo", "/semana"}:
+            if not arg or arg.strip().lower() == "agora":
+                self.send(chat_id, "☀️ Juntando o resumo..." if cmd == "/resumo" else "📊 Fechando a semana...")
+            try:
+                text = self._dispatch("briefing_command", {"kind": "manha" if cmd == "/resumo" else "semana", "arg": arg}).get("text")
+            except RuntimeError as err:
+                self.send(chat_id, re.sub(r"^\w*Error: ", "", str(err)))
+                return
+            self.send(chat_id, text or "Resumos indisponíveis neste agente.")
         elif cmd == "/atualizar":
             self.send(chat_id, self._dispatch("request_update").get("text") or "Pedido enviado.")
         elif cmd == "/parear":

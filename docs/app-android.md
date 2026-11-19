@@ -44,6 +44,8 @@ Ligue **"📞 Kronus pode me ligar para avisar"**. O app fica atento aos avisos 
 - se ninguém atender em 30 s, vira **chamada perdida** com o texto na notificação; os demais avisos chegam como
   notificação comum (dá para incluí-los nas chamadas). O Telegram continua recebendo tudo.
 - **Teste:** "Testar: Kronus me liga (em 5 s)".
+- **Resumo como ligação (v1.12):** ligue "Resumo da manhã e fechamento da semana (lidos em voz)" para o resumo
+  das 7h tocar como chamada e o Kronus ler uma versão falada, curta e sem listas. Vem desligado. Veja [resumos.md](resumos.md).
 - **Xiaomi/Redmi/Poco:** em Configurações → Apps → Kronus, ligue **Início automático** e em **Economia de bateria**
   escolha **Sem restrições**; senão o sistema fecha o app e as chamadas não chegam. No app do relógio, permita as
   notificações do Kronus para ele vibrar no pulso.

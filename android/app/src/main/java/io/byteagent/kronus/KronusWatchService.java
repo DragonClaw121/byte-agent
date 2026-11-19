@@ -118,7 +118,7 @@ public class KronusWatchService extends Service {
                     JSONArray items = res.optJSONArray("notifications");
                     for (int i = 0; items != null && i < items.length(); i++) {
                         JSONObject it = items.getJSONObject(i);
-                        handle(prefs, it.optString("type", ""), it.optString("text", ""));
+                        handle(prefs, it.optString("type", ""), it.optString("text", ""), it.optString("speech", ""));
                     }
                 } catch (Exception ignored) {
                     // sem rede agora: tenta na próxima volta
@@ -128,13 +128,16 @@ public class KronusWatchService extends Service {
         }
     }
 
-    /** Lembrete e compromisso chegando tocam como chamada (se ligado); o resto vira notificação. */
-    private void handle(SharedPreferences prefs, String type, String text) {
+    /** Lembrete e compromisso chegando tocam como chamada (se ligado); o resto vira notificação.
+     *  v1.12: o resumo da manhã e o fechamento da semana também podem tocar, lidos na versão FALADA (speech). */
+    private void handle(SharedPreferences prefs, String type, String text, String speech) {
         if (text.isEmpty()) return;
+        boolean summary = "briefing".equals(type) || "weekly_review".equals(type);
         boolean ring = ("reminder".equals(type) && prefs.getBoolean("ligar_lembretes", true))
                 || ("trigger".equals(type) && text.startsWith("📅") && prefs.getBoolean("ligar_agenda", true))
-                || (!"reminder".equals(type) && !"trigger".equals(type) && prefs.getBoolean("ligar_outros", false));
-        if (ring && KronusCallService.ring(this, text)) return;
+                || (summary && prefs.getBoolean("ligar_resumo", false))
+                || (!summary && !"reminder".equals(type) && !"trigger".equals(type) && prefs.getBoolean("ligar_outros", false));
+        if (ring && KronusCallService.ring(this, text, speech)) return;
         notifyInfo(this, text);
     }
 
