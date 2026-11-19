@@ -38,6 +38,7 @@ HELP_TEXT = (
     "/objetivos — progresso | /retomar <id> — continua um travado | /cancelar_objetivo <id>\n"
     "/avaliar — roda as avaliações de comportamento (nota por categoria e o que piorou desde a última)\n"
     "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
+    "/parear — código para conectar o app do celular/relógio | /dispositivos — aparelhos conectados | /desparear <id>\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -565,6 +566,20 @@ class TelegramBridge:
             else:
                 ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
                 self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
+        elif cmd == "/parear":
+            self.send(chat_id, self._dispatch("device_pair_code").get("text") or "Pareamento indisponível.")
+        elif cmd == "/dispositivos":
+            devices = self._dispatch("device_list").get("devices") or []
+            self.send(chat_id, "\n".join(
+                f"#{d['id']} {d['name']} — conectado em {str(d['created_at'])[:10]}"
+                f"{', último uso ' + str(d['last_used'])[:16].replace('T', ' ') if d.get('last_used') else ''}" for d in devices)
+                or "Nenhum aparelho conectado. Use /parear.")
+        elif cmd == "/desparear":
+            if not arg.lstrip("#").isdigit():
+                self.send(chat_id, "Use: /desparear <id> (veja os ids em /dispositivos)")
+                return
+            ok = self._dispatch("device_revoke", {"device_id": int(arg.lstrip("#"))}).get("revoked")
+            self.send(chat_id, "Aparelho desconectado: o app dele para de funcionar na hora." if ok else "Não encontrei esse aparelho.")
         elif cmd == "/gatilhos":
             self.send(chat_id, self._dispatch("trigger_list").get("text") or "Gatilhos indisponíveis neste agente.")
         elif cmd == "/gatilho":

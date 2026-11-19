@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.15"
+BYTE_VERSION = "13.16"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -9305,6 +9305,8 @@ VOICE_PAGE_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0b0f17"><meta name="referrer" content="no-referrer">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Kronus"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Comando de voz</title>
 <style>
 :root{--bg:#f6f7f9;--card:#ffffff;--ink:#0b0f17;--muted:#5b6372;--line:#dde1e7;--accent:#2563eb;--accent-ink:#ffffff;--live:#dc2626;--ok:#16a34a}
@@ -9334,12 +9336,15 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
 @media (max-width:300px){body{padding:8px}.opts{font-size:.8rem}#log{max-height:26vh}h1{font-size:.95rem}
   button.small{padding:3px 8px;font-size:.72rem}#mic{width:42vmin;height:42vmin}main{gap:8px}}
 </style></head><body>
-<header><h1><span id="dot"></span><span id="name">Comando de voz</span></h1><button class="small" id="forget" hidden>Trocar token</button></header>
+<header><h1><span id="dot"></span><span id="name">Comando de voz</span></h1><span>
+  <button class="small primary" id="install" hidden>Instalar app</button> <button class="small" id="forget" hidden>Desconectar</button></span></header>
 <main>
   <section id="setup" hidden>
     <b>Conectar</b>
-    <div style="color:var(--muted);font-size:.9rem">Cole o token da API do agente (o mesmo do relógio/celular). Ele fica salvo só neste aparelho.</div>
-    <input id="tok" type="password" autocomplete="off" placeholder="token da API">
+    <div style="color:var(--muted);font-size:.9rem">Mande <b>/parear</b> no Telegram do agente e digite o código de 6 dígitos
+      (ou toque no link que ele enviar). Este aparelho ganha um acesso próprio, que você pode remover com /desparear.</div>
+    <input id="tok" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="código de 6 dígitos">
+    <div id="tip" style="color:var(--muted);font-size:.85rem" hidden></div>
     <button class="small primary" id="save">Conectar</button>
   </section>
   <button id="mic" aria-label="Falar" hidden>🎙️</button>
@@ -9362,8 +9367,38 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   const hash = new URLSearchParams(location.hash.slice(1));
+  const query = new URLSearchParams(location.search);
   if (hash.get('token')) { store.set('byte_voice_token', hash.get('token')); history.replaceState(null, '', location.pathname); }
+  const pairCode = hash.get('parear');
+  if (pairCode) history.replaceState(null, '', location.pathname + location.search);
   token = store.get('byte_voice_token');
+
+  // v13.16: app instalável (PWA)
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', { scope: '/voz' }).catch(() => {});
+  let installPrompt = null;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; $('install').hidden = false; });
+  $('install').onclick = async () => { if (!installPrompt) return; installPrompt.prompt(); try { await installPrompt.userChoice; } catch (e) {}
+    installPrompt = null; $('install').hidden = true; };
+  if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent)) {
+    $('tip').hidden = false; $('tip').textContent = 'No iPhone: toque em Compartilhar (□↑) → "Adicionar à Tela de Início" para virar app.';
+  }
+  function deviceName() {
+    const ua = navigator.userAgent;
+    const kind = /iphone/i.test(ua) ? 'iPhone' : /ipad/i.test(ua) ? 'iPad' : /android/i.test(ua) ? 'Android' : /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : 'navegador';
+    return kind + (standalone ? ' (app)' : '') + ' ' + new Date().toLocaleDateString('pt-BR');
+  }
+  async function pair(code) {
+    state('Conectando...');
+    try {
+      const r = await fetch('/api/v1/pair', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify({ code, device: deviceName() }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.token) throw new Error(data.error || ('HTTP ' + r.status));
+      token = data.token; store.set('byte_voice_token', token); $('tok').value = '';
+      await connect();
+    } catch (e) { $('setup').hidden = false; state('⚠️ ' + e.message); }
+  }
 
   function state(text) { $('state').textContent = text; }
   function add(cls, text) {
@@ -9529,15 +9564,28 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
       if (v.enabled === false) { $('mic').hidden = true; state('O comando de voz está desligado para ' + agent + '.'); return; }
       if (!Rec && !v.stt) state('Este navegador não reconhece fala e o servidor não tem transcrição configurada.');
       else state('Toque para falar com ' + agent + '.');
+      if (query.get('ouvir') === '1' && !listening) {      // atalho "Falar com Kronus" / "Ok Google, abrir Kronus"
+        try { startRec(); } catch (e) { state('Toque para falar com ' + agent + '.'); }
+      }
     } catch (e) { $('setup').hidden = false; state('⚠️ ' + e.message); }
   }
-  $('save').onclick = () => { token = $('tok').value.trim(); store.set('byte_voice_token', token); connect(); };
+  $('save').onclick = () => {
+    const v = $('tok').value.trim();
+    if (/^\d{6}$/.test(v)) { pair(v); return; }                   // código do /parear
+    token = v; store.set('byte_voice_token', token); connect();     // token completo (modo antigo) continua valendo
+  };
+  $('tok').addEventListener('keydown', e => { if (e.key === 'Enter') $('save').click(); });
   $('forget').onclick = () => { stop(); token = ''; store.set('byte_voice_token', ''); $('mic').hidden = true; $('opts').hidden = true; $('forget').hidden = true; connect(); };
-  connect();
+  if (pairCode && /^\d{6}$/.test(pairCode)) pair(pairCode); else connect();
 })();
 </script></body></html>"""
 
 _CODE_FENCE_RE = re.compile(r"```[\s\S]*?```")
+
+
+def _app_movel():
+    from byte_agent import app_movel
+    return app_movel
 
 
 class ByteOmniServer:
@@ -9584,6 +9632,15 @@ class ByteOmniServer:
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _send_bytes(self, body: bytes, ctype: str, cache: str = "no-cache") -> None:
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", cache)
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
@@ -9655,6 +9712,34 @@ class ByteOmniServer:
                     self._send_json(200, {"text": str((state or {}).get("text") or ""), "emotion": (state or {}).get("emotion"),
                                           "at": (state or {}).get("at")})
                     return True
+                if method == "GET" and path in {"/manifest.webmanifest", "/sw.js"} | set(_app_movel().STATIC):
+                    am = _app_movel()                      # v13.16: arquivos do app instalável (sem segredos)
+                    if path == "/manifest.webmanifest":
+                        self._send_bytes(am.manifest(AGENT_NAME).encode("utf-8"), "application/manifest+json; charset=utf-8")
+                    elif path == "/sw.js":
+                        self._send_bytes(am.SERVICE_WORKER.encode("utf-8"), "application/javascript; charset=utf-8")
+                    else:
+                        self._send_bytes(am.icon(am.STATIC[path]), "image/png", cache="public, max-age=86400")
+                    return True
+                if path == "/api/v1/pair":
+                    # v13.16: troca o código de 6 dígitos (/parear no Telegram) por um token só deste aparelho
+                    reg = getattr(outer.service, "device_registry", None)
+                    if method != "POST" or reg is None or not outer.api_token:
+                        self._send_json(404, {"error": "Pareamento indisponível neste agente."})
+                        return True
+                    if not self._rate_ok():
+                        return True
+                    body = self._read_json()
+                    if body is None:
+                        self._send_json(400, {"error": 'Envie JSON {"code": "123456"}'})
+                        return True
+                    try:
+                        tok = reg.pair(str(body.get("code") or ""), str(body.get("device") or ""))
+                    except PermissionError as err:
+                        self._send_json(403, {"error": str(err)})
+                        return True
+                    self._send_json(200, {"token": tok, "agent": AGENT_NAME})
+                    return True
                 if path == "/voz":                        # v12.3: página de voz para celular/relógio (pede o token da API)
                     if method != "GET":
                         self._send_json(405, {"error": "Use GET"})
@@ -9666,9 +9751,12 @@ class ByteOmniServer:
                 if not outer.api_token:
                     self._send_json(404, {"error": "API desligada (configure canais.api no manifesto do agente)"})
                     return True
-                if not self._same(self._bearer(), outer.api_token):
-                    self._send_json(401, {"error": "Token da API ausente ou inválido"})
-                    return True
+                bearer = self._bearer()
+                if not self._same(bearer, outer.api_token):
+                    reg = getattr(outer.service, "device_registry", None)       # v13.16: token de um aparelho pareado
+                    if reg is None or reg.verify(bearer) is None:
+                        self._send_json(401, {"error": "Token da API ausente ou inválido"})
+                        return True
                 service = outer.service
                 if method == "GET" and path == "/api/v1/status":
                     llm = service.llm

@@ -186,3 +186,15 @@ az containerapp update -g byte-rg -n byte --set-env-vars BYTE_VOZ_BYTE_ESTILO=af
 Estilos comuns: `cheerful` (alegre), `affectionate` (carinhosa), `gentle` (gentil), `excited` (empolgada),
 `friendly` (amigável), `calm` (calma). Intensidade de 0.1 a 2.0. Vazio (`BYTE_VOZ_BYTE_ESTILO=`) desliga.
 Se a voz não tiver o estilo, ela fala com a mesma voz sem estilo. No manifesto: `"voz": {"estilo": "...", "intensidade": 1.3}`.
+
+## App do Kronus no celular (v13.16)
+A página `/voz` virou um aplicativo instalável, sem token gigante:
+1. No Telegram do **Kronus**, mande `/parear`. Chega um código de 6 dígitos e um link (valem 10 minutos, uma vez só).
+2. No celular, toque no link (ou abra `https://SEU-ENDERECO/voz` e digite o código).
+3. Instale: **Android/Chrome** → botão **Instalar app** (ou menu ⋮ → Instalar app). **iPhone/Safari** → Compartilhar →
+   **Adicionar à Tela de Início**.
+4. Pronto: ícone "Kronus" na tela inicial, abre em tela cheia e já começa a ouvir. No Android, "Ok Google, abrir Kronus"
+   também abre (inclusive pelo botão de assistente do relógio).
+
+Cada aparelho ganha um acesso próprio: `/dispositivos` lista, `/desparear <id>` desliga um sem afetar os outros.
+O `KRONUS_API_TOKEN` continua valendo para integrações (ex.: Atalhos do iPhone).

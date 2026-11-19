@@ -71,6 +71,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         objetivos.install(service)                          # v13.9: objetivos de longo prazo, em etapas
         from . import gatilhos
         gatilhos.install(service)                           # v13.14: gatilhos por evento (agenda, e-mail, tarefas)
+        from . import app_movel
+        app_movel.install(service)                          # v13.16: aparelhos pareados (app do Kronus)
     return service
 
 
@@ -362,6 +364,7 @@ class Runtime:
             if not re.fullmatch(r"[A-Za-z0-9_-]{24,}", self.args.ui_token):
                 raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
             self.server.token = self.args.ui_token
+        self.service.api_enabled = bool(channels["api_token"])     # v13.16: /parear só onde há app/API
         port = self.port = self.server.start()
         print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{self.args.host}:{port}/ui?token={self.server.token}", flush=True)
         self._announce()
