@@ -331,7 +331,7 @@ public class MainActivity extends Activity {
         ui.post(() -> diag.setText(text));
     }
 
-    /** Teste: cada método é anunciado por N bipes (1 = E, 2 = F, 3 = D) e depois fala "Método X".
+    /** Teste: cada método é anunciado por N bipes (1 = D, 2 = D0) e depois fala uma frase longa de teste.
      *  A pessoa diz quais frases ouviu no relógio e escolhe esse método. */
     private void testWatch() {
         if (busy) return;
@@ -350,7 +350,8 @@ public class MainActivity extends Activity {
                     String m = METHODS[i];
                     beeps(i + 1);
                     playInfo = "";
-                    String phrase = "Método " + m + ". Se você me ouve no relógio, escolha o método " + m + ".";
+                    String phrase = "Método " + m + ". Esta é uma frase de teste um pouco mais longa, com pausas, vírgulas e "
+                            + "pontos. Se você me ouviu inteira no relógio, escolha o método " + m + ".";
                     boolean ok = playSpeech(null, phrase, m);
                     r.append("\n").append(i + 1).append(" bipe").append(i == 0 ? "" : "s").append(" → método ").append(m)
                             .append(": ").append(ok ? playInfo : "falhou — " + playInfo);
@@ -584,7 +585,7 @@ public class MainActivity extends Activity {
             say("Respondendo...");
             playInfo = "";
             if (watch) watch = ensureWatch(am);
-            if (watch && "D".equals(method())) beeps(1);  // só o D antigo precisa do bipe para acordar o canal
+            if (watch) beeps(1);                         // o bipe acorda o canal antes da primeira frase
             speak(res, watch);
             if (!playInfo.isEmpty()) info(routeInfo + "\n🔊 " + playInfo);
             say("Toque para falar.");
@@ -694,13 +695,18 @@ public class MainActivity extends Activity {
     //  E: voz do servidor pelo app, com ruído no lugar dos silêncios (a melhor, se funcionar)
     //  F: voz do Android direta + ruído de fundo contínuo (o canal não fecha nas pausas)
     //  D: voz do Android direta (funciona, mas corta) — para comparar
-    static final String[] METHODS = {"E", "F", "D"};
-    private static final int NOISE = 60;                  // ~ -55 dBFS: quase inaudível, mas não é silêncio
+    // v1.7: só a voz do Android falando direto (D) chegou ao relógio; som tocado pelo próprio app não chega, e o canal
+    // abre e fecha sozinho (o celular reconhece o relógio como fone só por um instante). Como o INÍCIO de cada fala
+    // sempre sai, a resposta é falada frase por frase, reabrindo o canal antes de cada uma quando ele fechou.
+    //  D:  frase por frase, reabrindo o canal (padrão)
+    //  D0: o texto inteiro de uma vez (como no 1.5)
+    static final String[] METHODS = {"D", "D0"};
+
     private volatile String playInfo = "";
 
     private String method() {
-        String m = prefs.getString("metodo", "F");
-        return java.util.Arrays.asList(METHODS).contains(m) ? m : "F";
+        String m = prefs.getString("metodo", "D");
+        return java.util.Arrays.asList(METHODS).contains(m) ? m : "D";
     }
 
     /** Bipes que funcionam no relógio: anunciam qual método vem a seguir. */
@@ -732,19 +738,51 @@ public class MainActivity extends Activity {
         playSpeech(wav, text, call ? method() : "celular");
     }
 
-    /** Toca um WAV (ou o texto, se não houver WAV) pelo método. */
+    /** Toca a fala pelo método. No relógio: voz do Android (D frase por frase, D0 inteira). No celular: voz do servidor. */
     private boolean playSpeech(byte[] wav, String text, String m) {
-        if ("D".equals(m) || "F".equals(m) || (wav == null && (text.isEmpty() || !ttsReady))) {
-            return speakDirect(text, !"celular".equals(m), "F".equals(m) || "E".equals(m));
-        }
-        if (wav == null) wav = ttsToWav(text);
+        if ("D".equals(m)) return speakChunks(text);
+        if ("D0".equals(m)) return speakDirect(text, true);
         Pcm pcm = wav == null ? null : Pcm.fromWav(wav);
-        if (pcm == null) {
-            playInfo = "voz sem áudio utilizável; usando a voz direta";
-            return speakDirect(text, !"celular".equals(m), true);
+        if (pcm != null && playTrack(pcm, false, false)) return true;
+        return speakDirect(text, false);
+    }
+
+    /** Divide em trechos curtos pela pontuação (juntando pedaços muito pequenos). */
+    static java.util.List<String> chunks(String text) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        for (String part : text.trim().split("(?<=[.!?;:,…])\\s+")) {
+            if (part.isEmpty()) continue;
+            if (cur.length() > 0 && cur.length() + part.length() > 70) {
+                out.add(cur.toString());
+                cur.setLength(0);
+            }
+            if (cur.length() > 0) cur.append(' ');
+            cur.append(part);
+            if (cur.length() >= 22 && part.matches(".*[.!?;:,…]$")) {
+                out.add(cur.toString());
+                cur.setLength(0);
+            }
         }
-        boolean ok = "E".equals(m) ? playTrack(pcm.resample(16000), true, false) : playTrack(pcm, false, false);
-        if (!ok) ok = speakDirect(text, !"celular".equals(m), true);
+        if (cur.length() > 0) out.add(cur.toString());
+        return out;
+    }
+
+    /** D: fala frase por frase; antes de cada uma, confere o canal do relógio e reabre se ele fechou. */
+    private boolean speakChunks(String text) {
+        if (!ttsReady || text == null || text.trim().isEmpty()) return false;
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        java.util.List<String> parts = chunks(text);
+        int reopened = 0;
+        boolean ok = true;
+        for (String part : parts) {
+            if (!scoActive(am)) {
+                ensureWatch(am);
+                reopened++;
+            }
+            ok &= speakDirect(part, true);
+        }
+        playInfo = parts.size() + " trecho(s)" + (reopened > 0 ? ", canal reaberto " + reopened + "x" : "");
         return ok;
     }
 
@@ -844,7 +882,7 @@ public class MainActivity extends Activity {
     /** AudioTrack. call=true: canal de ligação (clássico, como o bipe). keepMic=true: microfone aberto durante o som. */
     @SuppressWarnings("deprecation")
     private boolean playTrack(Pcm pcm, boolean call, boolean keepMic) {
-        byte[] data = call ? pcm.bytes(0.6, 0.5, NOISE) : pcm.bytes(0.15, 0.5);
+        byte[] data = pcm.bytes(0.15, 0.5);
         int mask = AudioFormat.CHANNEL_OUT_MONO;
         int buf = Math.max(AudioTrack.getMinBufferSize(pcm.rate, mask, AudioFormat.ENCODING_PCM_16BIT) * 2, pcm.rate);
         AudioTrack track;
@@ -911,53 +949,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Toca ruído baixinho no canal de ligação até ser parado: o canal não fecha nas pausas da fala. */
-    private static final class KeepAlive implements Runnable {
-        private volatile boolean on = true;
-        private final Thread thread = new Thread(this, "kronus-ruido");
-
-        KeepAlive start() { thread.start(); return this; }
-
-        void stop() {
-            on = false;
-            try { thread.join(1500); } catch (InterruptedException ignored) { }
-        }
-
-        @SuppressWarnings("deprecation")
-        @Override
-        public void run() {
-            int rate = 16000;
-            AudioTrack t = null;
-            try {
-                int buf = Math.max(AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT) * 2, 3200);
-                t = new AudioTrack(AudioManager.STREAM_VOICE_CALL, rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                        buf, AudioTrack.MODE_STREAM);
-                t.play();
-                java.util.Random rnd = new java.util.Random(3);
-                short[] block = new short[1600];          // 100 ms
-                while (on) {
-                    for (int i = 0; i < block.length; i++) block[i] = (short) (rnd.nextInt(2 * NOISE + 1) - NOISE);
-                    if (t.write(block, 0, block.length) <= 0) break;
-                }
-            } catch (Exception ignored) {
-            } finally {
-                if (t != null) {
-                    try { t.stop(); } catch (Exception ignored) { }
-                    t.release();
-                }
-            }
-        }
-    }
-
+    /** A voz do Android falando direto (em modo ligação quando call=true). Espera terminar. */
     private boolean speakDirect(String text, boolean call) {
-        return speakDirect(text, call, false);
-    }
-
-    /** D/F: a voz do Android falando direto (em modo ligação quando call=true). keepAlive: ruído de fundo junto. */
-    private boolean speakDirect(String text, boolean call, boolean keepAlive) {
-        if (!ttsReady || text.isEmpty()) return false;
-        KeepAlive noise = call && keepAlive ? new KeepAlive().start() : null;
-        if (noise != null) sleep(400);                    // o ruído abre o canal antes da primeira palavra
+        if (!ttsReady || text == null || text.isEmpty()) return false;
         tts.setLanguage(new Locale("pt", "BR"));
         CountDownLatch done = new CountDownLatch(1);
         final boolean[] ok = {true};
@@ -973,11 +967,7 @@ public class MainActivity extends Activity {
             done.await(60, TimeUnit.SECONDS);
         } catch (InterruptedException ignored) {
         }
-        if (noise != null) {
-            sleep(500);                                   // deixa a última palavra sair antes de fechar
-            noise.stop();
-        }
-        if (playInfo.isEmpty()) playInfo = noise != null ? "voz do Android com ruído de fundo" : "voz do Android falou direto";
+        if (playInfo.isEmpty()) playInfo = "voz do Android falou direto";
         return ok[0];
     }
 
@@ -1013,7 +1003,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.6");
+        con.setRequestProperty("User-Agent", "kronus-android/1.7");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");
