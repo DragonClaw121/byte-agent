@@ -658,7 +658,7 @@ public class MainActivity extends Activity {
         }
         try {
             boolean bt = k.waitBluetooth(4000);
-            sleep(500);
+            sleep(1200);                                     // o microfone do relógio leva um instante para estabilizar
             info(bt ? "📞 Em chamada com o Kronus pelo relógio" + (k.routeName.isEmpty() ? "" : " (" + k.routeName + ")")
                     : "📞 Em chamada, mas o Android deixou o áudio no celular");
             boolean follow = prefs.getBoolean("seguir", false);
@@ -666,8 +666,8 @@ public class MainActivity extends Activity {
             for (int turn = 0; turn < (follow ? 4 : 1) && !k.ended; turn++) {
                 listening = true;
                 ui.post(() -> mic.setText("⏹️"));
-                say(turn == 0 ? "Fale agora..." : "Pode continuar (ou fique em silêncio para desligar)...");
-                if (turn > 0) beeps(1);                      // avisa que voltou a ouvir
+                say(turn == 0 ? "Fale depois do bipe..." : "Pode continuar (ou fique em silêncio para desligar)...");
+                beeps(1);                                    // "pode falar": evita perder as primeiras sílabas
                 byte[] pcm = record(true, turn == 0 ? 8000 : 5000, turn > 0);
                 listening = false;
                 ui.post(() -> mic.setText("📞"));
@@ -805,6 +805,7 @@ public class MainActivity extends Activity {
         int loudBlocks = 0, speechStart = 0;
         int needBlocks = strict ? 7 : 4;                  // 350 ms (continuação) ou 200 ms de fala seguida
         double factor = strict ? 4.5 : 3.5, minLevel = strict ? 450 : (watch ? 260 : 350);
+        if (watch) disableVoiceEffects(rec.getAudioSessionId());
         rec.startRecording();
         try {
             while (listening) {
@@ -851,6 +852,26 @@ public class MainActivity extends Activity {
         byte[] result = normalize(cut);
         lastRecording = result;
         return result;
+    }
+
+    /** Os filtros de chamada (redutor de ruído, ganho automático, eco) "cortam" o começo da fala enquanto se ajustam;
+     *  o app já ajusta o volume sozinho (normalize). Celulares sem esses filtros simplesmente ignoram. */
+    private static void disableVoiceEffects(int session) {
+        try {
+            if (android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                android.media.audiofx.NoiseSuppressor ns = android.media.audiofx.NoiseSuppressor.create(session);
+                if (ns != null) ns.setEnabled(false);
+            }
+            if (android.media.audiofx.AutomaticGainControl.isAvailable()) {
+                android.media.audiofx.AutomaticGainControl agc = android.media.audiofx.AutomaticGainControl.create(session);
+                if (agc != null) agc.setEnabled(false);
+            }
+            if (android.media.audiofx.AcousticEchoCanceler.isAvailable()) {
+                android.media.audiofx.AcousticEchoCanceler aec = android.media.audiofx.AcousticEchoCanceler.create(session);
+                if (aec != null) aec.setEnabled(false);
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     /** O microfone do relógio (canal de ligação) costuma ser baixo: sobe o volume até ~80% sem distorcer. */
@@ -1202,7 +1223,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.9");
+        con.setRequestProperty("User-Agent", "kronus-android/1.10");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");
