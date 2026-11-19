@@ -115,3 +115,27 @@ def test_pairing_is_refused_where_there_is_no_app(tmp_path):
     finally:
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_android_app_request_wav_with_device_token(tmp_path, monkeypatch):
+    """O app Android manda WAV (PCM 16 kHz) com o token do aparelho e toca o audio_b64 da resposta."""
+    import struct
+    import test_voice as tv
+    fake = tv.FakeOllama()
+    rt = tv.runtime(tmp_path, fake, monkeypatch)
+    try:
+        code = rt.service.device_registry.new_code()["code"]
+        token = rt.service.device_registry.pair(code, "Android app (Samsung)")
+        pcm = b"\x00\x01" * 1600
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        req = urllib.request.Request(f"http://127.0.0.1:{rt.port}/api/v1/voice", data=wav, method="POST",
+                                     headers={"Content-Type": "audio/wav", "Authorization": f"Bearer {token}",
+                                              "User-Agent": "kronus-android/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            res = json.loads(resp.read())
+        assert res["heard"] == "Kronus, que horas são?" and res["reply"] and res["audio_b64"]
+        assert rt.service.voice_kit.transcriber.calls[-1] == (wav, "audio/wav")
+    finally:
+        rt.stop()
+        fake.httpd.shutdown()

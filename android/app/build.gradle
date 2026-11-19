@@ -1,0 +1,46 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Número do build no GitHub Actions vira a versão: cada APK novo atualiza o anterior sem desinstalar.
+def runNumber = Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
+
+android {
+    namespace 'io.byteagent.kronus'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.byteagent.kronus'
+        minSdk 26
+        targetSdk 35
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    // Assinatura de uso pessoal (chave "debug" do projeto, a mesma em todo build: permite atualizar por cima).
+    signingConfigs {
+        kronus {
+            storeFile file('kronus-debug.keystore')
+            storePassword 'android'
+            keyAlias 'kronus'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.kronus
+        }
+        debug {
+            signingConfig signingConfigs.kronus
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

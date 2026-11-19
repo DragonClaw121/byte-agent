@@ -1,0 +1,30 @@
+name: app-android
+# Compila o app Android do Kronus e publica o APK em "Releases" (tag app-kronus), sempre no mesmo endereço:
+# https://github.com/DragonClaw121/byte-agent/releases/download/app-kronus/kronus.apk
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Compilar
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Publicar o APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk kronus.apk
+          gh release delete app-kronus --yes --cleanup-tag || true
+          gh release create app-kronus kronus.apk --target "$GITHUB_SHA" --title "App Kronus para Android (build $GITHUB_RUN_NUMBER)" \
+            --notes "Baixe kronus.apk no celular e instale (permita instalar de fontes desconhecidas). Cada build novo atualiza o app por cima."
