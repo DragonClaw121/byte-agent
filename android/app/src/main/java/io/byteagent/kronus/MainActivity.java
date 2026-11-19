@@ -85,6 +85,11 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("kronus", Context.MODE_PRIVATE);
         buildUi();
         tts = new TextToSpeech(this, status -> ttsReady = status == TextToSpeech.SUCCESS);
+        try {
+            KronusCallService.register(this);              // v1.8: o Kronus como "app de chamadas"
+        } catch (Exception e) {
+            prefs.edit().putString("call_error", e.getClass().getSimpleName()).apply();
+        }
         autoListen = isVoiceIntent(getIntent());
         refresh();
         askPermissions();
@@ -241,8 +246,11 @@ public class MainActivity extends Activity {
         micParams.topMargin = dp(36);
         mic.setLayoutParams(micParams);
         mic.setOnClickListener(v -> {
-            if (listening) listening = false;          // segundo toque: termina de ouvir e envia
-            else startListening();
+            if (listening) listening = false;          // tocar enquanto ouve: termina de ouvir e envia
+            else if (KronusCallService.current != null) {
+                KronusCallService.end();               // tocar durante a chamada (fora da escuta): desliga
+                say("Chamada encerrada.");
+            } else startListening();
         });
         root.addView(mic);
 
@@ -331,40 +339,45 @@ public class MainActivity extends Activity {
         ui.post(() -> diag.setText(text));
     }
 
-    /** Teste: cada método é anunciado por N bipes (1 = D, 2 = D0) e depois fala uma frase longa de teste.
-     *  A pessoa diz quais frases ouviu no relógio e escolhe esse método. */
+    /** Teste dentro de uma chamada: 1 bipe = C1 (voz do Kronus pelo app), 2 bipes = C2 (voz do Android). */
     private void testWatch() {
         if (busy) return;
         busy = true;
         new Thread(() -> {
-            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            boolean call = routeToWatch(am) != null;
-            StringBuilder r = new StringBuilder(routeInfo);
+            StringBuilder r = new StringBuilder();
+            KronusCallService.KronusConnection k = KronusCallService.start(this, 6000);
             try {
-                if (!call) {
-                    r.append("\nO relógio não abriu o canal de ligação: confira se está conectado ao celular.");
+                if (k == null) {
+                    r.append("📞 A chamada não começou: ").append(KronusCallService.lastError);
                     info(r.toString());
                     return;
                 }
-                for (int i = 0; i < METHODS.length; i++) {
-                    String m = METHODS[i];
+                boolean bt = k.waitBluetooth(4000);
+                sleep(600);
+                r.append(bt ? "📞 Em chamada pelo relógio" + (k.routeName.isEmpty() ? "" : " (" + k.routeName + ")")
+                        : "📞 Em chamada, mas o áudio ficou no celular (o relógio não entrou)");
+                info(r.toString());
+                String[] test = {"C1", "C2"};
+                String saved = prefs.getString("metodo", "C2");
+                for (int i = 0; i < test.length && !k.ended; i++) {
                     beeps(i + 1);
                     playInfo = "";
-                    String phrase = "Método " + m + ". Esta é uma frase de teste um pouco mais longa, com pausas, vírgulas e "
-                            + "pontos. Se você me ouviu inteira no relógio, escolha o método " + m + ".";
-                    boolean ok = playSpeech(null, phrase, m);
-                    r.append("\n").append(i + 1).append(" bipe").append(i == 0 ? "" : "s").append(" → método ").append(m)
-                            .append(": ").append(ok ? playInfo : "falhou — " + playInfo);
+                    prefs.edit().putString("metodo", test[i]).apply();
+                    String phrase = "Método " + test[i] + ". Esta é uma frase de teste mais longa, com pausas, vírgulas e "
+                            + "pontos. Se você me ouviu inteira no relógio, escolha o método " + test[i] + ".";
+                    playInCall(null, phrase);
+                    r.append("\n").append(i + 1).append(i == 0 ? " bipe" : " bipes").append(" → ").append(test[i]).append(": ")
+                            .append(playInfo.isEmpty() ? "voz do Android" : playInfo);
                     info(r.toString());
-                    if (!scoActive(am)) ensureWatch(am);   // o relógio pode fechar o canal entre um método e outro
-                    sleep(600);
+                    sleep(500);
                 }
-                r.append("\nEscolha abaixo o método cuja frase você ouviu no relógio.");
+                prefs.edit().putString("metodo", saved).apply();
+                r.append("\nEscolha abaixo o que saiu inteiro no relógio.");
                 info(r.toString());
             } catch (Exception e) {
                 info(r + "\nerro no teste: " + e.getMessage());
             } finally {
-                releaseWatch(am, call);
+                if (k != null) k.hangUp();
                 busy = false;
             }
         }).start();
@@ -560,6 +573,7 @@ public class MainActivity extends Activity {
     }
 
     private void converse() {
+        if (method().startsWith("C") && callConversation()) return;
         AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         final boolean routed = routeToWatch(am) != null;
         boolean watch = routed;
@@ -600,8 +614,121 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** v1.8: a conversa como CHAMADA. Turnos: você fala, ele responde, você pode continuar; silêncio encerra.
+     *  Devolve false se a chamada nem começou (aí o app usa o modo antigo). */
+    private boolean callConversation() {
+        say("Ligando para o Kronus...");
+        KronusCallService.KronusConnection k = KronusCallService.start(this, 6000);
+        if (k == null) {
+            info("📞 A chamada não começou: " + KronusCallService.lastError + " — usando o modo antigo.");
+            return false;
+        }
+        try {
+            boolean bt = k.waitBluetooth(4000);
+            sleep(500);
+            info(bt ? "📞 Em chamada com o Kronus pelo relógio" + (k.routeName.isEmpty() ? "" : " (" + k.routeName + ")")
+                    : "📞 Em chamada, mas o Android deixou o áudio no celular");
+            for (int turn = 0; turn < 6 && !k.ended; turn++) {
+                listening = true;
+                ui.post(() -> mic.setText("⏹️"));
+                say(turn == 0 ? "Fale agora..." : "Pode continuar (ou fique em silêncio para desligar)...");
+                byte[] pcm = record(true, turn == 0 ? 8000 : 6000);
+                listening = false;
+                ui.post(() -> mic.setText("📞"));
+                if (pcm == null || k.ended) break;
+                say("Pensando...");
+                JSONObject res = http(prefs.getString("server", "") + "/api/v1/voice?audio=wav", "audio/wav", wav(pcm),
+                        prefs.getString("token", ""));
+                if (res.optBoolean("ignored")) {
+                    playInCall(null, "Não entendi. Pode repetir?");
+                    continue;
+                }
+                String heard = res.optString("heard", "");
+                String reply = res.optString("reply", "");
+                if (!heard.isEmpty()) addLog("Você", heard);
+                if (!reply.isEmpty()) addLog(prefs.getString("agent", "Kronus"), reply);
+                say("Respondendo...");
+                byte[] wav = null;
+                String b64 = res.optString("audio_b64", "");
+                if (!b64.isEmpty() && !"null".equals(b64) && res.optString("audio_mime", "").contains("wav")) {
+                    try { wav = Base64.decode(b64, Base64.DEFAULT); } catch (Exception ignored) { }
+                }
+                playInfo = "";
+                playInCall(wav, res.optString("speech", reply));
+                info((bt ? "📞 Em chamada pelo relógio" : "📞 Em chamada (áudio no celular)") + "\n🔊 " + playInfo);
+            }
+            say("Chamada encerrada. Toque para falar de novo.");
+        } catch (Exception e) {
+            say("⚠️ " + e.getMessage());
+            checkStatus();
+        } finally {
+            k.hangUp();
+            listening = false;
+            busy = false;
+            ui.post(() -> mic.setText("🎙️"));
+        }
+        return true;
+    }
+
+    /** Fala dentro da chamada: C1 = voz do servidor tocada pelo app; C2 = voz do Android. Um cai no outro se falhar. */
+    private void playInCall(byte[] wav, String text) {
+        if ("C1".equals(method())) {
+            Pcm pcm = wav != null ? Pcm.fromWav(wav) : null;
+            if (pcm == null && ttsReady && text != null && !text.isEmpty()) {
+                byte[] f = ttsToWav(text);
+                pcm = f == null ? null : Pcm.fromWav(f);
+            }
+            if (pcm != null && playVoip(pcm)) return;
+        }
+        speakDirect(text, true);
+    }
+
+    /** Áudio de chamada (VoIP) pelo app: dentro de uma chamada ativa, o Android manda para o relógio. */
+    private boolean playVoip(Pcm pcm) {
+        Pcm p16 = pcm.resample(16000);
+        byte[] data = p16.bytes(0.2, 0.4);
+        int mask = AudioFormat.CHANNEL_OUT_MONO;
+        int buf = Math.max(AudioTrack.getMinBufferSize(16000, mask, AudioFormat.ENCODING_PCM_16BIT) * 2, 16000);
+        AudioTrack track;
+        try {
+            track = new AudioTrack.Builder()
+                    .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                    .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(16000).setChannelMask(mask).build())
+                    .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(buf).build();
+        } catch (Exception e) {
+            playInfo = "o Android recusou o áudio da chamada";
+            return false;
+        }
+        try {
+            if (track.getState() != AudioTrack.STATE_INITIALIZED) return false;
+            track.play();
+            int written = 0;
+            while (written < data.length) {
+                int w = track.write(data, written, Math.min(4096, data.length - written));
+                if (w <= 0) break;
+                written += w;
+            }
+            long frames = written / 2;
+            long deadline = System.currentTimeMillis() + frames * 1000L / 16000 + 3000;
+            while (track.getPlaybackHeadPosition() < frames && System.currentTimeMillis() < deadline) sleep(50);
+            playInfo = String.format(Locale.US, "voz do Kronus: %.1f s", p16.s.length / 16000.0);
+            return written > 0;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { track.stop(); } catch (Exception ignored) { }
+            track.release();
+        }
+    }
+
     /** Grava até a pessoa parar de falar (1,6 s de silêncio), no máximo 20 s. Devolve null se não houve fala. */
     private byte[] record(boolean watch) {
+        return record(watch, 8000);
+    }
+
+    private byte[] record(boolean watch, long noSpeechMs) {
         int source = watch ? MediaRecorder.AudioSource.VOICE_COMMUNICATION : MediaRecorder.AudioSource.VOICE_RECOGNITION;
         int min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         AudioRecord rec;
@@ -646,7 +773,7 @@ public class MainActivity extends Activity {
                     loudBlocks = 0;
                 }
                 if (heard && now - lastVoice > 1600) break;
-                if (!heard && now - start > 8000) break;
+                if (!heard && now - start > noSpeechMs) break;
                 if (now - start > 20000) break;
             }
         } finally {
@@ -700,13 +827,15 @@ public class MainActivity extends Activity {
     // sempre sai, a resposta é falada frase por frase, reabrindo o canal antes de cada uma quando ele fechou.
     //  D:  frase por frase, reabrindo o canal (padrão)
     //  D0: o texto inteiro de uma vez (como no 1.5)
-    static final String[] METHODS = {"D", "D0"};
+    // v1.8: C1/C2 = a conversa vira uma CHAMADA do app; o Android mantém o relógio ligado do começo ao fim.
+    //  C1: chamada + voz do Kronus (a do servidor)   C2: chamada + voz do Android
+    static final String[] METHODS = {"C1", "C2", "D", "D0"};
 
     private volatile String playInfo = "";
 
     private String method() {
-        String m = prefs.getString("metodo", "D");
-        return java.util.Arrays.asList(METHODS).contains(m) ? m : "D";
+        String m = prefs.getString("metodo", "C2");
+        return java.util.Arrays.asList(METHODS).contains(m) ? m : "C2";
     }
 
     /** Bipes que funcionam no relógio: anunciam qual método vem a seguir. */
@@ -1003,7 +1132,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.7");
+        con.setRequestProperty("User-Agent", "kronus-android/1.8");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

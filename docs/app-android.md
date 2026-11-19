@@ -23,13 +23,14 @@ Diferente do app da página `/voz`, o app nativo consegue usar o **microfone e o
   voz") → escolha **Kronus**. Em alguns celulares a opção fica em "Assistente de voz".
   Se o Kronus não aparecer nessa lista, o atalho ainda funciona pelo ícone do app.
 
-## Som no relógio (canal de ligação)
-Relógios como o Jiditech só aceitam som no "canal de ligação", e o celular só os reconhece como fone por instantes:
-o canal abre e fecha sozinho. Nos testes, só a voz do Android falando direto chegou ao relógio. Por isso o app fala a
-resposta **frase por frase** (método **D**), conferindo o canal antes de cada trecho e reabrindo quando ele fechou.
-O método **D0** fala o texto inteiro de uma vez. Toque em **Testar som do relógio** (1 bipe = D, 2 = D0) e escolha o
-que saiu mais inteiro. Nesses relógios a voz no pulso é a do Android, não a do Azure (que segue no Telegram e no
-painel).
+## Som no relógio: o Kronus como "app de chamadas" (v1.8)
+Relógios como o Jiditech só aceitam som em ligações, e fora de uma ligação o celular abre e fecha o canal sozinho
+(a fala cortava). Agora, ao tocar no 🎙️, o app faz uma **chamada do próprio app** para o Kronus (como apps de voz
+fazem; não usa a operadora nem custa nada): o Android liga o relógio e mantém o canal aberto até o fim.
+- Fale; ele responde; você pode continuar. Silêncio de alguns segundos (ou desligar no relógio) encerra.
+- Métodos: **C1** = chamada + voz do Kronus (a do Azure); **C2** = chamada + voz do Android (padrão);
+  **D/D0** = modo antigo, sem chamada. **Testar som do relógio** faz uma chamada de teste: 1 bipe = C1, 2 = C2.
+- Se o Android recusar a chamada, o app usa o modo antigo sozinho.
 
 ## Atualizar
 Cada versão nova do app é publicada no mesmo link. Baixe e instale por cima: a conexão é mantida.
