@@ -489,7 +489,9 @@ class Synthesizer:
                 "command": "comando local (BYTE_TTS_COMMAND)"}.get(self.backend)
 
     def synthesize(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None,
-                   style: Optional[str] = None, style_degree: Optional[float] = None) -> Tuple[bytes, str]:
+                   style: Optional[str] = None, style_degree: Optional[float] = None, fmt: str = "ogg") -> Tuple[bytes, str]:
+        """fmt="wav" (v13.20): áudio sem compressão para o app Android tocar direto no relógio."""
+        fmt = "wav" if str(fmt or "").lower() == "wav" else "ogg"
         """Devolve (áudio, mime). Prefere OGG/Opus (nota de voz do Telegram) e cai para MP3/WAV.
         voice/speed: a voz do agente ativo; se o serviço não conhecer essa voz, usa a voz padrão."""
         text = speech_text(text)
@@ -498,12 +500,12 @@ class Synthesizer:
         if self.backend == "http":
             if voice and voice != self.voice:
                 try:
-                    return self._http(text, voice, speed)
+                    return self._http(text, voice, speed, fmt)
                 except VoiceError as err:
                     if "HTTP 4" not in str(err):
                         raise
                     self.last_voice_error = f"voz '{voice}' recusada pelo serviço; usando a padrão"
-            return self._http(text, None, speed)
+            return self._http(text, None, speed, fmt)
         if self.backend == "azure":
             default = self.azure_voice(None)
             wanted = self.azure_voice(voice)
@@ -516,7 +518,7 @@ class Synthesizer:
                 attempts.append((default, None))
             for i, (v, st) in enumerate(attempts):
                 try:
-                    return self._azure(text, v, speed, st, style_degree)
+                    return self._azure(text, v, speed, st, style_degree, fmt)
                 except VoiceError as err:
                     last = i == len(attempts) - 1
                     if last or "HTTP 4" not in str(err) or "HTTP 401" in str(err) or "HTTP 403" in str(err):
@@ -525,11 +527,11 @@ class Synthesizer:
                                              else f"voz '{v}' recusada pelo Azure; usando a padrão")
             raise VoiceError("O Azure Speech não devolveu áudio.")
         if self.backend == "command":
-            return self._command(text)
+            return self._command(text, fmt)
         raise VoiceError("Fala das respostas não configurada (AZURE_SPEECH_KEY + AZURE_SPEECH_REGION, BYTE_VOICE_TTS_URL "
                          "ou BYTE_TTS_COMMAND).")
 
-    def _http(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None) -> Tuple[bytes, str]:
+    def _http(self, text: str, voice: Optional[str] = None, speed: Optional[float] = None, fmt: str = "ogg") -> Tuple[bytes, str]:
         endpoint = self.url if self.url.endswith("/audio/speech") else self.url + "/audio/speech"
         payload: Dict[str, Any] = {"model": self.model or "tts-1", "input": text, "voice": voice or self.voice or "alloy",
                                    "response_format": "opus"}
@@ -538,7 +540,8 @@ class Synthesizer:
         headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        for fmt, mime in (("opus", "audio/ogg"), ("mp3", "audio/mpeg")):
+        formats = (("wav", "audio/wav"),) if fmt == "wav" else (("opus", "audio/ogg"), ("mp3", "audio/mpeg"))
+        for fmt, mime in formats:
             payload["response_format"] = fmt
             req = urllib.request.Request(endpoint, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
             try:
@@ -565,7 +568,7 @@ class Synthesizer:
         return AZURE_DEFAULT_VOICE
 
     def _azure(self, text: str, voice: str, speed: Optional[float] = None, style: Optional[str] = None,
-               style_degree: Optional[float] = None) -> Tuple[bytes, str]:
+               style_degree: Optional[float] = None, out_fmt: str = "ogg") -> Tuple[bytes, str]:
         lang = "-".join(voice.split("-")[:2])
         # v13.12: vozes "Multilingual" de outro idioma (ex.: zh-CN-XiaoxiaoMultilingualNeural) recebem a ordem de
         # falar em português do Brasil; sem isso, leriam o texto com o sotaque de origem.
@@ -586,7 +589,9 @@ class Synthesizer:
                 f'xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="{lang}">'
                 f'<voice name="{voice}">{body}</voice></speak>')
         last = ""
-        for fmt, mime in (("ogg-24khz-16bit-mono-opus", "audio/ogg"), ("audio-24khz-48kbitrate-mono-mp3", "audio/mpeg")):
+        formats = ((("riff-16khz-16bit-mono-pcm", "audio/wav"),) if out_fmt == "wav"
+                   else (("ogg-24khz-16bit-mono-opus", "audio/ogg"), ("audio-24khz-48kbitrate-mono-mp3", "audio/mpeg")))
+        for fmt, mime in formats:
             req = urllib.request.Request(self.azure_endpoint, data=ssml.encode("utf-8"), method="POST", headers={
                 "Ocp-Apim-Subscription-Key": self.azure_key, "Content-Type": "application/ssml+xml",
                 "X-Microsoft-OutputFormat": fmt, "User-Agent": USER_AGENT})
@@ -605,9 +610,14 @@ class Synthesizer:
                 raise VoiceError(f"Azure Speech indisponível: {type(err).__name__}") from None
         raise VoiceError(f"O Azure Speech não devolveu áudio ({last}).")
 
-    def _command(self, text: str) -> Tuple[bytes, str]:
+    def _command(self, text: str, fmt: str = "ogg") -> Tuple[bytes, str]:
         from .speech import SpeechEngine
         wav = SpeechEngine(self.command).synthesize(text)
+        if fmt == "wav":
+            try:
+                return wav.read_bytes(), "audio/wav"
+            finally:
+                wav.unlink(missing_ok=True)
         try:
             ffmpeg = shutil.which("ffmpeg")
             if ffmpeg:                                       # nota de voz do Telegram pede OGG/Opus
@@ -715,7 +725,8 @@ def handle_command(service: Any, payload: Dict[str, Any], kit: VoiceKit,
         try:
             data, mime = kit.synthesizer.synthesize(out["speech"], voice=policy.get("voz_servidor") or None,
                                                     speed=policy.get("velocidade"), style=policy.get("estilo") or None,
-                                                    style_degree=policy.get("intensidade"))
+                                                    style_degree=policy.get("intensidade"),
+                                                    fmt="wav" if payload.get("audio_format") == "wav" else "ogg")
             out["audio_b64"], out["audio_mime"] = base64.b64encode(data).decode("ascii"), mime
         except Exception as err:                            # sem áudio, a resposta em texto continua valendo
             out["audio_error"] = f"{type(err).__name__}: {str(err)[:160]}"

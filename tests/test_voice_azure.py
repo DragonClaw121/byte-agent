@@ -222,3 +222,11 @@ def test_transcription_gets_vocabulary_hint_and_ignores_prompt_echo(monkeypatch)
     monkeypatch.setenv("BYTE_STT_PROMPT", "")
     t.transcribe(b"RIFF....", "audio/wav")
     assert b'name="prompt"' not in sent["body"]                          # vazio desliga
+
+
+def test_wav_output_for_the_android_app(speech_url):
+    s = voice.Synthesizer(azure_key="chave-certa", azure_endpoint=speech_url)
+    data, mime = s.synthesize("Oi", voice="pt-BR-AntonioNeural", fmt="wav")
+    assert mime == "audio/wav" and FakeSpeech.calls[-1]["fmt"] == "riff-16khz-16bit-mono-pcm"
+    s.synthesize("Oi", voice="pt-BR-AntonioNeural")
+    assert FakeSpeech.calls[-1]["fmt"] == "ogg-24khz-16bit-mono-opus"           # Telegram continua em OGG

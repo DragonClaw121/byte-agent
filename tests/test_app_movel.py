@@ -139,3 +139,21 @@ def test_android_app_request_wav_with_device_token(tmp_path, monkeypatch):
     finally:
         rt.stop()
         fake.httpd.shutdown()
+
+
+def test_android_app_can_ask_for_wav_reply(tmp_path, monkeypatch):
+    import test_voice as tv
+    fake = tv.FakeOllama()
+    rt = tv.runtime(tmp_path, fake, monkeypatch)
+    try:
+        token = rt.service.device_registry.pair(rt.service.device_registry.new_code()["code"], "Android app")
+        for query, mime in (("?audio=wav", "audio/wav"), ("", "audio/ogg")):
+            req = urllib.request.Request(f"http://127.0.0.1:{rt.port}/api/v1/voice{query}", data=b"RIFF....WAVE", method="POST",
+                                         headers={"Content-Type": "audio/wav", "Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                res = json.loads(resp.read())
+            assert res["audio_mime"] == mime
+        assert rt.service.voice_kit.synthesizer.formats[-2:] == ["wav", "ogg"]
+    finally:
+        rt.stop()
+        fake.httpd.shutdown()

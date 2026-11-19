@@ -16,6 +16,7 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioTrack;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
 import android.os.Build;
@@ -539,7 +540,7 @@ public class MainActivity extends Activity {
                 return;
             }
             say("Pensando...");
-            JSONObject res = http(prefs.getString("server", "") + "/api/v1/voice", "audio/wav", wav(pcm), prefs.getString("token", ""));
+            JSONObject res = http(prefs.getString("server", "") + "/api/v1/voice?audio=wav", "audio/wav", wav(pcm), prefs.getString("token", ""));
             if (res.optBoolean("ignored")) {
                 say("Não entendi. Toque para tentar de novo.");
                 return;
@@ -646,48 +647,158 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    /** Toca a voz do servidor (a mesma do Telegram); se não der, usa a voz do Android. */
+    /** Toca a voz do servidor (a mesma do Telegram); se não der, usa a voz do Android.
+     *  v1.2: tudo sai por um AudioTrack no canal de ligação, apontado para o relógio (como o bipe, que sempre funcionou),
+     *  com meio segundo de silêncio antes (o Bluetooth "engole" o começo do som). */
     private void speak(JSONObject res, boolean watch) {
         String b64 = res.optString("audio_b64", "");
         String text = res.optString("speech", res.optString("reply", ""));
+        String mime = res.optString("audio_mime", "audio/ogg");
         if (!b64.isEmpty() && !"null".equals(b64)) {
             try {
-                String mime = res.optString("audio_mime", "audio/ogg");
-                File f = new File(getCacheDir(), mime.contains("mpeg") ? "resposta.mp3" : "resposta.ogg");
-                try (FileOutputStream fo = new FileOutputStream(f)) {
-                    fo.write(Base64.decode(b64, Base64.DEFAULT));
-                }
-                MediaPlayer mp = new MediaPlayer();
-                mp.setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(watch ? AudioAttributes.USAGE_VOICE_COMMUNICATION : AudioAttributes.USAGE_ASSISTANT)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build());
-                mp.setDataSource(f.getAbsolutePath());
-                mp.prepare();
-                CountDownLatch done = new CountDownLatch(1);
-                mp.setOnCompletionListener(p -> done.countDown());
-                mp.setOnErrorListener((p, w, x) -> { done.countDown(); return true; });
-                mp.start();
-                done.await(90, TimeUnit.SECONDS);
-                mp.release();
-                return;
+                byte[] audio = Base64.decode(b64, Base64.DEFAULT);
+                if (mime.contains("wav") && playWav(audio, watch)) return;
+                if (!mime.contains("wav") && playFile(audio, mime, watch)) return;
             } catch (Exception ignored) {
                 // cai para a voz do Android
             }
         }
         if (text.isEmpty() || !ttsReady) return;
+        byte[] wav = ttsToWav(text);
+        if (wav != null && playWav(wav, watch)) return;
+        // último recurso: a voz do Android tocando sozinha
         tts.setLanguage(new Locale("pt", "BR"));
-        CountDownLatch done = new CountDownLatch(1);
-        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) { }
-            @Override public void onDone(String id) { done.countDown(); }
-            @Override public void onError(String id) { done.countDown(); }
-        });
         Bundle params = new Bundle();
         params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, watch ? AudioManager.STREAM_VOICE_CALL : AudioManager.STREAM_MUSIC);
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "kronus");
+    }
+
+    private AudioDeviceInfo scoOutput() {
+        AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (Build.VERSION.SDK_INT >= 31) {
+            AudioDeviceInfo d = am.getCommunicationDevice();
+            if (d != null && d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return d;
+        }
+        for (AudioDeviceInfo d : am.getDevices(AudioManager.GET_DEVICES_OUTPUTS))
+            if (d.getType() == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return d;
+        return null;
+    }
+
+    private AudioAttributes attrs(boolean watch) {
+        return new AudioAttributes.Builder()
+                .setUsage(watch ? AudioAttributes.USAGE_VOICE_COMMUNICATION : AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();
+    }
+
+    /** WAV PCM 16 bits -> AudioTrack no relógio (ou no celular). Devolve false se o arquivo não for PCM. */
+    private boolean playWav(byte[] wav, boolean watch) {
+        ByteBuffer b = ByteBuffer.wrap(wav).order(ByteOrder.LITTLE_ENDIAN);
+        if (wav.length < 44 || b.getInt(0) != 0x46464952 || b.getInt(8) != 0x45564157) return false;   // "RIFF" "WAVE"
+        int rate = 0, channels = 1, bits = 16, dataAt = -1, dataLen = 0;
+        int pos = 12;
+        while (pos + 8 <= wav.length) {
+            int id = b.getInt(pos), len = b.getInt(pos + 4);
+            if (id == 0x20746d66) {                        // "fmt "
+                if (b.getShort(pos + 8) != 1) return false; // só PCM
+                channels = b.getShort(pos + 10);
+                rate = b.getInt(pos + 12);
+                bits = b.getShort(pos + 22);
+            } else if (id == 0x61746164) {                 // "data"
+                dataAt = pos + 8;
+                dataLen = Math.min(len < 0 ? wav.length : len, wav.length - dataAt);
+                break;
+            }
+            pos += 8 + len + (len & 1);
+        }
+        if (rate <= 0 || bits != 16 || dataAt < 0) return false;
+        int mask = channels == 2 ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
+        int frameBytes = 2 * Math.max(1, channels);
+        int minBuf = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT);
+        AudioTrack track = new AudioTrack.Builder()
+                .setAudioAttributes(attrs(watch))
+                .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(rate).setChannelMask(mask).build())
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(Math.max(minBuf * 2, rate * frameBytes / 2))
+                .build();
         try {
+            if (watch) {
+                AudioDeviceInfo sco = scoOutput();
+                if (sco != null) track.setPreferredDevice(sco);
+            }
+            track.play();
+            byte[] silence = new byte[(rate * frameBytes / 2) / frameBytes * frameBytes];   // 0,5 s
+            track.write(silence, 0, silence.length);
+            int written = 0;
+            while (written < dataLen) {
+                int n = Math.min(8192, dataLen - written);
+                n -= n % frameBytes;
+                if (n <= 0) break;
+                int w = track.write(wav, dataAt + written, n);
+                if (w <= 0) break;
+                written += w;
+            }
+            track.write(silence, 0, silence.length / 2);   // um respiro no fim para não cortar a última palavra
+            long frames = (silence.length + written + silence.length / 2) / frameBytes;
+            long deadline = System.currentTimeMillis() + frames * 1000L / rate + 3000;
+            while (track.getPlaybackHeadPosition() < frames && System.currentTimeMillis() < deadline) sleep(50);
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { track.stop(); } catch (Exception ignored) { }
+            track.release();
+        }
+    }
+
+    /** Formatos comprimidos (servidor antigo): MediaPlayer apontado para o relógio. */
+    private boolean playFile(byte[] audio, String mime, boolean watch) {
+        try {
+            File f = new File(getCacheDir(), mime.contains("mpeg") ? "resposta.mp3" : "resposta.ogg");
+            try (FileOutputStream fo = new FileOutputStream(f)) {
+                fo.write(audio);
+            }
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioAttributes(attrs(watch));
+            mp.setDataSource(f.getAbsolutePath());
+            if (watch && Build.VERSION.SDK_INT >= 28) {
+                AudioDeviceInfo sco = scoOutput();
+                if (sco != null) mp.setPreferredDevice(sco);
+            }
+            mp.prepare();
+            CountDownLatch done = new CountDownLatch(1);
+            mp.setOnCompletionListener(p -> done.countDown());
+            mp.setOnErrorListener((p, w, x) -> { done.countDown(); return true; });
+            mp.start();
             done.await(90, TimeUnit.SECONDS);
-        } catch (InterruptedException ignored) {
+            mp.release();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** A voz do Android grava num arquivo WAV (em vez de tocar sozinha, onde quiser). */
+    private byte[] ttsToWav(String text) {
+        try {
+            tts.setLanguage(new Locale("pt", "BR"));
+            File f = new File(getCacheDir(), "fala.wav");
+            CountDownLatch done = new CountDownLatch(1);
+            tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override public void onStart(String id) { }
+                @Override public void onDone(String id) { done.countDown(); }
+                @Override public void onError(String id) { done.countDown(); }
+            });
+            if (tts.synthesizeToFile(text, new Bundle(), f, "arquivo") != TextToSpeech.SUCCESS) return null;
+            if (!done.await(30, TimeUnit.SECONDS) || !f.exists()) return null;
+            byte[] data = new byte[(int) f.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                int off = 0, n;
+                while (off < data.length && (n = in.read(data, off, data.length - off)) > 0) off += n;
+            }
+            return data;
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -697,7 +808,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.1");
+        con.setRequestProperty("User-Agent", "kronus-android/1.2");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

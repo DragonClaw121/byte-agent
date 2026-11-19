@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.19"
+BYTE_VERSION = "13.20"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -9804,7 +9804,9 @@ class ByteOmniServer:
                             return True
                     payload = {"audio_b64": payload.get("audio_b64"), "mime": payload.get("mime"),
                                "text": payload.get("text"), "hands_free": bool(payload.get("hands_free")),
-                               "audio_reply": payload.get("audio_reply"), "source": "api", "owner": True}
+                               "audio_reply": payload.get("audio_reply"), "source": "api", "owner": True,
+                               # v13.20: o app Android pede ?audio=wav (toca direto no relógio, sem decodificar)
+                               "audio_format": "wav" if urllib.parse.parse_qs(parsed.query).get("audio", [""])[0] == "wav" else "ogg"}
                     res = service.dispatch_request("voice_command", payload)
                     if res.get("error"):
                         self._send_json(400 if "PermissionError" not in str(res.get("error")) else 403, {"error": res["error"]})
