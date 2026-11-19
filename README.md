@@ -206,3 +206,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Atualização automática da nuvem pelo GitHub (v13.10):** [docs/azure-conteiner.md](docs/azure-conteiner.md)
 - **Gatilhos (v13.14):** avisos por evento — agenda, e-mail novo, tarefa parada — [docs/gatilhos.md](docs/gatilhos.md)
 - **App Kronus para Android (nativo, microfone do relógio):** [docs/app-android.md](docs/app-android.md)
+- **Permissões (v13.23):** sugerir, pedir aprovação ou fazer e registrar, por tipo de ação — [docs/permissoes.md](docs/permissoes.md)

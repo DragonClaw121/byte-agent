@@ -73,6 +73,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         gatilhos.install(service)                           # v13.14: gatilhos por evento (agenda, e-mail, tarefas)
         from . import app_movel
         app_movel.install(service)                          # v13.16: aparelhos pareados (app do Kronus)
+        from . import permissoes
+        permissoes.install(service)                         # v13.23: níveis de permissão e /atividade
         from . import nuvem as _nuvem
         service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service

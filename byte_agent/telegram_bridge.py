@@ -40,6 +40,7 @@ HELP_TEXT = (
     "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
     "/parear — código para conectar o app do celular/relógio | /dispositivos — aparelhos conectados | /desparear <id>\n"
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
+    "/permissoes — o que o agente faz sozinho | /permissao <tipo> sugerir|aprovar|automatico | /atividade — o que ele fez\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -579,6 +580,21 @@ class TelegramBridge:
             else:
                 ok = self._dispatch("goal_cancel", {"goal_id": int(arg.lstrip("#"))}).get("cancelled")
                 self.send(chat_id, "Objetivo cancelado." if ok else "Não encontrei esse objetivo.")
+        elif cmd == "/permissoes":
+            self.send(chat_id, self._dispatch("permission_list").get("text") or "Permissões indisponíveis.")
+        elif cmd == "/permissao":
+            kind, _, level = arg.partition(" ")
+            if not kind or not level.strip():
+                self.send(chat_id, "Use: /permissao <tipo> sugerir|aprovar|automatico (veja os tipos em /permissoes)")
+                return
+            try:
+                text = self._dispatch("permission_set", {"category": kind, "level": level.strip()}).get("text")
+            except RuntimeError as err:
+                self.send(chat_id, re.sub(r"^\w*Error: ", "", str(err)))
+                return
+            self.send(chat_id, "Feito.\n\n" + (text or ""))
+        elif cmd == "/atividade":
+            self.send(chat_id, self._dispatch("activity_list", {"limit": 20}).get("text") or "Nada registrado.")
         elif cmd == "/atualizar":
             self.send(chat_id, self._dispatch("request_update").get("text") or "Pedido enviado.")
         elif cmd == "/parear":
