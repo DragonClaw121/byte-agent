@@ -46,7 +46,9 @@ HELP_TEXT = (
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
-    "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails) | /modelos\n"
+    "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /modelos\n"
+    "E-mail (qualquer domínio, várias contas): /email — contas | /caixa [conta|busca] — não lidas | /abrir <conta:n> | "
+    "/triagem [conta|todas] — resume, prioriza e prepara respostas para aprovar\n"
     "  Planilhas e documentos novos: é só pedir (\"monte uma planilha de orçamento\", \"escreva uma proposta para...\")\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
@@ -161,7 +163,10 @@ class TelegramBridge:
                 text_card, approve_label = f"🛡️ Ação preparada — NÃO executada\n{shown['title']}\n\n{shown['details']}", "✅ Aprovar"
             else:
                 shown = {"to": str(card.get("to", "")), "subject": str(card.get("subject", "")), "body": str(card.get("body", ""))}
-                text_card = f"✉️ E-mail preparado — NÃO enviado\nPara: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}"
+                if card.get("from"):
+                    shown["from"] = str(card["from"])
+                origin = f"De: {shown['from']}\n" if shown.get("from") else ""
+                text_card = f"✉️ E-mail preparado — NÃO enviado\n{origin}Para: {shown['to']}\nAssunto: {shown['subject']}\n\n{shown['body']}"
                 approve_label = "✅ Aprovar e enviar"
             self._pending_cards[action_id] = shown
             self.send(
@@ -184,6 +189,32 @@ class TelegramBridge:
                 self.send_document(chat_id, path)
             except Exception as err:
                 self.send(chat_id, f"Não consegui enviar {name}: {type(err).__name__}. O arquivo está na pasta de entregas.")
+
+    def _email_command(self, chat_id: int, arg: str) -> None:
+        words = arg.split()
+        sub = words[0].lower() if words else ""
+        try:
+            if not sub:
+                text = self._dispatch("mail_status").get("text")
+            elif sub == "adicionar" and len(words) >= 2:
+                text = "Conta adicionada.\n\n" + str(self._dispatch("mail_add", {"address": words[1], "id": words[2] if len(words) > 2 else ""}).get("text"))
+            elif sub == "remover" and len(words) == 2:
+                self._dispatch("mail_remove", {"id": words[1]})
+                text = "Conta removida (o login guardado dela também)."
+            elif sub == "testar" and len(words) == 2:
+                self.send(chat_id, "Testando o login...")
+                text = self._dispatch("mail_test", {"id": words[1]}).get("text")
+            elif sub == "entrar" and len(words) == 2:
+                text = self._dispatch("mail_login", {"id": words[1]}).get("text")
+            elif sub == "servidor" and len(words) == 4:
+                acc = self._dispatch("mail_server", {"id": words[1], "imap": words[2], "smtp": words[3]}).get("account") or {}
+                text = f"Servidor da conta {acc.get('id')} ajustado: IMAP {acc.get('imap')} · SMTP {acc.get('smtp')}. Teste com /email testar {acc.get('id')}."
+            else:
+                text = ("Use: /email · /email adicionar <endereço> [id] · /email testar <id> · /email entrar <id> (Microsoft) · "
+                        "/email remover <id> · /email servidor <id> <imap:porta> <smtp:porta>")
+        except RuntimeError as err:
+            text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
+        self.send(chat_id, text or "E-mail indisponível neste agente.")
 
     # ---------------- ciclo de vida ----------------
     def start(self) -> None:
@@ -730,7 +761,37 @@ class TelegramBridge:
                 return
             self._work(chat_id, "work_presentation", {"topic": arg}, "Montando a apresentação...")
         elif cmd == "/triagem":
-            self._work(chat_id, "work_triage", {"unread_only": arg.lower() != "todas"}, "Lendo a caixa de entrada...")
+            words = arg.lower().split()
+            conta = next((w for w in words if w != "todas"), None)
+            self._work(chat_id, "work_triage", {"unread_only": "todas" not in words, "conta": conta}, "Lendo as caixas de entrada...")
+        elif cmd == "/email":
+            self._email_command(chat_id, arg)
+        elif cmd == "/caixa":
+            words = arg.split()
+            try:
+                ids = {a["id"] for a in (self._dispatch("mail_status").get("accounts") or [])}
+            except RuntimeError:
+                ids = set()
+            conta = words[0].lower() if words and words[0].lower() in ids else None     # /caixa gmail [busca] | /caixa boleto
+            query = " ".join(words[1:] if conta else words)
+            try:
+                text = self._dispatch("mail_list", {"conta": conta, "query": query, "unread": not query, "limit": 10}).get("text")
+            except RuntimeError as err:
+                self.send(chat_id, "⚠️ " + re.sub(r"^\w*Error: ", "", str(err)))
+                return
+            self.send(chat_id, (text or "Nada.") + "\n\nAbrir uma: /abrir <conta:número> · Resumir e preparar respostas: /triagem")
+        elif cmd == "/abrir":
+            if ":" not in arg:
+                self.send(chat_id, "Use: /abrir <conta:número> (a referência aparece em /caixa)")
+                return
+            try:
+                msg = self._dispatch("mail_read", {"ref": arg.strip()})
+            except RuntimeError as err:
+                self.send(chat_id, "⚠️ " + re.sub(r"^\w*Error: ", "", str(err)))
+                return
+            self.send(chat_id, f"📨 [{msg.get('ref')}] para {msg.get('account_address')}\nDe: {msg.get('from')}\nAssunto: {msg.get('subject')}\n"
+                               f"Data: {msg.get('date')}" + (f" · {msg['attachments']} anexo(s)" if msg.get("attachments") else "")
+                               + f"\n\n{msg.get('body') or '(sem texto)'}\n\nPara responder, diga: \"responda o {msg.get('ref')} dizendo que...\"")
         elif cmd == "/limpar":
             self._dispatch("clear_context")
             self.send(chat_id, "Janela de contexto limpa.")

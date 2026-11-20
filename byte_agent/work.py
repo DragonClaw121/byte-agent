@@ -141,6 +141,9 @@ class WorkAssistant:
         except ImportError:
             pptx_ok = False
         email_status = self.service.email_client.status()
+        hub = getattr(self.service, "mail_hub", None)
+        if hub is not None and any(hub.ready(a) for a in hub.accounts()):
+            email_status = {"credentials_ready": True}
         return {"inputs": self._listing(self.inputs, INPUT_EXTENSIONS), "outputs": self._listing(self.outputs),
                 "inputs_dir": str(self.inputs), "outputs_dir": str(self.outputs),
                 "xlsx_available": xlsx, "pptx_available": pptx_ok, "email_ready": bool(email_status.get("credentials_ready")),
@@ -319,25 +322,36 @@ class WorkAssistant:
             "rascunho": str(data.get("rascunho") or "").strip()[:3000],
         }
 
-    def triage(self, limit: int = 8, unread_only: bool = True) -> Dict[str, Any]:
-        """Lê a caixa de entrada, resume cada mensagem e prepara rascunhos de resposta PENDENTES de aprovação."""
-        fetched = self.service.email_client.fetch_messages(limit=max(1, min(15, int(limit))), unread_only=bool(unread_only))
-        own_address = str(getattr(self.service.email_client, "email_address", "") or "").lower()
+    def triage(self, limit: int = 8, unread_only: bool = True, account: Optional[str] = None) -> Dict[str, Any]:
+        """Lê a caixa de entrada, resume cada mensagem e prepara rascunhos de resposta PENDENTES de aprovação.
+        v13.27: com várias caixas, faz a triagem de todas (ou da conta pedida) e cada resposta sai pela conta que recebeu."""
+        hub = getattr(self.service, "mail_hub", None)
+        accounts = hub.accounts() if hub is not None else []
+        if accounts and any(hub.ready(a) for a in accounts):
+            messages = hub.fetch_messages(account or None, limit=max(1, min(15, int(limit))), unread_only=bool(unread_only))
+            own = {a.address.lower() for a in accounts}
+            multi = len(accounts) > 1 and not account
+        else:
+            fetched = self.service.email_client.fetch_messages(limit=max(1, min(15, int(limit))), unread_only=bool(unread_only))
+            messages = fetched["messages"]
+            own = {str(getattr(self.service.email_client, "email_address", "") or "").lower()}
+            multi = False
         signature = str(self.profile.get("assinatura") or "").strip()
         items: List[Dict[str, Any]] = []
         cards: List[str] = []
-        for message in fetched["messages"]:
+        for message in messages:
             verdict = self._classify_email(message)
             item = {"from": message["from"], "subject": message["subject"], "date": message["date"], "categoria": verdict["categoria"],
                     "resumo": verdict["resumo"] or "(sem resumo: a LLM não estava disponível)", "draft_action_id": None,
-                    "attachments": message.get("attachments", 0)}
+                    "attachments": message.get("attachments", 0), "account": message.get("account"), "ref": message.get("ref")}
             sender = message.get("from_address", "")
-            can_reply = bool(sender) and sender != own_address and not _NO_REPLY_RE.search(sender)
+            can_reply = bool(sender) and sender not in own and not _NO_REPLY_RE.search(sender)
             if verdict["precisa_resposta"] and can_reply:
                 subject = message["subject"] if re.match(r"(?i)^\s*re:", message["subject"]) else f"Re: {message['subject']}"
                 body = verdict["rascunho"] + (f"\n\n{signature}" if signature else "")
                 try:
-                    action_id, card = self.service.propose_email(sender, subject, body, in_reply_to=message.get("message_id", ""))
+                    action_id, card = self.service.propose_email(sender, subject, body, in_reply_to=message.get("message_id", ""),
+                                                                 account=message.get("account"))
                     item["draft_action_id"] = action_id
                     cards.append(card)
                 except ValueError:
@@ -349,7 +363,8 @@ class WorkAssistant:
         lines = [f"Triagem da caixa de entrada: {len(items)} mensagem(ns) {scope}."
                  if items else f"Triagem da caixa de entrada: nenhuma mensagem entre as {scope}."]
         for item in items:
-            lines.append(f"\n[{TRIAGE_LABELS[item['categoria']]}] {item['from']} — {item['subject']}"
+            lines.append(f"\n[{TRIAGE_LABELS[item['categoria']]}]" + (f" ({item['account']})" if multi and item.get("account") else "")
+                         + f" {item['from']} — {item['subject']}"
                          + (f" ({item['attachments']} anexo(s))" if item["attachments"] else "")
                          + f"\n{item['resumo']}"
                          + ("\nRascunho de resposta preparado (aguardando sua aprovação abaixo)." if item["draft_action_id"] else ""))
@@ -402,7 +417,7 @@ class WorkAssistant:
 
         def tool_triage(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
             try:
-                res = self.triage(int(args.get("limit", 8) or 8), bool(args.get("unread_only", True)))
+                res = self.triage(int(args.get("limit", 8) or 8), bool(args.get("unread_only", True)), args.get("conta") or None)
             except Exception as err:
                 return f"ERRO ao ler a caixa de entrada: {type(err).__name__}: {str(err)[:200]}"
             _block(turn, res["response"])
@@ -455,7 +470,8 @@ class WorkAssistant:
                                 "a aprovação dele. Não envia nada."),
                 "parameters": {"type": "object", "properties": {
                     "limit": {"type": "integer", "description": "Quantas mensagens (padrão 8)"},
-                    "unread_only": {"type": "boolean", "description": "true (padrão) = só não lidas"}}}},
+                    "unread_only": {"type": "boolean", "description": "true (padrão) = só não lidas"},
+                    "conta": {"type": "string", "description": "id de uma conta; vazio = todas as caixas"}}}},
         })
 
         def act_upload(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -466,7 +482,8 @@ class WorkAssistant:
             "work_analyze": lambda payload: self.analyze(str(payload.get("file", "")), str(payload.get("question", "")),
                                                           payload.get("measure") or None, deck=bool(payload.get("deck", True))),
             "work_presentation": lambda payload: self.presentation(str(payload.get("title", "")), payload.get("slides"), str(payload.get("topic", ""))),
-            "work_triage": lambda payload: self.triage(int(payload.get("limit", 8) or 8), bool(payload.get("unread_only", True))),
+            "work_triage": lambda payload: self.triage(int(payload.get("limit", 8) or 8), bool(payload.get("unread_only", True)),
+                                                       payload.get("conta") or None),
             "work_upload": act_upload,
             "work_read_document": lambda payload: self.read_document(str(payload.get("file", "")), str(payload.get("question", ""))),
         })

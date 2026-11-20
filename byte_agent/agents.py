@@ -31,7 +31,7 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
     "memoria": ("search_memories", "add_memory"),
     "lembretes": ("schedule_reminder", "list_reminders", "cancel_reminder"),
     "web": ("web_search", "fetch_url", "deep_research"),
-    "email": ("email_inbox", "email_send", "email_triage"),
+    "email": ("email_inbox", "email_send", "email_triage", "email_listar", "email_ler", "email_responder", "email_contas"),
     "dados": ("analyze_data", "list_work_files", "create_spreadsheet"),
     "apresentacoes": ("create_presentation",),
     "codigo": ("run_python", "run_shell"),
@@ -41,7 +41,7 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
 ALWAYS_ON_TOOLS = ("get_datetime",)
 SKILL_ACTIONS: Dict[str, Tuple[str, ...]] = {          # ações do painel/Telegram que pertencem a cada habilidade
     "web": ("web_search", "web_research", "web_status"),
-    "email": ("work_triage",),
+    "email": ("work_triage", "mail_list", "mail_read", "mail_add", "mail_remove", "mail_test", "mail_login", "mail_server"),
     "dados": ("work_analyze", "work_upload", "work_spreadsheet"),
     "documentos": ("work_read_document", "work_document", "work_templates"),
     "apresentacoes": ("work_presentation",),

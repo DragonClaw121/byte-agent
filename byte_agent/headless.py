@@ -75,6 +75,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         app_movel.install(service)                          # v13.16: aparelhos pareados (app do Kronus)
         from . import permissoes
         permissoes.install(service)                         # v13.23: níveis de permissão e /atividade
+        from . import caixas
+        caixas.install(service, data_dir)                   # v13.27: várias caixas de e-mail, de qualquer domínio
         from . import resumos
         resumos.install(service)                            # v13.24: resumo da manhã e fechamento da semana
         from . import nuvem as _nuvem

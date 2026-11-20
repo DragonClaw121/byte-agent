@@ -237,8 +237,9 @@ class Briefings:
         if manifest and "email" not in manifest.get("habilidades", []):
             return False
         mail = getattr(self.service, "email_client", None)
+        hub = getattr(self.service, "mail_hub", None)
         try:
-            return bool(mail and mail.status().get("credentials_ready"))
+            return bool(hub and any(hub.ready(a) for a in hub.accounts())) or bool(mail and mail.status().get("credentials_ready"))
         except Exception:
             return False
 
@@ -371,8 +372,14 @@ class Briefings:
                 headers = fetch() if fetch else []
                 if headers:
                     third_party = True
-                    lines = [f"• {_clean(h.get('from'), 50)}: {_clean(h.get('subject'), 90) or '(sem assunto)'}" for h in headers[-5:][::-1]]
-                    sections.append(f"📬 E-mails não lidos ({len(headers)}):\n" + "\n".join(lines))
+                    per: Dict[str, int] = {}
+                    for h in headers:
+                        per[str(h.get("account") or "")] = per.get(str(h.get("account") or ""), 0) + 1
+                    split = (" — " + ", ".join(f"{k}: {v}" for k, v in per.items())) if len(per) > 1 or "" not in per else ""
+                    lines = [f"• {('[' + h['account'] + '] ') if h.get('account') and len(per) > 1 else ''}"
+                             f"{_clean(h.get('from'), 50)}: {_clean(h.get('subject'), 90) or '(sem assunto)'}" for h in headers[:6]]
+                    sections.append(f"📬 E-mails não lidos ({len(headers)}{split}):\n" + "\n".join(lines)
+                                    + "\nPeça a triagem: /triagem")
                     speech.append(f"{len(headers)} e-mail{'s' if len(headers) > 1 else ''} não lido{'s' if len(headers) > 1 else ''}.")
                     facts.append(f"E-mails não lidos: {len(headers)}.")
                 else:

@@ -240,8 +240,9 @@ class TriggerEngine:
 
     def configured(self) -> Dict[str, bool]:
         mail = getattr(self.service, "email_client", None)
+        hub = getattr(self.service, "mail_hub", None)
         try:
-            mail_ready = bool(mail and mail.status().get("credentials_ready"))
+            mail_ready = bool(hub and any(hub.ready(a) for a in hub.accounts())) or bool(mail and mail.status().get("credentials_ready"))
         except Exception:
             mail_ready = False
         return {"agenda": bool(self.read_secret(("BYTE_AGENDA_ICS",))), "email": mail_ready,
@@ -323,6 +324,10 @@ class TriggerEngine:
         return out
 
     def _unseen_headers(self) -> List[Dict[str, str]]:
+        hub = getattr(self.service, "mail_hub", None)
+        if hub is not None and hub.accounts():                  # v13.27: todas as caixas, cada uma com a sua chave
+            return [{"uid": h["ref"], "account": h["account"], "from": h["from"], "subject": h["subject"]}
+                    for h in hub.headers(None, unread_only=True, limit=30)]
         mail = self.service.email_client
         password, _ = mail._resolve_password()
         out: List[Dict[str, str]] = []
@@ -341,11 +346,22 @@ class TriggerEngine:
 
     def _watch_email(self, now: float) -> List[Event]:
         headers = self.mail_fetcher()
-        if not self.db.get_setting("gatilho_email_inicio"):
-            # 1ª vez: o que já estava não lido não vira aviso (senão chegariam dezenas de mensagens de uma vez)
-            self._mark([f"email|{h['uid']}" for h in headers], now)
-            self.db.set_setting("gatilho_email_inicio", int(now))
-            return []
+        # 1ª vez de cada caixa: o que já estava não lido não vira aviso (senão chegariam dezenas de mensagens de uma vez)
+        hub = getattr(self.service, "mail_hub", None)
+        ids = {a.id for a in hub.accounts()} if hub is not None and hub.accounts() else {""}
+        if hub is not None:                                       # caixa que não foi lida agora (sem login) não "começa"
+            ids -= {str(e).split(":", 1)[0] for e in getattr(hub, "last_errors", [])}
+        ids |= {str(h.get("account") or "") for h in headers}
+        started = set(self.db.get_setting("gatilho_email_contas", []) or [])
+        if self.db.get_setting("gatilho_email_inicio"):
+            started.add("")                                       # a conta única de antes (v13.14) já tinha começado
+        fresh = ids - started
+        if fresh:
+            self._mark([f"email|{h['uid']}" for h in headers if str(h.get("account") or "") in fresh], now)
+            self.db.set_setting("gatilho_email_contas", sorted(started | fresh))
+            if "" in fresh:
+                self.db.set_setting("gatilho_email_inicio", int(now))
+            headers = [h for h in headers if str(h.get("account") or "") not in fresh]
         words = [w.strip().lower() for w in os.environ.get("BYTE_GATILHO_EMAIL_FILTRO", "").split(",") if w.strip()]
         out: List[Event] = []
         for h in headers:
@@ -354,7 +370,8 @@ class TriggerEngine:
             if words and not any(w in hay for w in words):
                 self._mark([f"email|{h['uid']}"], now)           # fora do filtro: só registra
                 continue
-            out.append(Event(f"email|{h['uid']}", f"📬 E-mail novo de {who}: {subject}"))
+            where = f" ({h['account']})" if h.get("account") else ""
+            out.append(Event(f"email|{h['uid']}", f"📬 E-mail novo{where} de {who}: {subject}"))
         return out
 
     def _watch_tarefa_parada(self, now: float) -> List[Event]:

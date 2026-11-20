@@ -209,3 +209,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Permissões (v13.23):** sugerir, pedir aprovação ou fazer e registrar, por tipo de ação — [docs/permissoes.md](docs/permissoes.md)
 - **Resumos (v13.24):** resumo da manhã e fechamento da semana, com horário por agente — [docs/resumos.md](docs/resumos.md)
 - **Planilhas e documentos (v13.26):** o Bit cria .xlsx com fórmulas e gráficos e .docx, também a partir dos seus modelos — [docs/documentos.md](docs/documentos.md)
+- **E-mail completo (v13.27):** várias caixas, de qualquer domínio (Gmail, Outlook/Microsoft 365, e-mail da empresa) — [docs/email.md](docs/email.md)

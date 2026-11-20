@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.26"
+BYTE_VERSION = "13.27"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -6255,10 +6255,16 @@ class ByteEcosystemService:
             same = (str(seen.get("to", "")).strip() == draft["to_address"]
                     and str(seen.get("subject", "")).strip() == draft["subject"]
                     and str(seen.get("body", "")).strip() == draft["body"])
+            if same and seen.get("from") is not None and str(seen.get("from", "")).strip() != draft.get("from_address", ""):
+                same = False                                     # o cartão mostrou outra conta de origem
             if not same:
                 self.db.record_audit("tool_rejected", "email_send", "mismatch", {})
                 raise PermissionError("O conteúdo exibido não confere com o rascunho armazenado. Nada foi enviado; peça o e-mail novamente.")
-            result = self.email_client.send_email(**draft)
+            hub = getattr(self, "mail_hub", None)
+            if draft.get("account") and hub is not None:          # v13.27: sai pela conta que o cartão mostrou
+                result = hub.send(draft["account"], draft["to_address"], draft["subject"], draft["body"], draft.get("in_reply_to", ""))
+            else:
+                result = self.email_client.send_email(**{k: v for k, v in draft.items() if k not in {"account", "from_address"}})
             self.db.record_audit("tool_approved", "email_send", "success", {"to": draft["to_address"]})
             # A conversa passa a saber que o envio aconteceu (antes só a interface sabia).
             self.context_manager.record_turn(
@@ -6335,9 +6341,11 @@ class ByteEcosystemService:
                       "parameters": {"type": "object", "required": ["command"], "properties": {"command": {"type": "string"}}}},
         "email_inbox": {"auto": False, "description": "Lê os e-mails recentes da caixa de entrada (exige aprovação do usuário).",
                         "parameters": {"type": "object", "properties": {}}},
-        "email_send": {"auto": False, "description": "Prepara um e-mail para envio (só é enviado após aprovação do usuário).",
+        "email_send": {"auto": False, "description": ("Prepara um e-mail NOVO para envio (só é enviado após aprovação do usuário). "
+                                                      "Para responder a uma mensagem recebida use email_responder."),
                        "parameters": {"type": "object", "required": ["to", "subject", "body"], "properties": {
-                           "to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}}},
+                           "to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"},
+                           "conta": {"type": "string", "description": "id da conta que envia (ex.: gmail, trabalho); padrão: a principal"}}}},
     }
     _LEGACY_TOOL_MAP = {"run_python": ("python", "code"), "run_shell": ("shell", "command"),
                         "email_inbox": ("email_inbox", None), "email_send": ("email_send", None)}
@@ -6351,7 +6359,27 @@ class ByteEcosystemService:
         return [{"type": "function", "function": {"name": name, "description": spec["description"], "parameters": spec["parameters"]}}
                 for name, spec in self.all_tools().items() if names is None or name in names]
 
-    def propose_email(self, to_address: str, subject: str, body: str, in_reply_to: str = "") -> Tuple[str, str]:
+    def default_mail_account(self, wanted: Optional[str] = None) -> Tuple[Optional[str], str]:
+        """v13.27: (id, endereço) da conta que envia. Pedida pelo nome, ou a primeira caixa pronta. (None, "") = conta antiga."""
+        hub = getattr(self, "mail_hub", None)
+        if hub is None:
+            return None, ""
+        if wanted:
+            acc = hub.get(str(wanted))
+            return acc.id, acc.address
+        for acc in hub.accounts():
+            if hub.ready(acc):
+                return acc.id, acc.address
+        return None, ""
+
+    def email_card(self, action_id: str, draft: Dict[str, Any]) -> str:
+        data = {"id": action_id, "to": draft["to_address"], "subject": draft["subject"], "body": draft["body"]}
+        if draft.get("from_address"):
+            data["from"] = draft["from_address"]
+        return "```byte-email\n" + json.dumps(data, ensure_ascii=False).replace("`", "\\u0060") + "\n```"
+
+    def propose_email(self, to_address: str, subject: str, body: str, in_reply_to: str = "",
+                      account: Optional[str] = None) -> Tuple[str, str]:
         """Registra um e-mail como ação PENDENTE e devolve (id, bloco de cartão para a interface).
         É o único caminho para um e-mail sair: nada é enviado até a aprovação humana do cartão."""
         draft: Dict[str, Any] = {
@@ -6363,11 +6391,12 @@ class ByteEcosystemService:
             raise ValueError("O rascunho precisa de assunto e corpo.")
         if in_reply_to:
             draft["in_reply_to"] = str(in_reply_to)[:300]
+        acc_id, acc_addr = self.default_mail_account(account)
+        if acc_id:
+            draft["account"], draft["from_address"] = acc_id, acc_addr
         action_id = self._register_pending_action("email_send", draft)
-        self.db.record_audit("tool_proposed", "propose_email", "pending_approval", {"to": draft["to_address"]})
-        card = json.dumps({"id": action_id, "to": draft["to_address"], "subject": draft["subject"], "body": draft["body"]},
-                          ensure_ascii=False).replace("`", "\\u0060")
-        return action_id, f"```byte-email\n{card}\n```"
+        self.db.record_audit("tool_proposed", "propose_email", "pending_approval", {"to": draft["to_address"], "account": acc_id})
+        return action_id, self.email_card(action_id, draft)
 
     _EXEC_INTENT_RE = re.compile(
         r"\b(rode|roda|rodar|rodando|execute|executa|executar|executando|run|compile|compilar|"
@@ -6692,15 +6721,15 @@ class ByteEcosystemService:
                     }
                     if not (draft["subject"] and draft["body"]):
                         raise ValueError("email_send precisa de 'to', 'subject' e 'body'.")
+                    acc_id, acc_addr = self.default_mail_account(call_data.get("conta") or None)
+                    if acc_id:
+                        draft["account"], draft["from_address"] = acc_id, acc_addr
                     action_id = self._register_pending_action("email_send", draft)
                     self.db.record_audit("tool_proposed", "tool_call", "pending_approval", {"tool": "email_send", "to": draft["to_address"]})
                     tool_results.append({"tool": "email_send", "status": "pending_approval", "action_id": action_id})
-                    card = json.dumps({"id": action_id, "to": draft["to_address"], "subject": draft["subject"], "body": draft["body"]},
-                                      ensure_ascii=False).replace("`", "\\u0060")
                     appended_blocks.append(
-                        "🛡️ **[E-mail preparado pela LLM — NÃO enviado]** Confira destinatário e texto antes de aprovar:\n"
-                        f"```byte-email\n{card}\n```"
-                    )
+                        "🛡️ **[E-mail preparado pela LLM — NÃO enviado]** Confira remetente, destinatário e texto antes de aprovar:\n"
+                        + self.email_card(action_id, draft))
                 elif t_name == "email_inbox":
                     if not autorun:
                         self.db.record_audit("tool_proposed", "tool_call", "pending_approval", {"tool": "email_inbox"})
@@ -7889,8 +7918,10 @@ pygame.time.Clock().tick(60)</textarea>
     if (!d || !d.id) return `<div class="b90-code-card"><pre style="margin:0;white-space:pre-wrap;">${b90EscapeHtml(jsonText)}</pre></div>`;
     window.b90EmailCards = window.b90EmailCards || {};
     window.b90EmailCards[d.id] = { to: String(d.to || ''), subject: String(d.subject || ''), body: String(d.body || '') };
+    if (d.from) window.b90EmailCards[d.id].from = String(d.from);
     return `<div class="b90-code-card" style="border-color:#f59e0b;white-space:normal;">
       <div style="color:#f59e0b;font-weight:700;margin-bottom:6px;">✉️ E-mail aguardando sua aprovação</div>
+      ${d.from ? `<div><b>De:</b> ${b90EscapeHtml(d.from)}</div>` : ''}
       <div><b>Para:</b> ${b90EscapeHtml(d.to)}</div>
       <div><b>Assunto:</b> ${b90EscapeHtml(d.subject)}</div>
       <pre style="margin:6px 0;white-space:pre-wrap;color:#f1f5f9;">${b90EscapeHtml(d.body)}</pre>
