@@ -208,3 +208,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **App Kronus para Android (nativo, microfone do relógio):** [docs/app-android.md](docs/app-android.md)
 - **Permissões (v13.23):** sugerir, pedir aprovação ou fazer e registrar, por tipo de ação — [docs/permissoes.md](docs/permissoes.md)
 - **Resumos (v13.24):** resumo da manhã e fechamento da semana, com horário por agente — [docs/resumos.md](docs/resumos.md)
+- **Planilhas e documentos (v13.26):** o Bit cria .xlsx com fórmulas e gráficos e .docx, também a partir dos seus modelos — [docs/documentos.md](docs/documentos.md)

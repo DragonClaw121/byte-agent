@@ -470,6 +470,8 @@ class WorkAssistant:
             "work_upload": act_upload,
             "work_read_document": lambda payload: self.read_document(str(payload.get("file", "")), str(payload.get("question", ""))),
         })
+        from . import documentos
+        documentos.install(self)                     # v13.26: planilhas e documentos novos, também a partir de modelos
         # rotina agendada "triagem de e-mails" roda o fluxo determinístico, sem depender de a LLM escolher a ferramenta
         service.mission_interceptors.append((re.compile(r"\b(triagem|triar)\b|caixa de entrada"), lambda instruction: self.triage()["response"]))
         return self

@@ -32,18 +32,18 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
     "lembretes": ("schedule_reminder", "list_reminders", "cancel_reminder"),
     "web": ("web_search", "fetch_url", "deep_research"),
     "email": ("email_inbox", "email_send", "email_triage"),
-    "dados": ("analyze_data", "list_work_files"),
+    "dados": ("analyze_data", "list_work_files", "create_spreadsheet"),
     "apresentacoes": ("create_presentation",),
     "codigo": ("run_python", "run_shell"),
     "integracoes": ("asana_my_tasks", "asana_create_task", "notion_search", "notion_read_page", "notion_create_page", "teams_post"),
-    "documentos": ("read_document",),
+    "documentos": ("read_document", "create_document", "list_templates"),
 }
 ALWAYS_ON_TOOLS = ("get_datetime",)
 SKILL_ACTIONS: Dict[str, Tuple[str, ...]] = {          # ações do painel/Telegram que pertencem a cada habilidade
     "web": ("web_search", "web_research", "web_status"),
     "email": ("work_triage",),
-    "dados": ("work_analyze", "work_upload"),
-    "documentos": ("work_read_document",),
+    "dados": ("work_analyze", "work_upload", "work_spreadsheet"),
+    "documentos": ("work_read_document", "work_document", "work_templates"),
     "apresentacoes": ("work_presentation",),
 }
 DEFAULT_SKILLS = {

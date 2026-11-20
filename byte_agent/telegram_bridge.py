@@ -46,7 +46,8 @@ HELP_TEXT = (
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
-    "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails)\n"
+    "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /triagem (e-mails) | /modelos\n"
+    "  Planilhas e documentos novos: é só pedir (\"monte uma planilha de orçamento\", \"escreva uma proposta para...\")\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
     "/limpar — limpa a janela de contexto da conversa\n"
@@ -700,6 +701,16 @@ class TelegramBridge:
             self.send(chat_id, (f"Resultados ({found.get('backend')}):\n" + "\n\n".join(
                 f"• {h['title']}\n{h['url']}" for h in found.get("results", []))) if found.get("results")
                 else "Nenhum resultado. " + "; ".join(found.get("errors", [])[:2]))
+        elif cmd == "/modelos":
+            if "work_templates" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "Modelos são do agente de trabalho (Bit). Use /agente bit.")
+                return
+            items = self._dispatch("work_templates").get("templates") or []
+            self.send(chat_id, ("Seus modelos:\n" + "\n".join(
+                f"• {t['name']}: " + (", ".join("{{" + c + "}}" for c in t["campos"]) or "sem {{campos}}") for t in items)
+                + "\n\nPeça, por exemplo: \"faça uma proposta para a ACME usando o " + items[0]["name"] + "\"") if items else
+                      "Nenhum modelo ainda. Envie um .docx ou .xlsx seu com marcadores como {{cliente}} e {{valor}} "
+                      "(e {{conteudo}} onde o texto deve entrar). Dica: comece o nome do arquivo com 'modelo'.")
         elif cmd == "/arquivos":
             if "work_status" not in getattr(self.service, "extra_actions", {}):
                 self.send(chat_id, "Este comando é do perfil de trabalho, que não está ativo nesta instância.")
