@@ -190,3 +190,34 @@ def test_weather_parsing(service):
     assert w == {"cidade": "Curitiba", "min": 13, "max": 25, "chuva": 80, "ceu": "chuva fraca"}
     resumos.fetch_weather("Curitiba", service.db, getter=getter)
     assert sum("geocoding" in c for c in calls) == 1              # a localização fica guardada
+
+
+def test_news_uses_news_search_and_failures_are_visible(service):
+    from byte_agent import web as webmod
+
+    class FakeTavily(webmod.SearchBackend):
+        name, news = "Tavily", True
+
+        def __init__(self):
+            self.calls = []
+
+        def search(self, fetcher, query, limit, news=False):
+            self.calls.append((query, news))
+            return [webmod.SearchHit("OpenAI lança modelo novo", "https://www.g1.globo.com/tec/1", "", self.name)]
+
+    tav = FakeTavily()
+    service.web = webmod.WebAccess(service, ".", backends=[tav, webmod.WikipediaBackend()])
+    resumos.save_config(service.db, "outro", {"noticias": "IA", "cidade": "Cidadeinexistente"})
+
+    def no_city(city, db):
+        raise ValueError("cidade não encontrada: " + city)
+    res = briefings(service, weather=no_city).morning(with_opening=False)
+    assert "📰 Manchetes:\n• [IA] OpenAI lança modelo novo (g1.globo.com)" in res["text"]
+    assert tav.calls == [("IA", True)] and res["third_party"]
+    assert "Não consegui ver o clima de Cidadeinexistente: cidade não encontrada" in res["text"]
+    # só a Wikipédia (sem Tavily): não traz verbetes como se fossem manchetes, e diz o porquê
+    service.web = webmod.WebAccess(service, ".", backends=[webmod.WikipediaBackend()])
+    b = briefings(service)
+    text = b.morning(with_opening=False)["text"]
+    assert "Não consegui buscar as manchetes: nenhum buscador de notícias configurado" in text
+    assert "⚠️ Último problema: notícias" in b.command("manha", "config")

@@ -136,7 +136,7 @@ def save_config(db: Any, kind: str, changes: Dict[str, Any]) -> Dict[str, Any]:
     return load_config(db, kind)
 
 
-def format_config(cfg: Dict[str, Any]) -> str:
+def format_config(cfg: Dict[str, Any], last_error: Optional[str] = None) -> str:
     m, s = cfg["manha"], cfg["semana"]
     lines = ["Resumos automáticos:",
              f"☀️ Resumo da manhã: {'ligado' if m['ativo'] else 'desligado'} — {m['hora']}, "
@@ -145,6 +145,8 @@ def format_config(cfg: Dict[str, Any]) -> str:
              f"🌤️ Clima: {cfg['cidade'] or 'sem cidade (use /resumo cidade <nome>)'}",
              f"📰 Notícias: {cfg['noticias'] or 'nenhum tema (use /resumo noticias <temas>)'}",
              "Mudar: /resumo on|off · /resumo hora 07:30 · /resumo dias uteis|todos · /semana sexta 18:00 · /semana off"]
+    if last_error:
+        lines.append(f"⚠️ Último problema: {last_error}")
     return "\n".join(lines)
 
 
@@ -303,8 +305,12 @@ class Briefings:
                     speech.append(f"Em {w['cidade']}, entre {w['min']} e {w['max']} graus, {w['ceu']}"
                                   + (f", com {w['chuva']}% de chance de chuva." if w.get("chuva") is not None else "."))
                     facts.append(f"Clima: {w['min']} a {w['max']} °C, {w['ceu']}{rain}.")
+                else:
+                    sections.append(f"🌤️ A previsão de {cfg['cidade']} veio vazia agora.")
             except Exception as err:
                 self.last_error = f"clima: {type(err).__name__}: {str(err)[:120]}"
+                why = "cidade não encontrada (confira o nome)" if isinstance(err, ValueError) else "o serviço não respondeu"
+                sections.append(f"🌤️ Não consegui ver o clima de {cfg['cidade']}: {why}.")
 
         try:
             events = self._calendar(day0, day1)
@@ -376,14 +382,21 @@ class Briefings:
 
         web = self._web()
         topics = [t.strip() for t in str(cfg["noticias"] or "").split(",") if t.strip()][:3]
+        if topics and web is None:
+            sections.append("📰 Manchetes: este agente não tem a habilidade de busca na web.")
         if topics and web is not None:
             lines = []
+            problems: List[str] = []
             for topic in topics:
                 try:
-                    res = web.search(f"{topic} notícias", limit=3)
+                    res = web.search(topic, limit=3, news=True)
                 except Exception as err:
                     self.last_error = f"notícias: {type(err).__name__}: {str(err)[:120]}"
+                    problems.append(f"{type(err).__name__}")
                     continue
+                if not res.get("results") and res.get("errors"):
+                    self.last_error = "notícias: " + "; ".join(res["errors"])[:160]
+                    problems.extend(res["errors"])
                 for hit in (res.get("results") or [])[:2]:
                     host = urllib.parse.urlparse(str(hit.get("url") or "")).netloc.replace("www.", "")
                     lines.append(f"• [{_clean(topic, 30)}] {_clean(hit.get('title'), 110)} ({host})")
@@ -391,6 +404,10 @@ class Briefings:
                 third_party = True
                 sections.append("📰 Manchetes:\n" + "\n".join(lines))
                 speech.append("As manchetes estão na mensagem escrita.")
+            elif problems:
+                sections.append("📰 Não consegui buscar as manchetes: " + _clean(problems[0], 140) + ".")
+            else:
+                sections.append("📰 Nenhuma manchete das últimas 48 h sobre " + ", ".join(topics) + ".")
 
         if not sections:
             sections.append("Nada marcado para hoje: nem agenda, nem lembretes, nem tarefas. Dia livre!")
@@ -553,7 +570,7 @@ class Briefings:
             if not low or low == "agora":
                 return self.morning()["text"]
             if low == "config":
-                return format_config(self.config())
+                return format_config(self.config(), self.last_error)
             if low in {"on", "off", "ligar", "desligar"}:
                 cfg = save_config(self.db, self.kind, {"manha": {"ativo": low in {"on", "ligar"}}})
                 return "Feito.\n\n" + format_config(cfg)

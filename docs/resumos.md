@@ -9,7 +9,7 @@ O agente manda sozinho, no horário que você escolher:
 - 📌 as tarefas pendentes mais importantes;
 - 🧩 os objetivos em andamento (e os travados);
 - 📬 os e-mails não lidos, só remetente e assunto, se o agente tiver e-mail (o Bit);
-- 📰 as manchetes dos temas que você escolher (opcional, usa a busca na web).
+- 📰 as manchetes dos temas que você escolher (opcional; notícias das últimas 48 h pelo Tavily).
 
 **📊 Fechamento da semana**, uma vez por semana, com:
 - ✅ as tarefas concluídas;
@@ -48,6 +48,26 @@ fica para o dia seguinte. Nunca sai duas vezes no mesmo dia ou na mesma semana.
 
 No painel, use a aba **Agenda** → **☀️ Resumos**: horários, cidade, temas e os botões "Ver resumo de hoje" e
 "Ver fechamento da semana". Na conversa, pergunte "como está meu dia?" ou "como foi a semana?".
+
+## Ligar o clima e as notícias
+Os dois vêm **desligados** até você escolher a cidade e os temas. Faça isso em cada agente (cada um tem as suas
+configurações), no Telegram dele:
+```
+/resumo cidade São Paulo
+/resumo noticias inteligência artificial, games, economia
+/resumo
+```
+O último comando gera o resumo na hora, para conferir. No painel, preencha os campos na aba **Agenda** → **☀️ Resumos**
+e clique em **Salvar horários**.
+
+- **Clima:** usa a Open-Meteo, gratuita e sem chave. Só o nome da cidade sai do servidor. Se o nome não for
+  encontrado, o resumo avisa. Use o nome simples da cidade, sem estado.
+- **Notícias:** usam o **Tavily** (segredo `TAVILY_API_KEY`), no modo notícias. Sem o Tavily, o resumo avisa
+  "nenhum buscador de notícias configurado" em vez de mostrar artigos da Wikipédia. O Kronus e o Bit precisam da
+  habilidade `web`, e os dois já a têm.
+- Para usar a mesma cidade e os mesmos temas em todos os agentes de uma vez, defina as variáveis
+  `BYTE_RESUMO_CIDADE` e `BYTE_RESUMO_NOTICIAS` no contêiner. O que for configurado pelo `/resumo` vale mais.
+- Algo falhou? `/resumo config` mostra o último problema.
 
 ## Tarefas concluídas
 Para o fechamento contar o que você fez, marque as tarefas como **concluídas** em vez de apagá-las:

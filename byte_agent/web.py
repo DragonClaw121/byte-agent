@@ -285,6 +285,7 @@ class SearchHit:
 
 class SearchBackend:
     name = "base"
+    news = False        # v13.24: sabe buscar só NOTÍCIAS recentes (manchetes do resumo da manhã)
 
     def search(self, fetcher: SafeFetcher, query: str, limit: int) -> List[SearchHit]:
         raise NotImplementedError
@@ -296,8 +297,13 @@ class SearxngBackend(SearchBackend):
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
 
-    def search(self, fetcher, query, limit):
-        data = fetcher.get_json(f"{self.base_url}/search?" + urllib.parse.urlencode({"q": query, "format": "json", "language": "pt-BR"}))
+    news = True
+
+    def search(self, fetcher, query, limit, news=False):
+        params = {"q": query, "format": "json", "language": "pt-BR"}
+        if news:
+            params.update({"categories": "news", "time_range": "day"})
+        data = fetcher.get_json(f"{self.base_url}/search?" + urllib.parse.urlencode(params))
         return [SearchHit(str(r.get("title") or ""), str(r.get("url") or ""), str(r.get("content") or ""), self.name)
                 for r in (data.get("results") or [])[:limit] if isinstance(r, dict) and r.get("url")]
 
@@ -308,9 +314,14 @@ class TavilyBackend(SearchBackend):
     def __init__(self, api_key: str, endpoint: str = "https://api.tavily.com/search"):
         self.api_key, self.endpoint = api_key, endpoint
 
-    def search(self, fetcher, query, limit):
+    news = True
+
+    def search(self, fetcher, query, limit, news=False):
+        payload = {"query": query, "max_results": limit, "search_depth": "basic"}
+        if news:
+            payload.update({"topic": "news", "days": 2})
         data = fetcher.get_json(self.endpoint, headers={"Authorization": f"Bearer {self.api_key}"}, method="POST",
-                                payload={"query": query, "max_results": limit, "search_depth": "basic"})
+                                payload=payload)
         return [SearchHit(str(r.get("title") or ""), str(r.get("url") or ""), str(r.get("content") or ""), self.name)
                 for r in (data.get("results") or [])[:limit] if isinstance(r, dict) and r.get("url")]
 
@@ -383,14 +394,21 @@ class WebAccess:
         self.last_error: Optional[str] = None
 
     # ---------- primitivas
-    def search(self, query: str, limit: int = 6) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 6, news: bool = False) -> Dict[str, Any]:
+        """news=True: só notícias recentes, e só nos buscadores que sabem fazer isso (Tavily, SearXNG). A Wikipédia
+        não entra: devolveria verbetes, não manchetes."""
         query = " ".join(str(query or "").split())[:300]
         if not query:
             raise ValueError("Informe o que pesquisar.")
         errors: List[str] = []
-        for backend in self.backends:
+        backends = [b for b in self.backends if b.news] if news else self.backends
+        if news and not backends:
+            errors.append("nenhum buscador de notícias configurado (configure o Tavily: TAVILY_API_KEY)")
+        for backend in backends:
+            n = max(1, min(10, int(limit)))
             try:
-                hits = [h for h in backend.search(self.fetcher, query, max(1, min(10, int(limit)))) if h.url.startswith(("http://", "https://"))]
+                found = backend.search(self.fetcher, query, n, news=True) if news else backend.search(self.fetcher, query, n)
+                hits = [h for h in found if h.url.startswith(("http://", "https://"))]
             except Exception as err:
                 errors.append(f"{backend.name}: {type(err).__name__}: {str(err)[:120]}")
                 continue
