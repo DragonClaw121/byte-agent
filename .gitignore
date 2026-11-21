@@ -15,3 +15,7 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+
+# chave de assinatura do app: só nos segredos do GitHub
+android/app/kronus.p12
+*.p12

@@ -17,9 +17,26 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Chave de assinatura (segredo do repositório)
+        env:
+          KRONUS_KEYSTORE_B64: ${{ secrets.KRONUS_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KRONUS_KEYSTORE_B64" ]; then
+            printf '%s' "$KRONUS_KEYSTORE_B64" | base64 -d > android/app/kronus.p12
+            echo "Assinando com a chave dos segredos."
+          elif [ ! -f android/app/kronus-debug.keystore ]; then
+            echo "::error::Falta o segredo KRONUS_KEYSTORE_B64 (rode scripts/chave-app.sh no Cloud Shell)."; exit 1
+          else
+            echo "::warning::Assinando com a chave antiga (pública). Rode scripts/chave-app.sh para criar a nova."
+          fi
       - name: Compilar
         working-directory: android
+        env:
+          KRONUS_KEYSTORE_SENHA: ${{ secrets.KRONUS_KEYSTORE_SENHA }}
         run: ./gradlew --no-daemon assembleRelease
+      - name: Apagar a chave do disco
+        if: always()
+        run: rm -f android/app/kronus.p12
       - name: Publicar o APK
         env:
           GH_TOKEN: ${{ github.token }}

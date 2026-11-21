@@ -17,13 +17,25 @@ android {
         versionName "1.0.${runNumber}"
     }
 
-    // Assinatura de uso pessoal (chave "debug" do projeto, a mesma em todo build: permite atualizar por cima).
+    // Assinatura: a chave fica SÓ nos segredos do GitHub (KRONUS_KEYSTORE_B64 + KRONUS_KEYSTORE_SENHA), gerada por
+    // scripts/chave-app.sh. O workflow grava a chave em kronus.p12 antes de compilar. Sem ela (até você criar a nova),
+    // usa a chave antiga do repositório, que é pública e vai ser removida.
+    def novaChave = file('kronus.p12')
+    def senha = System.getenv('KRONUS_KEYSTORE_SENHA') ?: ''
     signingConfigs {
         kronus {
-            storeFile file('kronus-debug.keystore')
-            storePassword 'android'
-            keyAlias 'kronus'
-            keyPassword 'android'
+            if (novaChave.exists() && !senha.isEmpty()) {
+                storeFile novaChave
+                storeType 'pkcs12'
+                storePassword senha
+                keyAlias 'kronus'
+                keyPassword senha
+            } else {
+                storeFile file('kronus-debug.keystore')
+                storePassword 'android'
+                keyAlias 'kronus'
+                keyPassword 'android'
+            }
         }
     }
     buildTypes {
