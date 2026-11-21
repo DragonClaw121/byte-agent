@@ -40,6 +40,8 @@ HELP_TEXT = (
     "/gatilhos — o que faz o agente avisar sozinho (agenda, e-mail novo, tarefa parada) | /gatilho <nome> on|off\n"
     "/parear — código para conectar o app do celular/relógio | /dispositivos — aparelhos conectados | /desparear <id>\n"
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
+    "/rotina — o que o agente aprendeu (casa, saídas, horários) | /rotina aceitar <n> | /rotina off|on | /rotina esquecer\n"
+    "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
     "/semana — fechamento da semana agora | /semana sexta 18:00 | /semana on|off\n"
@@ -583,6 +585,13 @@ class TelegramBridge:
                 return
             self._dispatch("add_memory", {"content": arg, "importance": 5})
             self.send(chat_id, "Memória gravada.")
+        elif cmd == "/rotina" and not re.match(r"^\d{1,2}(:|h)\d{0,2}\b", arg.strip()):
+            # v13.29: sem horário, /rotina mostra o que o agente aprendeu (com horário, segue agendando a tarefa diária)
+            try:
+                text = self._dispatch("routine_command", {"arg": arg}).get("text")
+            except RuntimeError as err:
+                text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
+            self.send(chat_id, text or "Rotina indisponível neste agente.")
         elif cmd in {"/lembrete", "/rotina"}:
             if not arg:
                 self.send(chat_id, "Use: /lembrete 30m beber água   ou   /rotina 08:00 resuma minha agenda de hoje")

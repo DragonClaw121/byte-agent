@@ -424,6 +424,16 @@ class Briefings:
             else:
                 sections.append("📰 Nenhuma manchete das últimas 48 h sobre " + ", ".join(topics) + ".")
 
+        tips: List[str] = []
+        for extra in getattr(self.service, "briefing_extras", []) or []:    # v13.29: sugestões da rotina
+            try:
+                tips += list(extra(now) or [])
+            except Exception as err:
+                self.last_error = f"sugestões: {type(err).__name__}: {str(err)[:120]}"
+        if tips:
+            sections.append("🧭 Para hoje:\n" + "\n".join(tips[:3]))
+            facts.append("Dicas: " + " ".join(tips[:2]))
+            speech.extend(re.sub(r"^[^\wÀ-ÿ]+", "", t) for t in tips[:2])
         if not sections:
             sections.append("Nada marcado para hoje: nem agenda, nem lembretes, nem tarefas. Dia livre!")
             speech.append("Nada marcado para hoje. Dia livre!")

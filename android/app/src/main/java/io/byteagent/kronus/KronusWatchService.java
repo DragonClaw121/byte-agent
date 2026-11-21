@@ -137,7 +137,8 @@ public class KronusWatchService extends Service {
         if (text.isEmpty()) return;
         boolean summary = "briefing".equals(type) || "weekly_review".equals(type);
         boolean ring = ("reminder".equals(type) && prefs.getBoolean("ligar_lembretes", true))
-                || ("trigger".equals(type) && text.startsWith("📅") && prefs.getBoolean("ligar_agenda", true))
+                || (("trigger".equals(type) && text.startsWith("📅") || "rotina".equals(type) && text.startsWith("🚗"))
+                    && prefs.getBoolean("ligar_agenda", true))            // v1.14: "hora de sair" também liga
                 || (summary && prefs.getBoolean("ligar_resumo", false))
                 || (!summary && !"reminder".equals(type) && !"trigger".equals(type) && prefs.getBoolean("ligar_outros", false));
         if (ring && KronusCallService.ring(this, text, speech)) return;

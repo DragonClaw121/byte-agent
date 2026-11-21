@@ -351,7 +351,7 @@ public class MainActivity extends Activity {
         LinearLayout callOpts = new LinearLayout(this);
         callOpts.setOrientation(LinearLayout.VERTICAL);
         callOpts.setPadding(dp(24), 0, 0, 0);
-        String[][] kinds = {{"ligar_lembretes", "Lembretes", "1"}, {"ligar_agenda", "Compromissos chegando (agenda)", "1"},
+        String[][] kinds = {{"ligar_lembretes", "Lembretes", "1"}, {"ligar_agenda", "Compromissos chegando e hora de sair (agenda)", "1"},
                 {"ligar_resumo", "Resumo da manhã e fechamento da semana (lidos em voz)", "0"},
                 {"ligar_outros", "Outros avisos (objetivos, tarefas paradas...)", "0"}};
         for (String[] kind : kinds) {
@@ -1335,7 +1335,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.13");
+        con.setRequestProperty("User-Agent", "kronus-android/1.14");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");
