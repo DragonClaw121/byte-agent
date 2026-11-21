@@ -225,6 +225,63 @@ class AzureOpenAIClient:
                 "usage": dict(self.usage), "last_error": self.last_error}
 
 
+class AzureEmbeddings:
+    """v13.33 (R0.4): embeddings da Azure OpenAI (ex.: text-embedding-3-small) para a MEMÓRIA dos agentes. Na nuvem não
+    há Ollama: sem isto, a busca de memórias caía num modo de palavras e sinônimos fixos. Ligue com BYTE_AZURE_EMBED
+    (nome da implantação do modelo de embeddings, no mesmo recurso da Azure OpenAI)."""
+
+    def __init__(self, endpoint: str, api_key: str, deployment: str, api_version: str = DEFAULT_API_VERSION,
+                 dims: int = 128, timeout_s: float = 10.0):
+        self.endpoint = re.sub(r"/(openai|models)(/.*)?$", "", endpoint.strip().rstrip("/"))
+        if not self.endpoint.startswith(("https://", "http://127.0.0.1")):
+            raise CloudLLMError("AZURE_OPENAI_ENDPOINT deve começar com https://")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", deployment or ""):
+            raise CloudLLMError("BYTE_AZURE_EMBED deve ser o nome da implantação (ex.: byte-embed).")
+        self.api_key, self.deployment, self.api_version = api_key.strip(), deployment, api_version or DEFAULT_API_VERSION
+        self.dims, self.timeout_s = int(dims), float(timeout_s)
+        self.send_dims = True                        # text-embedding-ada-002 não aceita "dimensions": desliga sozinho
+        self.last_error: Optional[str] = None
+        self.calls = 0
+
+    @classmethod
+    def from_env(cls, read: Callable[[Tuple[str, ...]], str], dims: int = 128) -> Optional["AzureEmbeddings"]:
+        deployment = read(("BYTE_AZURE_EMBED",))
+        endpoint, key = read(("AZURE_OPENAI_ENDPOINT",)), read(("AZURE_OPENAI_API_KEY",))
+        if not (deployment and endpoint and key):
+            return None
+        return cls(endpoint, key, deployment, read(("AZURE_OPENAI_API_VERSION",)) or DEFAULT_API_VERSION, dims=dims)
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        texts = [str(t or " ")[:6000] for t in texts]
+        body: Dict[str, Any] = {"input": texts}
+        if self.send_dims:
+            body["dimensions"] = self.dims
+        url = (f"{self.endpoint}/openai/deployments/{urllib.parse.quote(self.deployment)}/embeddings?"
+               + urllib.parse.urlencode({"api-version": self.api_version}))
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
+                                     headers={"Content-Type": "application/json", "api-key": self.api_key, "User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as err:
+            detail = err.read(600).decode("utf-8", "replace")
+            if err.code == 400 and self.send_dims and "dimension" in detail.lower():
+                self.send_dims = False
+                return self.embed(texts)
+            self.last_error = f"HTTP {err.code}: {_error_message(detail)[:120]}"
+            raise CloudLLMError(f"Embeddings da Azure recusados ({self.last_error})") from None
+        except (urllib.error.URLError, OSError) as err:
+            self.last_error = type(err).__name__
+            raise CloudLLMError(f"Sem conexão com os embeddings da Azure ({self.last_error})") from None
+        items = sorted(data.get("data") or [], key=lambda d: int(d.get("index", 0)))
+        add_daily_tokens(int((data.get("usage") or {}).get("total_tokens") or 0))
+        self.calls += 1
+        self.last_error = None
+        if len(items) != len(texts):
+            raise CloudLLMError("Embeddings da Azure: resposta incompleta")
+        return [[float(x) for x in it.get("embedding") or []] for it in items]
+
+
 def _error_message(detail: str) -> str:
     try:
         data = json.loads(detail)

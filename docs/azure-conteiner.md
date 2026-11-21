@@ -255,3 +255,20 @@ mesmos: memórias, tarefas e contas de e-mail.
   ```
   az containerapp logs show -g byte-rg -n byte --tail 80 | grep Painel
   ```
+
+## Memória por significado (v13.33)
+Na nuvem não há Ollama. Por isso, a busca de memórias funcionava só por palavras parecidas: "qual bebida eu gosto?" não
+achava "meu café favorito é coado". Com os **embeddings da Azure** (text-embedding-3-small, centavos por mês), a busca
+passa a ser por significado.
+
+No Cloud Shell, baixe o script:
+```
+curl -sLO https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/scripts/memoria-azure.sh
+```
+E rode:
+```
+bash memoria-azure.sh
+```
+O script cria a implantação `byte-embed` no seu recurso da Azure OpenAI e grava `BYTE_AZURE_EMBED`. As memórias antigas
+são reindexadas sozinhas, 64 a cada 2 minutos. Se a Azure ficar fora do ar, os agentes voltam ao modo por palavras
+até ela voltar.

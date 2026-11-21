@@ -50,6 +50,14 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
     if profile:
         engine.apply_profile(profile, profile_data)
     vec = engine.VectorEngine()
+    from .cloud import AzureEmbeddings, CloudLLMError
+    try:                                                    # v13.33 (R0.4): memória com embeddings da Azure
+        embeddings = AzureEmbeddings.from_env(engine._read_secret)
+    except CloudLLMError as err:
+        print(f"[MEMÓRIA] Embeddings da Azure desligados: {err}", flush=True)
+        embeddings = None
+    if embeddings is not None:
+        vec.remote_embedder, vec.remote_name = embeddings.embed, embeddings.deployment
     db = engine.UnifiedDatabase(data_dir / "database" / "byte.db", vec,
                                 drive_backup_path=data_dir / "database" / "byte_backup.db")
     llm = engine.TrueLLMAutonomousRouter(db=db, ollama_url=ollama_url or None)
@@ -83,11 +91,42 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         local.install(service)                              # v13.28: clima, localização atual e notícias
         from . import rotina
         rotina.install(service)                             # v13.29: aprende a rotina e sugere no momento certo
+        if embeddings is not None:
+            _install_memory_reindex(service, embeddings)
         from . import app_comandos
         app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
         from . import nuvem as _nuvem
         service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service
+
+
+def _install_memory_reindex(service: Any, embeddings: Any) -> None:
+    """Reindexa aos poucos (64 por vez, a cada 2 min) as memórias antigas com os embeddings da Azure."""
+    import threading
+    import time as _time
+    state = {"last": 0.0, "left": None, "thread": None}
+
+    def work() -> None:
+        try:
+            res = service.db.reindex_memories()
+            state["left"] = res["left"]
+        except Exception as err:
+            state["left"] = f"erro: {type(err).__name__}"
+
+    def job() -> None:
+        if state["left"] == 0 or _time.time() - state["last"] < 120.0:
+            return
+        th = state["thread"]
+        if th is not None and th.is_alive():
+            return
+        state["last"] = _time.time()
+        state["thread"] = threading.Thread(target=work, daemon=True, name="ByteMemoriaReindex")
+        state["thread"].start()
+
+    service.proactive_engine.background_jobs.append(job)
+    service.embeddings = embeddings
+    service.status_providers["memoria"] = lambda: {"motor": service.db.vector_engine.engine_id(),
+                                                   "reindexar": state["left"], "erro": embeddings.last_error}
 
 
 def build_avatar(env: Any, data_dir: Path) -> Tuple[Optional[VTubeStudioClient], Optional[SpeechEngine]]:

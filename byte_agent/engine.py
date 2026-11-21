@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.32"
+BYTE_VERSION = "13.33"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -210,6 +210,9 @@ class VectorEngine:
         self._neural_cache: Dict[str, List[float]] = {}
         self.embed_timeout_s = 1.5
         self._neural_retry_after = 0.0
+        # v13.33 (R0.4): embeddings remotos (Azure OpenAI). Quando ligados, valem mais que o Ollama.
+        self.remote_embedder: Optional[Callable[[List[str]], List[List[float]]]] = None
+        self.remote_name = ""
 
     @staticmethod
     def tokenize(text: str) -> List[str]:
@@ -226,7 +229,30 @@ class VectorEngine:
         norm = math.sqrt(sum(v * v for v in folded))
         return [round(v / norm, 5) for v in folded] if norm > 0 else folded
 
+    def _try_remote_embed(self, text: str) -> Optional[List[float]]:
+        if self.remote_embedder is None or time.monotonic() < self._neural_retry_after:
+            return None
+        try:
+            vecs = self.remote_embedder([text[:2000]])
+            if vecs and vecs[0]:
+                return self._project_to_dim(vecs[0])
+        except Exception:
+            pass
+        self._neural_retry_after = time.monotonic() + 60.0      # fora do ar: usa o modo local por 1 min
+        return None
+
+    def embed_many(self, texts: List[str]) -> Optional[List[List[float]]]:
+        """Vários textos de uma vez (reindexação). None se não há motor remoto ou ele falhou."""
+        if self.remote_embedder is None:
+            return None
+        try:
+            return [self._project_to_dim(v) for v in self.remote_embedder([t[:2000] for t in texts])]
+        except Exception:
+            return None
+
     def _try_ollama_neural_embed(self, text: str) -> Optional[List[float]]:
+        if self.remote_embedder is not None:
+            return self._try_remote_embed(text)
         if not self.use_neural_embed or time.monotonic() < self._neural_retry_after:
             return None
         try:
@@ -249,6 +275,8 @@ class VectorEngine:
 
     def engine_id(self) -> str:
         """Identificador do espaço vetorial em uso (gravado junto de cada memória)."""
+        if self.remote_embedder is not None:
+            return f"neural:azure-{self.remote_name}"
         return f"neural:{self.embed_model}" if self.use_neural_embed else "hash-v1"
 
     def neural_embedding(self, text: str) -> Optional[List[float]]:
@@ -264,7 +292,7 @@ class VectorEngine:
         """Devolve (vetor, motor). Vetores de motores diferentes NÃO são comparáveis."""
         neural_vec = self.neural_embedding(text)
         if neural_vec is not None:
-            return neural_vec, f"neural:{self.embed_model}"
+            return neural_vec, self.engine_id()
         return self.hash_embedding(text), "hash-v1"
 
     def get_embedding(self, text: str) -> List[float]:
@@ -1241,6 +1269,27 @@ class UnifiedDatabase:
             parsed.append(item)
         self._vector_cache = parsed
         return parsed
+
+    def reindex_memories(self, batch: int = 64) -> Dict[str, int]:
+        """v13.33: recalcula, em lotes, os vetores das memórias feitas por outro motor (ex.: o modo local antigo)."""
+        target = self.vector_engine.engine_id()
+        if not target.startswith("neural:"):
+            return {"done": 0, "left": 0}
+        with self.connection() as conn:
+            rows = conn.execute("SELECT id, content, category FROM memories WHERE COALESCE(embedding_engine, '') != ? "
+                                "ORDER BY importance DESC, id DESC LIMIT ?", (target, int(batch))).fetchall()
+            left = conn.execute("SELECT COUNT(*) AS n FROM memories WHERE COALESCE(embedding_engine, '') != ?",
+                                (target,)).fetchone()["n"]
+        if not rows:
+            return {"done": 0, "left": 0}
+        vecs = self.vector_engine.embed_many([f"{r['category']}: {r['content']}" for r in rows])
+        if not vecs or len(vecs) != len(rows):
+            return {"done": 0, "left": int(left)}
+        with self.connection() as conn:
+            conn.executemany("UPDATE memories SET embedding_json = ?, embedding_engine = ? WHERE id = ?",
+                             [(json.dumps(v), target, r["id"]) for r, v in zip(rows, vecs)])
+        self._vector_cache = None
+        return {"done": len(rows), "left": int(left) - len(rows)}
 
     def search_memories_hybrid(self, query: str, limit: int = 3, min_score: float = 0.24) -> List[Dict[str, Any]]:
         cached = self._get_cached_memories()
