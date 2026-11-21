@@ -70,7 +70,7 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TextView title, conn, state, log, diag;
+    private TextView title, conn, state, diag;
     private Button mic, disconnect;
     private CheckBox useWatch;
     private LinearLayout setup;
@@ -126,6 +126,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         KronusCallService.uiListener = null;
+        Conversa.listener = null;
+        ui.removeCallbacks(pollNotes);
         super.onPause();
     }
 
@@ -139,6 +141,10 @@ public class MainActivity extends Activity {
         if (paired() && prefs.getBoolean("ligar", false) && !KronusWatchService.isRunning()) {
             try { KronusWatchService.start(this); } catch (Exception ignored) { }
         }
+        Conversa.listener = () -> ui.post(this::renderChat);
+        renderChat();
+        ui.removeCallbacks(pollNotes);
+        ui.post(pollNotes);
         checkStatus();
         maybeAutoListen();
         if (paired() && Local.allowed(this)) new Thread(() -> Local.sendIfDue(this, false), "kronus-local").start();
@@ -223,72 +229,220 @@ public class MainActivity extends Activity {
         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
     }
 
+    // ------------------------------------------------------------------ app 2.0: abas, conversa e comandos
+    private static final int BG = Color.rgb(11, 15, 23), CARD = Color.rgb(24, 31, 45), INK = Color.rgb(238, 242, 247),
+            MUTED = Color.rgb(151, 161, 178), BLUE = Color.rgb(37, 99, 235), AMBER = Color.rgb(245, 158, 11);
+    private static final String[] TABS = {"💬 Conversa", "⚡ Comandos", "⌚ Relógio", "⚙️ Ajustes"};
+    private final View[] pages = new View[4];
+    private final Button[] tabButtons = new Button[4];
+    private int currentTab = 0;
+    private LinearLayout chatList, cmdList;
+    private ScrollView chatScroll;
+    private EditText msgInput;
+    private TextView settingsInfo;
+
+    private GradientDrawable rounded(int color, int radiusDp, int strokeColor) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        if (strokeColor != 0) g.setStroke(dp(1), strokeColor);
+        return g;
+    }
+
+    private TextView label(String text, int sizeSp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(sizeSp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
+        return t;
+    }
+
+    private Button pill(String text, View.OnClickListener click) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextColor(INK);
+        b.setTextSize(14);
+        b.setBackground(rounded(CARD, 18, Color.rgb(51, 65, 85)));
+        b.setPadding(dp(14), dp(6), dp(14), dp(6));
+        b.setOnClickListener(click);
+        return b;
+    }
+
+    private CheckBox check(String text, String pref, boolean def, int color) {
+        CheckBox cb = new CheckBox(this);
+        cb.setText(text);
+        cb.setTextColor(color);
+        cb.setTextSize(15);
+        cb.setPadding(0, dp(6), 0, dp(6));
+        cb.setChecked(prefs.getBoolean(pref, def));
+        cb.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean(pref, on).apply());
+        return cb;
+    }
+
+    private LinearLayout section(LinearLayout parent, String title, String hint) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(rounded(CARD, 14, 0));
+        box.setPadding(dp(14), dp(12), dp(14), dp(12));
+        box.addView(label(title, 16, INK, true));
+        if (hint != null && !hint.isEmpty()) {
+            TextView h = label(hint, 13, MUTED, false);
+            h.setPadding(0, dp(4), 0, dp(4));
+            box.addView(h);
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(12);
+        parent.addView(box, lp);
+        return box;
+    }
+
+    /** Uma aba com rolagem: tudo cabe, em qualquer tamanho de tela. */
+    private LinearLayout scrollPage(int index) {
+        ScrollView sv = new ScrollView(this);
+        sv.setFillViewport(true);
+        LinearLayout inner = new LinearLayout(this);
+        inner.setOrientation(LinearLayout.VERTICAL);
+        inner.setPadding(0, dp(8), 0, dp(24));
+        sv.addView(inner);
+        pages[index] = sv;
+        return inner;
+    }
+
     private void buildUi() {
-        int bg = Color.rgb(11, 15, 23), ink = Color.rgb(238, 242, 247), muted = Color.rgb(151, 161, 178), blue = Color.rgb(37, 99, 235);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(bg);
-        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+        root.setBackgroundColor(BG);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             int top, bottom;
             if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets s = insets.getInsets(WindowInsets.Type.systemBars());
+                android.graphics.Insets s = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
                 top = s.top; bottom = s.bottom;
             } else {
                 top = insets.getSystemWindowInsetTop(); bottom = insets.getSystemWindowInsetBottom();
             }
-            v.setPadding(dp(16), top + dp(12), dp(16), bottom + dp(12));
+            v.setPadding(dp(12), top + dp(8), dp(12), bottom + dp(4));
             return insets;
         });
 
-        title = new TextView(this);
-        title.setText("Kronus");
-        title.setTextColor(ink);
-        title.setTextSize(22);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        // cabeçalho: nome e estado da conexão (toque para conferir de novo)
+        title = label("Kronus", 22, INK, true);
         root.addView(title);
-        conn = new TextView(this);
-        conn.setTextColor(muted);
-        conn.setTextSize(13);
+        conn = label("", 12, MUTED, false);
+        conn.setOnClickListener(v -> checkStatus());
         root.addView(conn);
 
-        setup = new LinearLayout(this);
-        setup.setOrientation(LinearLayout.VERTICAL);
-        setup.setPadding(0, dp(16), 0, dp(8));
-        TextView help = new TextView(this);
-        help.setText("Para conectar: mande /parear no Telegram do Kronus, segure o link que ele enviar e toque em Copiar. "
-                + "Depois toque em \"Colar do Telegram\".");
-        help.setTextColor(muted);
-        help.setTextSize(15);
-        setup.addView(help);
-        input = new EditText(this);
-        input.setHint("link do /parear (ou código, se já conectou antes)");
-        input.setTextColor(ink);
-        input.setHintTextColor(muted);
-        input.setSingleLine(true);
-        setup.addView(input);
-        Button paste = new Button(this);
-        paste.setText("Colar do Telegram");
-        paste.setOnClickListener(v -> pasteFromClipboard());
-        setup.addView(paste);
-        Button connect = new Button(this);
-        connect.setText("Conectar");
-        connect.setOnClickListener(v -> pair(input.getText().toString()));
-        setup.addView(connect);
-        root.addView(setup);
+        android.widget.FrameLayout content = new android.widget.FrameLayout(this);
+        root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        buildChatPage();
+        buildCommandsPage();
+        buildWatchPage();
+        buildSettingsPage();
+        for (View p : pages) content.addView(p, new android.widget.FrameLayout.LayoutParams(-1, -1));
 
+        // barra de abas embaixo
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setPadding(0, dp(6), 0, 0);
+        for (int i = 0; i < TABS.length; i++) {
+            final int idx = i;
+            Button b = new Button(this);
+            b.setText(TABS[i].replace(" ", "\n"));
+            b.setAllCaps(false);
+            b.setTextSize(12);
+            b.setBackgroundColor(Color.TRANSPARENT);
+            b.setOnClickListener(v -> showTab(idx));
+            tabButtons[i] = b;
+            nav.addView(b, new LinearLayout.LayoutParams(0, dp(58), 1f));
+        }
+        root.addView(nav);
+        setContentView(root);
+        showTab(0);
+    }
+
+    private void showTab(int idx) {
+        currentTab = idx;
+        for (int i = 0; i < pages.length; i++) {
+            pages[i].setVisibility(i == idx ? View.VISIBLE : View.GONE);
+            tabButtons[i].setTextColor(i == idx ? INK : MUTED);
+            tabButtons[i].setTypeface(i == idx ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        }
+        if (idx == 0) scrollChatToEnd();
+        if (idx == 1 && paired()) loadCommands(false);
+    }
+
+    // ---------------- aba Conversa
+    private void buildChatPage() {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        pages[0] = page;
+
+        chatScroll = new ScrollView(this);
+        chatList = new LinearLayout(this);
+        chatList.setOrientation(LinearLayout.VERTICAL);
+        chatList.setPadding(0, dp(8), 0, dp(8));
+        chatScroll.addView(chatList);
+        page.addView(chatScroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        state = label("", 13, MUTED, false);
+        state.setGravity(Gravity.CENTER_HORIZONTAL);
+        state.setPadding(0, dp(4), 0, dp(4));
+        page.addView(state);
+
+        // atalhos rápidos (os mais usados); o resto fica na aba Comandos
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        String[][] quick = {{"☀️ Resumo", "/resumo"}, {"🌤️ Clima", "/clima"}, {"🗓️ Agenda", "/agenda"},
+                {"⏰ Lembretes", "/lembretes"}, {"🧭 Rotina", "/rotina"}, {"⚡ Mais", ""}};
+        for (String[] q : quick) {
+            Button b = pill(q[0], v -> {
+                if (q[1].isEmpty()) showTab(1);
+                else sendText(q[1]);
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(40));
+            lp.rightMargin = dp(6);
+            chips.addView(b, lp);
+        }
+        hs.addView(chips);
+        page.addView(hs);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, 0);
+        msgInput = new EditText(this);
+        msgInput.setHint("Escreva para o Kronus...");
+        msgInput.setTextColor(INK);
+        msgInput.setHintTextColor(MUTED);
+        msgInput.setMaxLines(4);
+        msgInput.setBackground(rounded(CARD, 22, Color.rgb(51, 65, 85)));
+        msgInput.setPadding(dp(14), dp(10), dp(14), dp(10));
+        row.addView(msgInput, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button send = new Button(this);
+        send.setText("➤");
+        send.setTextColor(Color.WHITE);
+        send.setTextSize(20);
+        send.setBackground(rounded(BLUE, 24, 0));
+        send.setOnClickListener(v -> {
+            String t = msgInput.getText().toString().trim();
+            if (!t.isEmpty()) {
+                msgInput.setText("");
+                sendText(t);
+            }
+        });
+        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        sp.leftMargin = dp(6);
+        row.addView(send, sp);
         mic = new Button(this);
         mic.setText("🎙️");
-        mic.setTextSize(48);
-        mic.setTextColor(Color.WHITE);
+        mic.setTextSize(20);
         GradientDrawable circle = new GradientDrawable();
         circle.setShape(GradientDrawable.OVAL);
-        circle.setColor(blue);
+        circle.setColor(Color.rgb(15, 118, 110));
         mic.setBackground(circle);
-        LinearLayout.LayoutParams micParams = new LinearLayout.LayoutParams(dp(180), dp(180));
-        micParams.gravity = Gravity.CENTER_HORIZONTAL;
-        micParams.topMargin = dp(36);
-        mic.setLayoutParams(micParams);
         mic.setOnClickListener(v -> {
             if (listening) listening = false;          // tocar enquanto ouve: termina de ouvir e envia
             else if (KronusCallService.current != null) {
@@ -296,33 +450,210 @@ public class MainActivity extends Activity {
                 say("Chamada encerrada.");
             } else startListening();
         });
-        root.addView(mic);
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        mp.leftMargin = dp(6);
+        row.addView(mic, mp);
+        page.addView(row);
+        renderChat();
+    }
 
-        state = new TextView(this);
-        state.setTextColor(muted);
-        state.setTextSize(16);
-        state.setGravity(Gravity.CENTER_HORIZONTAL);
-        state.setPadding(0, dp(14), 0, dp(6));
-        root.addView(state);
+    private void scrollChatToEnd() {
+        if (chatScroll != null) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN));
+    }
 
-        useWatch = new CheckBox(this);
-        useWatch.setText("Usar microfone e alto-falante do relógio (Bluetooth)");
-        useWatch.setTextColor(muted);
-        useWatch.setChecked(prefs.getBoolean("watch", true));
+    /** Desenha as mensagens: as suas à direita, as do Kronus à esquerda, os avisos no meio. */
+    private void renderChat() {
+        if (chatList == null) return;
+        chatList.removeAllViews();
+        java.util.List<Conversa.Msg> all = Conversa.all(this);
+        if (all.isEmpty()) {
+            TextView empty = label(paired() ? "Escreva, toque em 🎙️ para falar ou use os atalhos abaixo."
+                    : "Conecte o app ao Kronus na aba ⚙️ Ajustes.", 14, MUTED, false);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(16), dp(40), dp(16), dp(16));
+            chatList.addView(empty);
+            return;
+        }
+        int from = Math.max(0, all.size() - 120);
+        for (int i = from; i < all.size(); i++) {
+            Conversa.Msg m = all.get(i);
+            boolean me = Conversa.EU.equals(m.who), alert = Conversa.AVISO.equals(m.who);
+            LinearLayout wrap = new LinearLayout(this);
+            wrap.setOrientation(LinearLayout.VERTICAL);
+            wrap.setGravity(me ? Gravity.END : (alert ? Gravity.CENTER_HORIZONTAL : Gravity.START));
+            TextView bubble = label(m.text, 15, INK, false);
+            bubble.setTextIsSelectable(true);
+            bubble.setPadding(dp(12), dp(8), dp(12), dp(8));
+            bubble.setBackground(rounded(me ? BLUE : CARD, 16, alert ? AMBER : 0));
+            bubble.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.82));
+            wrap.addView(bubble);
+            if (m.buttons != null && m.buttons.length() > 0 && !m.used) {
+                LinearLayout btns = new LinearLayout(this);
+                btns.setOrientation(LinearLayout.HORIZONTAL);
+                for (int j = 0; j < m.buttons.length(); j++) {
+                    JSONObject b = m.buttons.optJSONObject(j);
+                    if (b == null) continue;
+                    final String data = b.optString("data");
+                    Button btn = pill(b.optString("label"), v -> {
+                        Conversa.markUsed(this, m);
+                        sendCallback(data);
+                    });
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(42));
+                    lp.rightMargin = dp(6);
+                    lp.topMargin = dp(4);
+                    btns.addView(btn, lp);
+                }
+                wrap.addView(btns);
+            }
+            LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(-1, -2);
+            wp.bottomMargin = dp(8);
+            chatList.addView(wrap, wp);
+        }
+        scrollChatToEnd();
+    }
+
+    /** Mensagem escrita ou comando ("/clima"): vai pelo mesmo caminho do Telegram e volta com os botões. */
+    private void sendText(String text) {
+        if (!paired()) {
+            showTab(3);
+            say("Conecte o app primeiro.");
+            return;
+        }
+        Conversa.add(this, Conversa.EU, text, null);
+        showTab(0);
+        say(text.startsWith("/") ? "Executando..." : "Kronus está pensando...");
+        new Thread(() -> postCommand("text", text), "kronus-msg").start();
+    }
+
+    private void sendCallback(String data) {
+        say("Enviando...");
+        new Thread(() -> postCommand("callback", data), "kronus-botao").start();
+    }
+
+    private void postCommand(String key, String value) {
+        try {
+            JSONObject body = new JSONObject();
+            body.put(key, value);
+            JSONObject res = http(prefs.getString("server", "") + "/api/v1/command", "application/json",
+                    body.toString().getBytes(StandardCharsets.UTF_8), prefs.getString("token", ""));
+            org.json.JSONArray msgs = res.optJSONArray("messages");
+            StringBuilder spoken = new StringBuilder();
+            for (int i = 0; msgs != null && i < msgs.length(); i++) {
+                JSONObject m = msgs.getJSONObject(i);
+                Conversa.add(this, Conversa.KRONUS, m.optString("text"), m.optJSONArray("buttons"));
+                spoken.append(m.optString("text")).append(". ");
+            }
+            if (msgs == null || msgs.length() == 0) Conversa.add(this, Conversa.AVISO, "(sem resposta)", null);
+            say("");
+            if (prefs.getBoolean("ler_respostas", false) && ttsReady && spoken.length() > 0)
+                tts.speak(spoken.toString().replaceAll("[\\p{So}\\p{Cn}*_#>`]", " "), TextToSpeech.QUEUE_FLUSH, null, "resposta");
+        } catch (Exception e) {
+            Conversa.add(this, Conversa.AVISO, "⚠️ " + e.getMessage(), null);
+            say("");
+        }
+    }
+
+    // ---------------- aba Comandos (os comandos do Telegram como botões)
+    private void buildCommandsPage() {
+        cmdList = scrollPage(1);
+        renderCommands(prefs.getString("comandos", ""));
+    }
+
+    private void loadCommands(boolean force) {
+        long last = prefs.getLong("comandos_at", 0);
+        if (!force && System.currentTimeMillis() - last < 10 * 60 * 1000L && !prefs.getString("comandos", "").isEmpty()) return;
+        new Thread(() -> {
+            try {
+                JSONObject res = http(prefs.getString("server", "") + "/api/v1/commands", null, null, prefs.getString("token", ""));
+                String json = String.valueOf(res.optJSONArray("commands"));
+                prefs.edit().putString("comandos", json).putLong("comandos_at", System.currentTimeMillis()).apply();
+                ui.post(() -> renderCommands(json));
+            } catch (Exception ignored) {
+                // sem rede agora: fica a lista guardada
+            }
+        }, "kronus-comandos").start();
+    }
+
+    private void renderCommands(String json) {
+        cmdList.removeAllViews();
+        org.json.JSONArray arr;
+        try {
+            arr = new org.json.JSONArray(json == null || json.isEmpty() || "null".equals(json) ? "[]" : json);
+        } catch (Exception e) {
+            arr = new org.json.JSONArray();
+        }
+        if (arr.length() == 0) {
+            cmdList.addView(label(paired() ? "Carregando os comandos..." : "Conecte o app na aba ⚙️ Ajustes para ver os comandos.",
+                    14, MUTED, false));
+            return;
+        }
+        String group = null;
+        LinearLayout box = null, row = null;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject c = arr.optJSONObject(i);
+            if (c == null) continue;
+            if (!c.optString("group").equals(group)) {
+                group = c.optString("group");
+                box = section(cmdList, group, null);
+                row = null;
+            }
+            if (row == null || row.getChildCount() == 2) {
+                row = new LinearLayout(this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                box.addView(row);
+            }
+            Button b = pill(c.optString("label"), v -> runCommand(c));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
+            lp.setMargins(dp(3), dp(4), dp(3), dp(4));
+            row.addView(b, lp);
+        }
+        if (row != null && row.getChildCount() == 1) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        Button refreshBtn = pill("↻ Atualizar a lista", v -> loadCommands(true));
+        cmdList.addView(refreshBtn);
+    }
+
+    /** Comando sem texto: roda na hora. Com texto: pergunta numa caixinha (com um exemplo). */
+    private void runCommand(JSONObject c) {
+        String cmd = c.optString("command"), ask = c.optString("ask");
+        if (ask.isEmpty()) {
+            sendText(cmd);
+            return;
+        }
+        EditText field = new EditText(this);
+        field.setHint(c.optString("example"));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(c.optString("label"))
+                .setMessage(ask)
+                .setView(field)
+                .setPositiveButton("Enviar", (d, w) -> {
+                    String arg = field.getText().toString().trim();
+                    if (arg.isEmpty() && c.optBoolean("required")) {
+                        say("Esse comando precisa de um texto.");
+                        return;
+                    }
+                    sendText(arg.isEmpty() ? cmd : cmd + " " + arg);
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    // ---------------- aba Relógio
+    private void buildWatchPage() {
+        LinearLayout page = scrollPage(2);
+
+        LinearLayout watch = section(page, "⌚ Relógio", "Conversa por voz pelo microfone e alto-falante do relógio Bluetooth.");
+        useWatch = check("Usar microfone e alto-falante do relógio", "watch", true, INK);
         useWatch.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("watch", on).apply());
-        root.addView(useWatch);
-
-        TextView pick = new TextView(this);
-        pick.setText("Método de som no relógio (use o que o teste mostrar que funciona):");
-        pick.setTextColor(muted);
-        root.addView(pick);
+        watch.addView(useWatch);
+        watch.addView(check("Continuar a conversa depois da resposta (escuta de novo)", "seguir", false, MUTED));
+        watch.addView(label("Método de som (use o que o teste mostrar que funciona):", 13, MUTED, false));
         android.widget.RadioGroup methods = new android.widget.RadioGroup(this);
         methods.setOrientation(LinearLayout.HORIZONTAL);
         for (int i = 0; i < METHODS.length; i++) {
             android.widget.RadioButton rb = new android.widget.RadioButton(this);
             rb.setId(1000 + i);
             rb.setText(METHODS[i]);
-            rb.setTextColor(ink);
+            rb.setTextColor(INK);
             methods.addView(rb);
             if (METHODS[i].equals(method())) rb.setChecked(true);
         }
@@ -330,40 +661,25 @@ public class MainActivity extends Activity {
             prefs.edit().putString("metodo", METHODS[id - 1000]).apply();
             checkStatus();
         });
-        root.addView(methods);
+        watch.addView(methods);
+        watch.addView(pill("🔊 Testar som do relógio", v -> testWatch()));
+        watch.addView(pill("▶️ Ouvir minha última gravação", v -> replayLast()));
+        diag = label("", 13, MUTED, false);
+        diag.setPadding(0, dp(6), 0, 0);
+        watch.addView(diag);
 
-        diag = new TextView(this);
-        diag.setTextColor(muted);
-        diag.setTextSize(13);
-        root.addView(diag);
-
-        CheckBox follow = new CheckBox(this);
-        follow.setText("Continuar a conversa depois da resposta (escuta de novo)");
-        follow.setTextColor(muted);
-        follow.setChecked(prefs.getBoolean("seguir", false));
-        follow.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean("seguir", on).apply());
-        root.addView(follow);
-
-        CheckBox calls = new CheckBox(this);
-        calls.setText("📞 Kronus pode me ligar para avisar (lembretes e compromissos)");
-        calls.setTextColor(ink);
-        calls.setChecked(prefs.getBoolean("ligar", false));
+        LinearLayout calls = section(page, "📞 Kronus te liga", "Avisos tocam como chamada recebida no relógio.");
+        CheckBox callsOn = check("Kronus pode me ligar para avisar", "ligar", false, INK);
+        calls.addView(callsOn);
         LinearLayout callOpts = new LinearLayout(this);
         callOpts.setOrientation(LinearLayout.VERTICAL);
-        callOpts.setPadding(dp(24), 0, 0, 0);
+        callOpts.setPadding(dp(20), 0, 0, 0);
         String[][] kinds = {{"ligar_lembretes", "Lembretes", "1"}, {"ligar_agenda", "Compromissos chegando e hora de sair (agenda)", "1"},
                 {"ligar_resumo", "Resumo da manhã e fechamento da semana (lidos em voz)", "0"},
                 {"ligar_outros", "Outros avisos (objetivos, tarefas paradas...)", "0"}};
-        for (String[] kind : kinds) {
-            CheckBox cb = new CheckBox(this);
-            cb.setText(kind[1]);
-            cb.setTextColor(muted);
-            cb.setChecked(prefs.getBoolean(kind[0], "1".equals(kind[2])));
-            cb.setOnCheckedChangeListener((b, on) -> prefs.edit().putBoolean(kind[0], on).apply());
-            callOpts.addView(cb);
-        }
-        callOpts.setVisibility(calls.isChecked() ? View.VISIBLE : View.GONE);
-        calls.setOnCheckedChangeListener((b, on) -> {
+        for (String[] kind : kinds) callOpts.addView(check(kind[1], kind[0], "1".equals(kind[2]), MUTED));
+        callOpts.setVisibility(callsOn.isChecked() ? View.VISIBLE : View.GONE);
+        callsOn.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean("ligar", on).apply();
             callOpts.setVisibility(on ? View.VISIBLE : View.GONE);
             if (on) {
@@ -373,17 +689,39 @@ public class MainActivity extends Activity {
                 say("Kronus atento: lembretes vão tocar como chamada.");
             } else {
                 KronusWatchService.stop(this);
-                say("O Kronus não vai mais ligar; os avisos seguem no Telegram.");
+                say("O Kronus não vai mais ligar; os avisos chegam na conversa e no Telegram.");
             }
         });
-        root.addView(calls);
-        root.addView(callOpts);
+        calls.addView(callOpts);
+        calls.addView(pill("📲 Testar: Kronus me liga (em 5 s)", v -> {
+            say("Em 5 segundos o Kronus vai ligar. Pode bloquear o celular.");
+            ui.postDelayed(() -> {
+                if (!KronusCallService.ring(this, "Isto é um teste do Kronus te liga. Se você atendeu pelo relógio, deu certo. "
+                        + "Pode me responder depois do bipe."))
+                    say("⚠️ Não consegui ligar: " + KronusCallService.lastError);
+            }, 5000);
+        }));
+    }
 
-        CheckBox where = new CheckBox(this);
-        where.setText("📍 Compartilhar minha localização aproximada (clima e sugestões de onde você está)");
-        where.setTextColor(ink);
-        where.setChecked(prefs.getBoolean(Local.PREF, false));
-        where.setOnCheckedChangeListener((b, on) -> {
+    // ---------------- aba Ajustes
+    private void buildSettingsPage() {
+        LinearLayout page = scrollPage(3);
+
+        setup = section(page, "🔗 Conectar ao Kronus", "Mande /parear no Telegram do Kronus, segure o link que ele enviar, "
+                + "toque em Copiar e depois em \"Colar do Telegram\".");
+        input = new EditText(this);
+        input.setHint("link do /parear (ou código, se já conectou antes)");
+        input.setTextColor(INK);
+        input.setHintTextColor(MUTED);
+        input.setSingleLine(true);
+        setup.addView(input);
+        setup.addView(pill("📋 Colar do Telegram", v -> pasteFromClipboard()));
+        setup.addView(pill("Conectar", v -> pair(input.getText().toString())));
+
+        LinearLayout where = section(page, "📍 Localização", "Clima, resumo e sugestões da rotina seguem onde você está "
+                + "(posição aproximada, ~1 km; o servidor guarda só a última).");
+        CheckBox loc = check("Compartilhar minha localização aproximada", Local.PREF, false, INK);
+        loc.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean(Local.PREF, on).apply();
             if (!on) {
                 say("Localização desligada: o Kronus usa a cidade do resumo.");
@@ -393,47 +731,24 @@ public class MainActivity extends Activity {
                 shareLocationNow();
             }
         });
-        root.addView(where);
+        where.addView(loc);
 
-        Button ringTest = new Button(this);
-        ringTest.setText("Testar: Kronus me liga (em 5 s)");
-        ringTest.setOnClickListener(v -> {
-            say("Em 5 segundos o Kronus vai ligar. Pode bloquear o celular.");
-            ui.postDelayed(() -> {
-                if (!KronusCallService.ring(this, "Isto é um teste do Kronus te liga. Se você atendeu pelo relógio, deu certo. "
-                        + "Pode me responder depois do bipe."))
-                    say("⚠️ Não consegui ligar: " + KronusCallService.lastError);
-            }, 5000);
-        });
-        root.addView(ringTest);
+        LinearLayout talk = section(page, "💬 Conversa", null);
+        talk.addView(check("Ler em voz alta as respostas escritas", "ler_respostas", false, INK));
+        talk.addView(pill("🧹 Apagar o histórico deste celular", v -> new android.app.AlertDialog.Builder(this)
+                .setMessage("Apagar as mensagens guardadas neste celular? (O Kronus continua lembrando do que importa.)")
+                .setPositiveButton("Apagar", (d, w) -> Conversa.clear(this))
+                .setNegativeButton("Cancelar", null).show()));
 
-        Button replay = new Button(this);
-        replay.setText("Ouvir minha última gravação");
-        replay.setOnClickListener(v -> replayLast());
-        root.addView(replay);
-
-        Button test = new Button(this);
-        test.setText("Testar som do relógio");
-        test.setOnClickListener(v -> testWatch());
-        root.addView(test);
-
-        ScrollView scroll = new ScrollView(this);
-        log = new TextView(this);
-        log.setTextColor(ink);
-        log.setTextSize(15);
-        log.setPadding(0, dp(8), 0, dp(8));
-        scroll.addView(log);
-        root.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        disconnect = new Button(this);
-        disconnect.setText("Desconectar este aparelho");
-        disconnect.setOnClickListener(v -> {
+        LinearLayout device = section(page, "📱 Este aparelho", null);
+        settingsInfo = label("", 13, MUTED, false);
+        device.addView(settingsInfo);
+        disconnect = pill("Desconectar este aparelho", v -> {
             prefs.edit().remove("token").apply();
             say("Desconectado. Para remover o acesso de vez, mande /desparear no Telegram.");
             refresh();
         });
-        root.addView(disconnect);
-        setContentView(root);
+        device.addView(disconnect);
     }
 
     private boolean paired() {
@@ -443,11 +758,22 @@ public class MainActivity extends Activity {
     private void refresh() {
         boolean ok = paired();
         setup.setVisibility(ok ? View.GONE : View.VISIBLE);
-        mic.setVisibility(ok ? View.VISIBLE : View.GONE);
-        useWatch.setVisibility(ok ? View.VISIBLE : View.GONE);
         disconnect.setVisibility(ok ? View.VISIBLE : View.GONE);
         title.setText(prefs.getString("agent", "Kronus"));
-        if (ok) say("Toque para falar.");
+        String version = "?";
+        try {
+            version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception ignored) {
+        }
+        settingsInfo.setText((ok ? "Conectado a " + prefs.getString("server", "") : "Não conectado") + "\nApp " + version);
+        renderChat();
+        renderCommands(prefs.getString("comandos", ""));
+        if (ok) {
+            say("");
+            loadCommands(false);
+        } else {
+            showTab(3);
+        }
     }
 
     /** Toca no celular o que o app enviou da última vez: mostra se o problema é o áudio do relógio ou a transcrição. */
@@ -523,13 +849,28 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** Conversa por voz também entra no histórico (app 2.0). */
     private void addLog(String who, String text) {
-        ui.post(() -> {
-            String prev = log.getText().toString();
-            String next = (prev.isEmpty() ? "" : prev + "\n\n") + who + ": " + text;
-            if (next.length() > 6000) next = next.substring(next.length() - 6000);
-            log.setText(next);
-        });
+        Conversa.add(this, "Você".equals(who) ? Conversa.EU : Conversa.KRONUS, text, null);
+    }
+
+    /** Sem o serviço atento ligado, a tela aberta busca os avisos (lembretes, resumos, rotina) a cada 20 s. */
+    private final Runnable pollNotes = new Runnable() {
+        @Override
+        public void run() {
+            if (paired() && !KronusWatchService.isRunning()) new Thread(MainActivity.this::fetchNotes, "kronus-avisos-tela").start();
+            ui.postDelayed(this, 20000);
+        }
+    };
+
+    private void fetchNotes() {
+        try {
+            JSONObject res = http(prefs.getString("server", "") + "/api/v1/notifications?canal=app", null, null, prefs.getString("token", ""));
+            org.json.JSONArray items = res.optJSONArray("notifications");
+            for (int i = 0; items != null && i < items.length(); i++)
+                Conversa.add(this, Conversa.AVISO, items.getJSONObject(i).optString("text"), null);
+        } catch (Exception ignored) {
+        }
     }
 
     // ------------------------------------------------------------------ permissões e pareamento
@@ -1335,7 +1676,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.14");
+        con.setRequestProperty("User-Agent", "kronus-android/2.0");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

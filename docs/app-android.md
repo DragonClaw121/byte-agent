@@ -35,6 +35,19 @@ fazem; não usa a operadora nem custa nada): o Android liga o relógio e mantém
   **D/D0** = modo antigo, sem chamada. **Testar som do relógio** faz uma chamada de teste: 1 bipe = C1, 2 = C2.
 - Se o Android recusar a chamada, o app usa o modo antigo sozinho.
 
+## App 2.0: a conversa com o Kronus fica no app
+A tela foi refeita em **quatro abas**, todas com rolagem:
+- **💬 Conversa:** escreva ou toque em 🎙️ para falar. Respostas, lembretes, resumos e sugestões da rotina aparecem no
+  mesmo lugar, e os botões **Aprovar** e **Descartar** funcionam ali mesmo. Acima da caixa de texto ficam os atalhos
+  ☀️ Resumo, 🌤️ Clima, 🗓️ Agenda, ⏰ Lembretes e 🧭 Rotina.
+- **⚡ Comandos:** todos os comandos do Telegram viram botões, por grupo (Dia a dia, Agenda, Memória e objetivos,
+  Pesquisa, Agente...). Os que precisam de texto abrem uma caixinha com um exemplo. A lista vem do servidor e mostra
+  só o que o agente tem.
+- **⌚ Relógio:** microfone e som do relógio, método de som, testes e "Kronus te liga".
+- **⚙️ Ajustes:** conexão, localização, ler as respostas em voz alta, apagar o histórico e desconectar.
+
+O histórico fica guardado no celular (últimas 200 mensagens). O Telegram continua funcionando igual.
+
 ## Kronus te liga (v1.11)
 Ligue **"📞 Kronus pode me ligar para avisar"**. O app fica atento aos avisos do servidor (uma notificação discreta
 "Kronus atento" fica fixa; é exigência do Android) e:

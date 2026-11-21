@@ -83,6 +83,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         local.install(service)                              # v13.28: clima, localização atual e notícias
         from . import rotina
         rotina.install(service)                             # v13.29: aprende a rotina e sugere no momento certo
+        from . import app_comandos
+        app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
         from . import nuvem as _nuvem
         service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service

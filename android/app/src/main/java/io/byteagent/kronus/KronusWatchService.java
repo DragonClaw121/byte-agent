@@ -135,6 +135,7 @@ public class KronusWatchService extends Service {
      *  v1.12: o resumo da manhã e o fechamento da semana também podem tocar, lidos na versão FALADA (speech). */
     private void handle(SharedPreferences prefs, String type, String text, String speech) {
         if (text.isEmpty()) return;
+        Conversa.add(this, Conversa.AVISO, text, null);           // app 2.0: todo aviso também fica na conversa
         boolean summary = "briefing".equals(type) || "weekly_review".equals(type);
         boolean ring = ("reminder".equals(type) && prefs.getBoolean("ligar_lembretes", true))
                 || (("trigger".equals(type) && text.startsWith("📅") || "rotina".equals(type) && text.startsWith("🚗"))

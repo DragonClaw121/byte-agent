@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.29"
+BYTE_VERSION = "13.30"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -10044,6 +10044,23 @@ class ByteOmniServer:
                                           "audio_b64": res.get("audio_b64"), "audio_mime": res.get("audio_mime"),
                                           "pending_approvals": pending,
                                           "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
+                    return True
+                if path in {"/api/v1/command", "/api/v1/commands"}:
+                    # v13.30 (app 2.0): conversa escrita e os comandos do Telegram, com os mesmos botões de aprovação
+                    if path == "/api/v1/commands" and method == "GET":
+                        action = service.extra_actions.get("app_commands")
+                        self._send_json(200 if action else 404, action({}) if action else {"error": "indisponível"})
+                        return True
+                    if method != "POST" or not self._rate_ok():
+                        if method != "POST":
+                            self._send_json(405, {"error": "use POST"})
+                        return True
+                    body = self._read_json()
+                    action = service.extra_actions.get("app_command")
+                    if body is None or action is None or not (body.get("text") or body.get("callback")):
+                        self._send_json(400, {"error": 'Envie JSON {"text": "/clima"} ou {"callback": "ok:<id>"}'})
+                        return True
+                    self._send_json(200, dict(action(body), agent=AGENT_NAME))
                     return True
                 if method == "POST" and path == "/api/v1/location":
                     # v13.28: o app do Kronus manda a posição aproximada (se o usuário ligou a opção). Só a última fica.
