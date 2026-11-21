@@ -174,3 +174,14 @@ def test_dedicated_kronus_and_main_instance_in_parallel(tmp_path, fake, monkeypa
     lock = headless.DataDirLock(tmp_path / ".byte-agents" / "kronus")
     lock.acquire()                                                                         # desligado: a trava foi solta
     lock.release()
+
+
+def test_matrix_does_not_switch_to_agents_running_apart(tmp_path, fake, monkeypatch):
+    """v13.32 (R0.3): com o Bit no próprio processo, a Matrix não troca para ele (seria a mesma pasta de dados)."""
+    rt = start(tmp_path, fake, monkeypatch, env={"BYTE_AGENTES_SEPARADOS": "kronus,bit"})
+    try:
+        with pytest.raises(ValueError, match="O Bit trabalha à parte"):
+            rt.switch_agent("bit")
+        assert rt.switch_agent("byte")["agent"]["id"] == "byte"           # quem não roda à parte continua trocando
+    finally:
+        rt.stop()

@@ -226,3 +226,32 @@ az containerapp update -g byte-rg -n byte --set-env-vars BYTE_GITHUB_REPO=Dragon
 - Repositório privado: crie um token de acesso fino só de leitura (Contents e Actions) e grave como segredo
   `BYTE_GITHUB_TOKEN`.
 - Para voltar ao modo manual (zip), remova a variável: `az containerapp update -g byte-rg -n byte --remove-env-vars BYTE_GITHUB_REPO`.
+
+## Cada agente no seu processo (v13.32)
+Por padrão, o contêiner roda a Matrix e o Kronus. Bit e Byte só funcionavam quando estavam "ativos" no processo da
+Matrix: trocar de agente parava o resumo do Bit, os avisos de e-mail dele e assim por diante. Agora cada agente pode
+rodar **à parte, o tempo todo**, com bot do Telegram e painel próprios:
+
+1. No Telegram, abra o **@BotFather**, mande `/newbot` e copie o token do bot novo (ex.: "Bit").
+2. No Cloud Shell, baixe o script:
+   ```
+   curl -sLO https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/scripts/agentes-separados.sh
+   ```
+3. Rode o script para o Bit:
+   ```
+   bash agentes-separados.sh bit
+   ```
+4. Abra o bot novo no Telegram e mande `/start`.
+
+O script guarda o token nos Segredos, põe o Bit em `BYTE_AGENTES` e aumenta o contêiner para **0,5 vCPU e 1 GiB**
+(fica em torno de US$ 30 a 35 por mês fora o crédito; confira na calculadora da Azure). Os dados do Bit continuam os
+mesmos: memórias, tarefas e contas de e-mail.
+
+- A Matrix não troca mais para quem roda à parte: `/agente bit` responde que ele tem o bot próprio.
+- **Byte:** `bash agentes-separados.sh byte` só quando a live estiver pronta (Fase 4). Ela usa um bot próprio
+  (`VTUBER_TELEGRAM_*`), porque o manifesto dela aponta para o bot da Matrix, e dois processos no mesmo bot se
+  derrubam.
+- Os links dos painéis de cada agente aparecem nos logs:
+  ```
+  az containerapp logs show -g byte-rg -n byte --tail 80 | grep Painel
+  ```

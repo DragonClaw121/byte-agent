@@ -160,18 +160,44 @@ def public_port(env: Dict[str, str]) -> int:
     return int(env.get("BYTE_KRONUS_PORT", "8772") or 8772)
 
 
+# v13.32 (R0.3): cada agente no seu processo, para todos trabalharem ao mesmo tempo (antes Bit e Byte só funcionavam
+# quando "ativos" no processo da Matrix). BYTE_AGENTES escolhe quem roda à parte: padrão "kronus"; ex.: "kronus,bit".
+SEPARATE_AGENTS = {"kronus": KRONUS_INTERNAL_PORT, "bit": 8774, "byte": 8775}
+
+
+def separate_agents(env: Dict[str, str]) -> List[str]:
+    raw = env.get("BYTE_AGENTES", "kronus")
+    wanted = [a.strip().lower() for a in raw.replace(";", ",").split(",") if a.strip()]
+    if env.get("BYTE_KRONUS", "1") == "0":
+        wanted = [a for a in wanted if a != "kronus"]
+    return [a for a in SEPARATE_AGENTS if a in wanted]
+
+
 def commands(env: Dict[str, str]) -> Dict[str, List[str]]:
     model = env.get("BYTE_MODEL", "").strip()
     if not model:
         raise SystemExit("[NUVEM] Defina BYTE_MODEL (ex.: azure:byte-mini) nas variáveis do contêiner.")
     extra = [] if env.get("BYTE_AUTONOMIA", "0") == "1" else ["--no-autonomy"]
     procs = {"principal": [sys.executable, "-m", "byte_agent", "--model", model, "--host", "127.0.0.1", "--port", "8765"] + extra}
-    if env.get("BYTE_KRONUS", "1") != "0":
-        # com o painel remoto, o Kronus fica só local e o roteador ocupa a porta pública
-        host, port = ("127.0.0.1", KRONUS_INTERNAL_PORT) if remote_panel(env) else ("0.0.0.0", public_port(env))
-        procs["kronus"] = [sys.executable, "-m", "byte_agent", "--agent", "kronus", "--model", model,
-                           "--host", host, "--port", str(port)] + extra
+    for agent in separate_agents(env):
+        if agent == "kronus" and not remote_panel(env):
+            host, port = "0.0.0.0", public_port(env)     # sem o roteador, o Kronus atende direto na porta pública
+        else:
+            host, port = "127.0.0.1", SEPARATE_AGENTS[agent]
+        procs[agent] = [sys.executable, "-m", "byte_agent", "--agent", agent, "--model", model,
+                        "--host", host, "--port", str(port)] + extra
     return procs
+
+
+def child_envs(env: Dict[str, str], procs: Dict[str, List[str]]) -> Dict[str, Dict[str, str]]:
+    """Variáveis próprias de cada processo. A Matrix sabe quem roda à parte (não troca para eles). A Byte separada usa
+    um bot do Telegram PRÓPRIO (VTUBER_TELEGRAM_*): o manifesto dela aponta para o bot da Matrix, e dois processos lendo
+    o mesmo bot derrubam um ao outro."""
+    out: Dict[str, Dict[str, str]] = {"principal": {"BYTE_AGENTES_SEPARADOS": ",".join(a for a in procs if a != "principal")}}
+    if "byte" in procs:
+        out["byte"] = {"BYTE_TELEGRAM_TOKEN": env.get("VTUBER_TELEGRAM_TOKEN", ""),
+                       "BYTE_TELEGRAM_CHAT_IDS": env.get("VTUBER_TELEGRAM_CHAT_IDS", "")}
+    return out
 
 
 def panel_tokens(store: Path) -> Dict[str, str]:
@@ -182,9 +208,9 @@ def panel_tokens(store: Path) -> Dict[str, str]:
         data = {k: v for k, v in json.loads(path.read_text()).items() if isinstance(v, str) and len(v) >= 24}
     except (OSError, ValueError, AttributeError):
         pass
-    if not {"principal", "kronus"} <= data.keys():
-        data = {"principal": data.get("principal") or secrets.token_urlsafe(32),
-                "kronus": data.get("kronus") or secrets.token_urlsafe(32)}
+    wanted = {"principal", *SEPARATE_AGENTS}
+    if not wanted <= data.keys():
+        data = {name: data.get(name) or secrets.token_urlsafe(32) for name in sorted(wanted)}
         try:
             store.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(data))
@@ -455,6 +481,8 @@ class Supervisor:
             signal.signal(signal.SIGTERM, _on_signal)
             signal.signal(signal.SIGINT, _on_signal)
         procs = commands(self.env)
+        for name, extra in child_envs(self.env, procs).items():
+            self.child_env.setdefault(name, {}).update(extra)
         if remote_panel(self.env):
             self.open_panels(procs)
         for name, cmd in procs.items():
@@ -506,10 +534,11 @@ class Supervisor:
     def open_panels(self, procs: Dict[str, List[str]]) -> None:
         tokens = panel_tokens(self.store)
         routes = {tokens["principal"]: 8765}
-        self.child_env["principal"] = {"BYTE_UI_TOKEN": tokens["principal"]}
-        if "kronus" in procs:
-            routes[tokens["kronus"]] = KRONUS_INTERNAL_PORT
-            self.child_env["kronus"] = {"BYTE_UI_TOKEN": tokens["kronus"]}
+        self.child_env.setdefault("principal", {})["BYTE_UI_TOKEN"] = tokens["principal"]
+        for agent in procs:
+            if agent in SEPARATE_AGENTS:
+                routes[tokens[agent]] = SEPARATE_AGENTS[agent]
+                self.child_env.setdefault(agent, {})["BYTE_UI_TOKEN"] = tokens[agent]
         try:
             self.router = PanelRouter("0.0.0.0", public_port(self.env), routes, KRONUS_INTERNAL_PORT)
         except OSError as err:
@@ -520,6 +549,9 @@ class Supervisor:
         log(f"Painel remoto ligado. Painel principal: {base}/ui?token={tokens['principal']}")
         if "kronus" in procs:
             log(f"Painel do Kronus: {base}/ui?token={tokens['kronus']}  |  página de voz: {base}/voz")
+        for agent in ("bit", "byte"):
+            if agent in procs:
+                log(f"Painel {'do Bit' if agent == 'bit' else 'da Byte'}: {base}/ui?token={tokens[agent]}")
 
     def sync(self) -> None:
         try:

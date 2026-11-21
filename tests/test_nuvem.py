@@ -336,3 +336,24 @@ def test_new_version_is_announced_once(tmp_path, monkeypatch):
     assert headless.announce_version(svc) is True
     msg = db.pop_undelivered_proactive_messages("telegram")[-1]["message"]
     assert msg == f"✅ Atualizei: v13.0 → v{engine.BYTE_VERSION}."
+
+
+def test_each_agent_in_its_own_process():
+    """v13.32 (R0.3): BYTE_AGENTES escolhe quem roda à parte; a Byte separada ganha bot do Telegram próprio."""
+    env = {"BYTE_MODEL": "azure:byte-mini", "BYTE_PAINEL_REMOTO": "1", "BYTE_AGENTES": "kronus, bit,byte",
+           "VTUBER_TELEGRAM_TOKEN": "123:abc", "VTUBER_TELEGRAM_CHAT_IDS": "42"}
+    procs = nuvem.commands(env)
+    assert list(procs) == ["principal", "kronus", "bit", "byte"]
+    assert procs["bit"][procs["bit"].index("--agent") + 1] == "bit" and "8774" in procs["bit"] and "127.0.0.1" in procs["bit"]
+    envs = nuvem.child_envs(env, procs)
+    assert envs["principal"]["BYTE_AGENTES_SEPARADOS"] == "kronus,bit,byte"
+    assert envs["byte"] == {"BYTE_TELEGRAM_TOKEN": "123:abc", "BYTE_TELEGRAM_CHAT_IDS": "42"}
+    assert list(nuvem.commands({"BYTE_MODEL": "x"})) == ["principal", "kronus"]             # padrão de antes
+    assert "bit" not in nuvem.child_envs({}, nuvem.commands({"BYTE_MODEL": "x"}))
+
+
+def test_panel_tokens_cover_every_agent(tmp_path):
+    (tmp_path / "painel-tokens.json").write_text('{"principal": "' + "p" * 30 + '", "kronus": "' + "k" * 30 + '"}')
+    tokens = nuvem.panel_tokens(tmp_path)
+    assert tokens["principal"] == "p" * 30 and tokens["kronus"] == "k" * 30                 # os antigos continuam valendo
+    assert len(tokens["bit"]) >= 24 and len(tokens["byte"]) >= 24 and nuvem.panel_tokens(tmp_path) == tokens
