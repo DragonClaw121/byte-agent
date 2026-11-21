@@ -75,6 +75,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         engine.install_web_access(service, data_dir)
     if profile:
         engine.install_integrations_and_push(service)
+        from . import relogio
+        relogio.install(service)                            # v13.34: relógio central, /saude e avisos de falha
         from . import objetivos
         objetivos.install(service)                          # v13.9: objetivos de longo prazo, em etapas
         from . import gatilhos
@@ -102,28 +104,15 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
 
 def _install_memory_reindex(service: Any, embeddings: Any) -> None:
     """Reindexa aos poucos (64 por vez, a cada 2 min) as memórias antigas com os embeddings da Azure."""
-    import threading
-    import time as _time
-    state = {"last": 0.0, "left": None, "thread": None}
+    state: Dict[str, Any] = {"left": None}
 
     def work() -> None:
-        try:
-            res = service.db.reindex_memories()
-            state["left"] = res["left"]
-        except Exception as err:
-            state["left"] = f"erro: {type(err).__name__}"
+        res = service.db.reindex_memories()
+        state["left"] = res["left"]
+        if not res["done"] and res["left"]:
+            raise RuntimeError(embeddings.last_error or "embeddings indisponíveis")
 
-    def job() -> None:
-        if state["left"] == 0 or _time.time() - state["last"] < 120.0:
-            return
-        th = state["thread"]
-        if th is not None and th.is_alive():
-            return
-        state["last"] = _time.time()
-        state["thread"] = threading.Thread(target=work, daemon=True, name="ByteMemoriaReindex")
-        state["thread"].start()
-
-    service.proactive_engine.background_jobs.append(job)
+    service.scheduler.add("memoria", 120, work, when=lambda: state["left"] != 0, label="Reindexação da memória")
     service.embeddings = embeddings
     service.status_providers["memoria"] = lambda: {"motor": service.db.vector_engine.engine_id(),
                                                    "reindexar": state["left"], "erro": embeddings.last_error}

@@ -272,3 +272,13 @@ bash memoria-azure.sh
 O script cria a implantação `byte-embed` no seu recurso da Azure OpenAI e grava `BYTE_AZURE_EMBED`. As memórias antigas
 são reindexadas sozinhas, 64 a cada 2 minutos. Se a Azure ficar fora do ar, os agentes voltam ao modo por palavras
 até ela voltar.
+
+## Saúde e avisos de falha (v13.34)
+`/saude` (no Telegram de cada agente ou no app, em Comandos → 🩺 Saúde) mostra:
+- se o modelo está no ar e qual memória está em uso;
+- os tokens gastos hoje e as aprovações esperando você;
+- cada tarefa de fundo (objetivos, gatilhos, resumos, rotina, memória), com a última rodada e o último erro.
+
+Se uma tarefa falhar **3 vezes seguidas**, o agente avisa no Telegram e no app ("⚠️ Gatilhos está falhando: ..."). Ele
+avisa de novo quando ela volta a funcionar. A agenda iCal e o clima ficam guardados por alguns minutos e são
+compartilhados entre os módulos, em vez de serem baixados várias vezes por hora.

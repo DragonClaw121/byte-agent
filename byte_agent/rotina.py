@@ -80,7 +80,7 @@ def fmt_hour(h: float) -> str:
 
 class Routine:
     def __init__(self, service: Any, clock: Callable[[], float] = time.time, getter: Optional[Callable[[str], Any]] = None,
-                 ics_fetcher: Callable[[str], str] = gatilhos.fetch_ics):
+                 ics_fetcher: Callable[[str], str] = gatilhos.fetch_ics_cached):
         self.service, self.db, self.clock, self.ics_fetcher = service, service.db, clock, ics_fetcher
         self.getter = getter
         self.notify: Callable[[str], None] = lambda text: self.db.enqueue_proactive_message("rotina", text, brain_used="ROTINA")
@@ -422,6 +422,7 @@ class Routine:
     def tick(self) -> List[str]:
         if not self.enabled() or not self._busy.acquire(blocking=False):
             return []
+        self.last_error = None                          # /saude mostra só o erro desta rodada
         sent: List[str] = []
         try:
             now_epoch = self.clock()
@@ -544,7 +545,11 @@ def install(service: Any) -> Routine:
         state["thread"] = threading.Thread(target=rot.tick, daemon=True, name="ByteRotina")
         state["thread"].start()
 
-    service.proactive_engine.background_jobs.append(tick_in_background)
+    sched = getattr(service, "scheduler", None)
+    if sched is not None:                               # v13.34: relógio central
+        sched.add("rotina", 240, rot.tick, error_of=lambda: rot.last_error, label="Rotina")
+    else:
+        service.proactive_engine.background_jobs.append(tick_in_background)
     service.briefing_extras = list(getattr(service, "briefing_extras", [])) + [rot.briefing_lines]
 
     def command(payload: Dict[str, Any]) -> Dict[str, Any]:

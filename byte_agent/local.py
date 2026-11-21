@@ -30,6 +30,15 @@ DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
 
 
 def get_json(url: str, timeout: float = 10.0) -> Any:
+    """v13.34: previsão guardada 10 min e endereço do mapa 1 dia (clima, resumo e rotina pedem a mesma coisa)."""
+    ttl = 600.0 if "open-meteo.com" in url else (86400.0 if "nominatim" in url else 0.0)
+    if ttl:
+        from .relogio import cached
+        return cached("json:" + url, ttl, lambda: _get_json_now(url, timeout))
+    return _get_json_now(url, timeout)
+
+
+def _get_json_now(url: str, timeout: float = 10.0) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "byte-agent/1.0 (assistente pessoal)", "Accept-Language": "pt-BR"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read(512 * 1024).decode("utf-8", errors="replace"))

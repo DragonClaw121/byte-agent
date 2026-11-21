@@ -42,6 +42,7 @@ HELP_TEXT = (
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
     "/rotina — o que o agente aprendeu (casa, saídas, horários) | /rotina aceitar <n> | /rotina off|on | /rotina esquecer\n"
     "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
+    "/saude — está tudo funcionando? (tarefas de fundo, erros, memória, tokens do dia)\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
     "/semana — fechamento da semana agora | /semana sexta 18:00 | /semana on|off\n"
@@ -776,6 +777,12 @@ class TelegramBridge:
             words = arg.lower().split()
             conta = next((w for w in words if w != "todas"), None)
             self._work(chat_id, "work_triage", {"unread_only": "todas" not in words, "conta": conta}, "Lendo as caixas de entrada...")
+        elif cmd == "/saude":
+            try:
+                text = self._dispatch("health").get("text")
+            except RuntimeError as err:
+                text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
+            self.send(chat_id, text or "Saúde indisponível.")
         elif cmd == "/clima":
             try:
                 text = self._dispatch("weather_now", {"cidade": arg, "dias": 3}).get("text")

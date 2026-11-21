@@ -372,7 +372,11 @@ def install(service: Any, tokens_today: Optional[Callable[[], int]] = None) -> G
         except Exception as err:                          # o relógio nunca pode cair por causa de um objetivo
             runner.last_error = f"{type(err).__name__}: {str(err)[:160]}"
 
-    service.proactive_engine.background_jobs.append(tick_in_background)
+    sched = getattr(service, "scheduler", None)
+    if sched is not None:                               # v13.34: relógio central (intervalo, falhas, /saude)
+        sched.add("objetivos", 10, runner.tick, when=lambda: service.llm.llm_ready(), label="Objetivos")
+    else:
+        service.proactive_engine.background_jobs.append(tick_in_background)
     service.proactive_engine.budget_ok = runner.budget_ok
 
     def tool_create(args: Dict[str, Any], turn: Dict[str, Any]) -> str:

@@ -157,8 +157,10 @@ def _get_json(url: str, timeout: float = 10.0) -> Any:
         return json.loads(resp.read(512 * 1024).decode("utf-8", errors="replace"))
 
 
-def fetch_weather(city: str, db: Any, getter: Callable[[str], Any] = _get_json) -> Optional[Dict[str, Any]]:
+def fetch_weather(city: str, db: Any, getter: Optional[Callable[[str], Any]] = None) -> Optional[Dict[str, Any]]:
     """Previsão de hoje pela Open-Meteo (gratuita, sem chave). Só o NOME da cidade sai daqui."""
+    if getter is None:
+        from .local import get_json as getter                # v13.34: com o cache compartilhado
     geo = db.get_setting("resumo_cidade_geo") or None
     if not geo or geo.get("query") != city:
         res = getter("https://geocoding-api.open-meteo.com/v1/search?" +
@@ -186,7 +188,7 @@ def fetch_weather(city: str, db: Any, getter: Callable[[str], Any] = _get_json) 
 # ---------------------------------------------------------------- montagem
 class Briefings:
     def __init__(self, service: Any, clock: Callable[[], float] = time.time,
-                 ics_fetcher: Callable[[str], str] = gatilhos.fetch_ics, weather: Callable[..., Any] = fetch_weather,
+                 ics_fetcher: Callable[[str], str] = gatilhos.fetch_ics_cached, weather: Callable[..., Any] = fetch_weather,
                  writer: Optional[Callable[[str, str], str]] = None):
         self.service, self.db, self.clock = service, service.db, clock
         self.ics_fetcher, self.weather = ics_fetcher, weather
@@ -656,7 +658,11 @@ def install(service: Any) -> Briefings:
         th = state["thread"] = threading.Thread(target=brief.tick, daemon=True, name="ByteResumos")
         th.start()
 
-    service.proactive_engine.background_jobs.append(tick_in_background)
+    sched = getattr(service, "scheduler", None)
+    if sched is not None:                               # v13.34: relógio central
+        sched.add("resumos", 60, brief.tick, when=lambda: bool(brief.due()), label="Resumos da manhã e da semana")
+    else:
+        service.proactive_engine.background_jobs.append(tick_in_background)
 
     def tool(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
         weekly = str(args.get("periodo") or "dia").lower().startswith("sem")

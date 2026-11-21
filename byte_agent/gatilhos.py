@@ -194,6 +194,13 @@ def occurrences(ev: Dict[str, Any], window_start: datetime, window_end: datetime
     return out
 
 
+def fetch_ics_cached(url: str) -> str:
+    """v13.34: a mesma agenda é lida por gatilhos, resumos e rotina: baixa no máximo a cada 4 min."""
+    import hashlib
+    from .relogio import cached
+    return cached("ics:" + hashlib.sha256(url.encode()).hexdigest(), 240.0, lambda: fetch_ics(url))
+
+
 def fetch_ics(url: str, timeout: float = 20.0) -> str:
     if not re.match(r"^(https://|webcal://)", url.strip(), re.I):
         raise ValueError("BYTE_AGENDA_ICS precisa ser um endereço https:// (o endereço secreto iCal da agenda).")
@@ -213,11 +220,11 @@ class TriggerEngine:
     INTERVALS = {"agenda": 600.0, "email": 900.0, "tarefa_parada": 6 * 3600.0, "objetivo_travado": 6 * 3600.0}
 
     def __init__(self, service: Any, notify: Callable[[str], None], read_secret: Optional[Callable[[Tuple[str, ...]], str]] = None,
-                 clock: Callable[[], float] = time.time, ics_fetcher: Callable[[str], str] = fetch_ics,
+                 clock: Callable[[], float] = time.time, ics_fetcher: Optional[Callable[[str], str]] = None,
                  mail_fetcher: Optional[Callable[[], List[Dict[str, str]]]] = None):
         self.service, self.db, self.notify, self.clock = service, service.db, notify, clock
         self.read_secret = read_secret or (lambda names: next((os.environ.get(n, "") for n in names if os.environ.get(n)), ""))
-        self.ics_fetcher = ics_fetcher
+        self.ics_fetcher = ics_fetcher or fetch_ics_cached
         self.mail_fetcher = mail_fetcher or self._unseen_headers
         self.last_run: Dict[str, float] = {}
         self.last_error: Dict[str, Optional[str]] = {}
@@ -437,7 +444,12 @@ def install(service: Any) -> TriggerEngine:
         th = state["thread"] = threading.Thread(target=trig.tick, daemon=True, name="ByteGatilhos")
         th.start()
 
-    service.proactive_engine.background_jobs.append(tick_in_background)
+    sched = getattr(service, "scheduler", None)
+    if sched is not None:                               # v13.34: relógio central; erro de um vigia aparece em /saude
+        sched.add("gatilhos", 30, trig.tick, label="Gatilhos (agenda, e-mail, tarefas)",
+                  error_of=lambda: "; ".join(f"{k}: {v}" for k, v in trig.last_error.items() if v) or None)
+    else:
+        service.proactive_engine.background_jobs.append(tick_in_background)
     service.extra_actions.update({
         "trigger_list": lambda payload: dict(trig.status(), text=format_status(trig.status())),
         "trigger_toggle": lambda payload: {"enabled": trig.set_enabled(str(payload.get("name") or ""), bool(payload.get("on")))},
