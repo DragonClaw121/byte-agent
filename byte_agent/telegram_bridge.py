@@ -508,6 +508,8 @@ class TelegramBridge:
         except Exception:
             pass
         shown = self._pending_cards.pop(action_id, None)
+        if shown is None and verb == "ok" and hasattr(self.service, "pending_shown"):
+            shown = self.service.pending_shown(action_id)       # v13.31: a nuvem reiniciou: o cartão vem do banco
         if verb == "ok":
             if shown is None:
                 self.send(chat_id, "Esta aprovação expirou ou já foi usada.")

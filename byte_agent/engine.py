@@ -68,13 +68,13 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.30"
+BYTE_VERSION = "13.31"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 
 def sanitize_url(raw_url: str) -> str:
@@ -6131,6 +6131,77 @@ class MetacognitiveSelfEvolver:
 TOOL_CALL_REGEX = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
 
+class PendingActionStore:
+    """v13.31 (R0.1): ações aguardando aprovação guardadas no BANCO (antes: só na memória, por 15 min). Sobrevivem ao
+    reinício da nuvem e valem por 24 h (PENDING_TTL_S). Uso único: aprovar ou descartar apaga a ação.
+    Interface de dicionário (get/pop/values/items/clear) para o código antigo continuar igual."""
+
+    SCHEMA = ("CREATE TABLE IF NOT EXISTS pending_actions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+              "data_json TEXT NOT NULL, created REAL NOT NULL)")
+
+    def __init__(self, db: UnifiedDatabase, ttl: Callable[[], float]):
+        self.db, self.ttl = db, ttl
+        with db.connection() as conn:
+            conn.execute(self.SCHEMA)
+
+    def _purge(self, conn: Any) -> None:
+        conn.execute("DELETE FROM pending_actions WHERE created < ?", (time.time() - float(self.ttl()),))
+
+    def __setitem__(self, action_id: str, item: Dict[str, Any]) -> None:
+        with self.db.connection() as conn:
+            self._purge(conn)
+            conn.execute("INSERT OR REPLACE INTO pending_actions (id, kind, data_json, created) VALUES (?, ?, ?, ?)",
+                         (str(action_id), item["kind"], json.dumps(item["data"], ensure_ascii=False, default=str),
+                          float(item.get("created") or time.time())))
+
+    def get(self, action_id: str, default: Any = None) -> Any:
+        with self.db.connection() as conn:
+            row = conn.execute("SELECT kind, data_json, created FROM pending_actions WHERE id = ?", (str(action_id),)).fetchone()
+        if not row:
+            return default
+        return {"kind": row["kind"], "data": json.loads(row["data_json"]), "created": float(row["created"])}
+
+    def __getitem__(self, action_id: str) -> Dict[str, Any]:
+        item = self.get(action_id)
+        if item is None:
+            raise KeyError(action_id)
+        return item
+
+    def __iter__(self) -> Any:
+        return iter([k for k, _ in self.items()])
+
+    def keys(self) -> List[str]:
+        return [k for k, _ in self.items()]
+
+    def pop(self, action_id: str, default: Any = None) -> Any:
+        with self.db.connection() as conn:
+            row = conn.execute("SELECT kind, data_json, created FROM pending_actions WHERE id = ?", (str(action_id),)).fetchone()
+            if row:
+                conn.execute("DELETE FROM pending_actions WHERE id = ?", (str(action_id),))
+        if not row:
+            return default
+        return {"kind": row["kind"], "data": json.loads(row["data_json"]), "created": float(row["created"])}
+
+    def items(self) -> List[Tuple[str, Dict[str, Any]]]:
+        with self.db.connection() as conn:
+            self._purge(conn)
+            rows = conn.execute("SELECT id, kind, data_json, created FROM pending_actions ORDER BY created").fetchall()
+        return [(r["id"], {"kind": r["kind"], "data": json.loads(r["data_json"]), "created": float(r["created"])}) for r in rows]
+
+    def values(self) -> List[Dict[str, Any]]:
+        return [v for _, v in self.items()]
+
+    def __len__(self) -> int:
+        return len(self.items())
+
+    def __contains__(self, action_id: object) -> bool:
+        return self.get(str(action_id)) is not None
+
+    def clear(self) -> None:
+        with self.db.connection() as conn:
+            conn.execute("DELETE FROM pending_actions")
+
+
 class ByteEcosystemService:
     """
     NOVO NA v9.0:
@@ -6152,9 +6223,9 @@ class ByteEcosystemService:
         self.context_reader = HybridContextReader(self.db.vector_engine)
         self.evolver = MetacognitiveSelfEvolver(self.db, self.llm, self.terminal)
         # Ações com efeito externo propostas pela LLM (hoje: envio de e-mail) aguardam aprovação aqui.
-        self.pending_actions: Dict[str, Dict[str, Any]] = {}
         self._pending_lock = threading.Lock()
-        self.PENDING_TTL_S = 900.0
+        self.PENDING_TTL_S = 24 * 3600.0                    # v13.31: 24 h (antes 15 min: cartões da noite venciam)
+        self.pending_actions: Any = PendingActionStore(db, lambda: self.PENDING_TTL_S)
         # v11.0 — pontos de extensão (usados pelo módulo de trabalho, byte_agent/work.py):
         self.extra_tools: Dict[str, Dict[str, Any]] = {}          # nome -> {auto, description, parameters, handler, intent, mission}
         self.extra_actions: Dict[str, Any] = {}                    # ação do painel/Telegram -> função(payload) -> dict
@@ -6216,15 +6287,27 @@ class ByteEcosystemService:
             pass
 
     # ------------------------------------------------------------------
-    # v10.0 — ações pendentes de aprovação (uso único, expiram em 15 min)
+    # v10.0 — ações pendentes de aprovação (uso único). v13.31: no banco, valem 24 h e sobrevivem ao reinício
     # ------------------------------------------------------------------
     def _register_pending_action(self, kind: str, data: Dict[str, Any]) -> str:
         action_id = secrets.token_urlsafe(9)
-        now = time.time()
         with self._pending_lock:
-            self.pending_actions = {k: v for k, v in self.pending_actions.items() if now - v["created"] < self.PENDING_TTL_S}
-            self.pending_actions[action_id] = {"kind": kind, "data": data, "created": now}
+            self.pending_actions[action_id] = {"kind": kind, "data": data, "created": time.time()}
         return action_id
+
+    def pending_shown(self, action_id: str) -> Optional[Dict[str, str]]:
+        """O conteúdo do cartão como ele foi mostrado (refeito a partir do banco). None se não existe ou venceu."""
+        item = self.pending_actions.get(str(action_id))
+        if item is None or (time.time() - item["created"]) >= self.PENDING_TTL_S:
+            return None
+        data = item["data"]
+        if item["kind"] == "email_send":
+            shown = {"to": data["to_address"], "subject": data["subject"], "body": data["body"]}
+            if data.get("from_address"):
+                shown["from"] = data["from_address"]
+            return shown
+        preview = data.get("preview") or {}
+        return {"title": str(preview.get("title", "")), "details": str(preview.get("details", ""))}
 
     @staticmethod
     def _neutralize_reserved_blocks(llm_text: str) -> str:

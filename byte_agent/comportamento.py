@@ -117,7 +117,7 @@ def _reset(service: Any) -> None:
                 pass
     service.db._vector_cache = None
     service.db._tasks_cache = None
-    service.pending_actions = {}
+    service.pending_actions.clear()
     service.db.set_setting("permissoes", {})             # cada caso começa com as permissões padrão
 
 

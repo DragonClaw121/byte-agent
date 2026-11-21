@@ -384,7 +384,6 @@ class WorkAssistant:
         self.outputs.mkdir(parents=True, exist_ok=True)
         if not any(self.inputs.iterdir()):
             write_sample_dataset(self.inputs / "vendas_exemplo.csv")      # base fictícia para a primeira demonstração
-        service.PENDING_TTL_S = 12 * 3600.0          # rascunhos da triagem da manhã podem ser aprovados ao longo do dia
         service.work = self
         service.file_provider = self.resolve_output
         service.status_providers["work"] = self.status

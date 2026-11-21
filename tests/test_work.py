@@ -244,7 +244,7 @@ def test_triage_drafts_replies_but_never_sends(env):
     assert draft["subject"] == "Re: Proposta comercial" and draft["body"].endswith("Atenciosamente,\nGabriel") and draft["in_reply_to"] == "<abc@cliente.com>"
     out = service.dispatch_request("approve_action", {"action_id": good_id, "shown": {"to": draft["to_address"], "subject": draft["subject"], "body": draft["body"]}})
     assert out["approved"] and service.email_client.sent[0]["in_reply_to"] == "<abc@cliente.com>" and len(service.email_client.sent) == 1
-    assert service.PENDING_TTL_S == 12 * 3600
+    assert service.PENDING_TTL_S == 24 * 3600
 
 
 def test_triage_without_llm_lists_messages_without_drafts(env):
