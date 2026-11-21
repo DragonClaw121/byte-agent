@@ -30,7 +30,7 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
     "agenda": ("list_tasks", "add_task", "complete_task"),
     "memoria": ("search_memories", "add_memory"),
     "lembretes": ("schedule_reminder", "list_reminders", "cancel_reminder"),
-    "web": ("web_search", "fetch_url", "deep_research"),
+    "web": ("web_search", "fetch_url", "deep_research", "noticias"),
     "email": ("email_inbox", "email_send", "email_triage", "email_listar", "email_ler", "email_responder", "email_contas"),
     "dados": ("analyze_data", "list_work_files", "create_spreadsheet"),
     "apresentacoes": ("create_presentation",),
@@ -38,7 +38,7 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
     "integracoes": ("asana_my_tasks", "asana_create_task", "notion_search", "notion_read_page", "notion_create_page", "teams_post"),
     "documentos": ("read_document", "create_document", "list_templates"),
 }
-ALWAYS_ON_TOOLS = ("get_datetime",)
+ALWAYS_ON_TOOLS = ("get_datetime", "clima", "localizacao")       # v13.28: todo agente sabe o tempo e onde você está
 SKILL_ACTIONS: Dict[str, Tuple[str, ...]] = {          # ações do painel/Telegram que pertencem a cada habilidade
     "web": ("web_search", "web_research", "web_status"),
     "email": ("work_triage", "mail_list", "mail_read", "mail_add", "mail_remove", "mail_test", "mail_login", "mail_server"),

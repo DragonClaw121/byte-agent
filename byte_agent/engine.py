@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.27"
+BYTE_VERSION = "13.28"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -10044,6 +10044,18 @@ class ByteOmniServer:
                                           "audio_b64": res.get("audio_b64"), "audio_mime": res.get("audio_mime"),
                                           "pending_approvals": pending,
                                           "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
+                    return True
+                if method == "POST" and path == "/api/v1/location":
+                    # v13.28: o app do Kronus manda a posição aproximada (se o usuário ligou a opção). Só a última fica.
+                    body = self._read_json()
+                    action = service.extra_actions.get("location_update")
+                    if body is None or action is None:
+                        self._send_json(400, {"error": 'Envie JSON {"lat": -22.75, "lon": -47.41, "accuracy": 800}'})
+                        return True
+                    try:
+                        self._send_json(200, action(body))
+                    except (TypeError, ValueError) as err:
+                        self._send_json(400, {"error": str(err)[:160]})
                     return True
                 if method == "GET" and path == "/api/v1/notifications":
                     # v13.22: ?canal=app é a fila própria do app Android (não disputa avisos com a página /voz)

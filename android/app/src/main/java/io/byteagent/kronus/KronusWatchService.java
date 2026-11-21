@@ -85,14 +85,16 @@ public class KronusWatchService extends Service {
         if (Build.VERSION.SDK_INT >= 34) {
             try {
                 startForeground(ID_WATCH, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL);
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                        | (Local.allowed(this) ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0));
                 return;
             } catch (Exception ignored) {
             }
             startForeground(ID_WATCH, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
         } else if (Build.VERSION.SDK_INT >= 30) {
             try {
-                startForeground(ID_WATCH, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL);
+                startForeground(ID_WATCH, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE | ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+                        | (Local.allowed(this) ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0));
             } catch (Exception e) {
                 startForeground(ID_WATCH, n);
             }
@@ -124,6 +126,7 @@ public class KronusWatchService extends Service {
                     // sem rede agora: tenta na próxima volta
                 }
             }
+            Local.sendIfDue(this, false);                          // v1.13: a cada 15 min, se a opção estiver ligada
             for (int s = 0; s < 30 && on; s++) Voz.sleep(1000);
         }
     }

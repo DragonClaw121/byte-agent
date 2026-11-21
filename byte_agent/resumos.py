@@ -297,9 +297,17 @@ class Briefings:
         facts: List[str] = [f"Hoje é {DIAS[now.weekday()]}, {now.day} de {MESES[now.month - 1]}."]
         third_party = False
 
-        if cfg["cidade"]:
+        local = getattr(self.service, "local", None)
+        here = local.current() if local is not None else None
+        if cfg["cidade"] or here:
             try:
-                w = self.weather(cfg["cidade"], self.db)
+                if here:                                          # v13.28: onde você ESTÁ (app) vale mais que a cidade fixa
+                    lw = local.weather("", 1)
+                    d0 = (lw.get("dias") or [{}])[0]
+                    w = {"cidade": lw["lugar"], "min": d0.get("min"), "max": d0.get("max"), "chuva": d0.get("chuva"),
+                         "ceu": d0.get("ceu", "")} if d0 else None
+                else:
+                    w = self.weather(cfg["cidade"], self.db)
                 if w:
                     rain = f", chuva {w['chuva']}%" if w.get("chuva") is not None else ""
                     sections.append(f"🌤️ {w['cidade']}: {w['min']}–{w['max']} °C, {w['ceu']}{rain}")
@@ -307,11 +315,11 @@ class Briefings:
                                   + (f", com {w['chuva']}% de chance de chuva." if w.get("chuva") is not None else "."))
                     facts.append(f"Clima: {w['min']} a {w['max']} °C, {w['ceu']}{rain}.")
                 else:
-                    sections.append(f"🌤️ A previsão de {cfg['cidade']} veio vazia agora.")
+                    sections.append(f"🌤️ A previsão de {cfg['cidade'] or 'onde você está'} veio vazia agora.")
             except Exception as err:
                 self.last_error = f"clima: {type(err).__name__}: {str(err)[:120]}"
                 why = "cidade não encontrada (confira o nome)" if isinstance(err, ValueError) else "o serviço não respondeu"
-                sections.append(f"🌤️ Não consegui ver o clima de {cfg['cidade']}: {why}.")
+                sections.append(f"🌤️ Não consegui ver o clima de {cfg['cidade'] or 'onde você está'}: {why}.")
 
         try:
             events = self._calendar(day0, day1)

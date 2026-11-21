@@ -63,6 +63,7 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final int RATE = 16000;
     private static final int REQ_PERMS = 7;
+    private static final int REQ_LOCATION = 8;
     static final String ACTION_ANSWER = "io.byteagent.kronus.ATENDER";
     private static final Pattern LINK = Pattern.compile("(https://[A-Za-z0-9.\\-]+(?::\\d+)?)/voz#parear=(\\d{6})");
     private static final Pattern CODE = Pattern.compile("^\\s*(\\d{6})\\s*$");
@@ -140,6 +141,19 @@ public class MainActivity extends Activity {
         }
         checkStatus();
         maybeAutoListen();
+        if (paired() && Local.allowed(this)) new Thread(() -> Local.sendIfDue(this, false), "kronus-local").start();
+    }
+
+    /** v1.13: manda a posição agora e mostra onde o Kronus acha que você está. */
+    private void shareLocationNow() {
+        say("📍 Localizando...");
+        new Thread(() -> {
+            String where = Local.sendIfDue(this, true);
+            ui.post(() -> say(where.isEmpty() ? "📍 Localização ligada: o Kronus vai usar onde você está." : where));
+            if (KronusWatchService.isRunning()) {           // o serviço passa a poder ler a posição em segundo plano
+                try { KronusWatchService.start(this); } catch (Exception ignored) { }
+            }
+        }, "kronus-local").start();
     }
 
     /** Testa de verdade: o Kronus responde? o acesso ainda vale? o relógio está disponível? */
@@ -365,6 +379,22 @@ public class MainActivity extends Activity {
         root.addView(calls);
         root.addView(callOpts);
 
+        CheckBox where = new CheckBox(this);
+        where.setText("📍 Compartilhar minha localização aproximada (clima e sugestões de onde você está)");
+        where.setTextColor(ink);
+        where.setChecked(prefs.getBoolean(Local.PREF, false));
+        where.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean(Local.PREF, on).apply();
+            if (!on) {
+                say("Localização desligada: o Kronus usa a cidade do resumo.");
+            } else if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+            } else {
+                shareLocationNow();
+            }
+        });
+        root.addView(where);
+
         Button ringTest = new Button(this);
         ringTest.setText("Testar: Kronus me liga (em 5 s)");
         ringTest.setOnClickListener(v -> {
@@ -518,6 +548,11 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         super.onRequestPermissionsResult(code, perms, results);
+        if (code == REQ_LOCATION) {
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) shareLocationNow();
+            else say("Sem permissão de localização: o Kronus usa a cidade do resumo.");
+            return;
+        }
         if (!hasMic()) say("Sem permissão de microfone: libere em Configurações > Apps > Kronus.");
         else maybeAutoListen();
     }
@@ -1300,7 +1335,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/1.12");
+        con.setRequestProperty("User-Agent", "kronus-android/1.13");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

@@ -74,6 +74,9 @@ BEHAVIORS: List[Behavior] = [
     Behavior("memoria", "ferramentas", "grava uma preferência e a usa numa conversa nova",
              ["Guarde isto: meu café favorito é coado e sem açúcar.", "Como eu gosto do meu café?"],
              lambda r, s: "coado" in _memories(s) and _any(r[-1], ["coado"])),
+    Behavior("clima_real", "ferramentas", "responde o clima com a previsão de verdade, sem pedir confirmação",
+             ["Como está o clima hoje em Santa Bárbara d'Oeste?"],
+             lambda r, s: bool(re.search(r"\d+\s*(°|º|graus)", r[-1]))),
     Behavior("conclui_tarefa", "ferramentas", "marca como concluída a tarefa que o usuário diz que já fez",
              ["Já paguei a conta de luz, pode dar baixa na agenda."],
              lambda r, s: not any("luz" in t["title"].lower() for t in s.db.list_tasks(status="pending"))

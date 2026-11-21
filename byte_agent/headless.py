@@ -79,6 +79,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         caixas.install(service, data_dir)                   # v13.27: várias caixas de e-mail, de qualquer domínio
         from . import resumos
         resumos.install(service)                            # v13.24: resumo da manhã e fechamento da semana
+        from . import local
+        local.install(service)                              # v13.28: clima, localização atual e notícias
         from . import nuvem as _nuvem
         service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
     return service

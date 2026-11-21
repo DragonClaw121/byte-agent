@@ -50,6 +50,15 @@ Ligue **"📞 Kronus pode me ligar para avisar"**. O app fica atento aos avisos 
   escolha **Sem restrições**; senão o sistema fecha o app e as chamadas não chegam. No app do relógio, permita as
   notificações do Kronus para ele vibrar no pulso.
 
+## Localização (v1.13)
+Ligue **"📍 Compartilhar minha localização aproximada"**. O Android pede a permissão de localização aproximada
+(rede/Wi-Fi, cerca de 1 km). Com isso, o clima, o resumo da manhã e as sugestões passam a seguir **onde você está**.
+- A posição é enviada ao abrir o app e, com "Kronus pode me ligar" ligado, a cada 15 minutos.
+- O servidor guarda **só a última posição**, sem histórico. O nome da cidade e do bairro vem do OpenStreetMap, com as
+  coordenadas arredondadas.
+- No Telegram: `/onde` mostra onde o Kronus acha que você está, e `/clima` mostra o tempo de lá.
+- Desligue a opção quando quiser: o Kronus volta a usar a cidade do resumo (`/resumo cidade`).
+
 ## Reconhecimento de voz melhor
 O microfone do relógio numa chamada tem qualidade de telefone. O modelo `whisper-large-v3` (sem "turbo") do Groq é
 mais preciso nesse tipo de áudio e continua gratuito:

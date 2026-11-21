@@ -17,6 +17,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- v1.13: posição APROXIMADA (rede/Wi-Fi) para o clima e as sugestões seguirem você; só com a opção ligada -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <application
         android:label="Kronus"
@@ -61,7 +64,7 @@
         <service
             android:name=".KronusWatchService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|microphone|phoneCall">
+            android:foregroundServiceType="specialUse|microphone|phoneCall|location">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Assistente pessoal: recebe lembretes do servidor do usuário e os entrega como chamada no relógio." />
