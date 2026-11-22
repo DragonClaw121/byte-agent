@@ -215,10 +215,84 @@ def format_health(h: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- a família inteira (v13.35, R1)
+FAMILY_STALE_S = 300
+
+
+def family_dir() -> Optional[Any]:
+    """Pasta compartilhada pelos processos da nuvem (o armazenamento persistente). Fora da nuvem: nenhuma."""
+    import os
+    from pathlib import Path
+    base = os.environ.get("BYTE_DADOS_PERSISTENTES", "").strip()
+    return Path(base) / "saude" if base else None
+
+
+def publish_health(service: Any) -> None:
+    import json
+    from . import engine
+    folder = family_dir()
+    if folder is None:
+        return
+    h = health(service)
+    folder.mkdir(parents=True, exist_ok=True)
+    agent_id = ((engine.ACTIVE_AGENT or {}).get("id") or "matrix").lower()
+    data = {"agent": h["agent"], "version": h["version"], "ok": h["ok"], "at": time.time(), "llm_ready": h["llm"]["ready"],
+            "failing": [j["label"] for j in h["jobs"] if j["failures"] >= ALERT_AFTER],
+            "pending_approvals": h["pending_approvals"], "tokens_today": h["tokens_today"]}
+    tmp = folder / f".{agent_id}.tmp"
+    tmp.write_text(json.dumps(data, ensure_ascii=False))
+    tmp.replace(folder / f"{agent_id}.json")
+
+
+def family_health(now: Optional[float] = None) -> List[Dict[str, Any]]:
+    import json
+    folder = family_dir()
+    if folder is None or not folder.is_dir():
+        return []
+    now = time.time() if now is None else now
+    out = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        data["stale"] = now - float(data.get("at") or 0) > FAMILY_STALE_S
+        out.append(data)
+    return out
+
+
+def format_family(items: List[Dict[str, Any]], now: Optional[float] = None) -> str:
+    if not items:
+        return "Ainda não há notícias dos outros agentes (só aparece na nuvem, depois do primeiro minuto)."
+    now = time.time() if now is None else now
+    lines = ["👨‍👩‍👧 Saúde dos agentes:"]
+    for it in items:
+        if it["stale"]:
+            icon, state = "🔴", f"sem sinal há {int((now - float(it.get('at') or 0)) // 60)} min (parado ou reiniciando)"
+        elif not it.get("llm_ready"):
+            icon, state = "🟠", "no ar, mas o modelo está fora"
+        elif it.get("failing"):
+            icon, state = "🟠", "com falhas: " + ", ".join(it["failing"])
+        else:
+            icon, state = "🟢", "tudo certo"
+        extra = f" · {it['pending_approvals']} aprovação(ões) esperando" if it.get("pending_approvals") else ""
+        lines.append(f"{icon} {it['agent']} v{it.get('version', '?')}: {state}{extra}")
+    return "\n".join(lines)
+
+
 def install(service: Any) -> Scheduler:
     sched = Scheduler(lambda text: service.db.enqueue_proactive_message("saude", text, brain_used="SAÚDE"))
     service.scheduler = sched
     service.proactive_engine.background_jobs.append(sched.tick)
-    service.extra_actions["health"] = lambda payload: dict(health(service), text=format_health(health(service)))
+    if family_dir() is not None:                         # na nuvem: cada agente conta como está, a Matrix lê todos
+        sched.add("saude_compartilhada", 60, lambda: publish_health(service), label="Saúde compartilhada")
+
+    def act_health(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("todos"):
+            fam = family_health()
+            return {"family": fam, "text": format_family(fam)}
+        h = health(service)
+        return dict(h, text=format_health(h))
+    service.extra_actions["health"] = act_health
     service.status_providers["saude"] = lambda: {"ok": health(service)["ok"], "jobs": sched.status()}
     return sched

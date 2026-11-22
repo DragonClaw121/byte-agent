@@ -185,3 +185,17 @@ def test_matrix_does_not_switch_to_agents_running_apart(tmp_path, fake, monkeypa
         assert rt.switch_agent("byte")["agent"]["id"] == "byte"           # quem não roda à parte continua trocando
     finally:
         rt.stop()
+
+
+def test_matrix_has_every_child_tool(tmp_path, fake, monkeypatch):
+    """v13.35 (R1): a Matrix é a mãe — tem as ferramentas de trabalho do Bit; o Kronus continua sem elas."""
+    rt = start(tmp_path, fake, monkeypatch)
+    try:
+        tools = set(rt.service.extra_tools)
+        assert {"create_spreadsheet", "create_document", "analyze_data", "email_triage", "email_listar", "clima"} <= tools
+        assert "work_status" in rt.service.extra_actions and rt.service.proactive_engine is not None
+        kronus = rt.switch_agent("kronus")
+        assert kronus["agent"]["id"] == "kronus" and "create_spreadsheet" not in rt.service.extra_tools
+        assert "work_status" not in rt.service.extra_actions
+    finally:
+        rt.stop()

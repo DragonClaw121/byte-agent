@@ -148,3 +148,13 @@ Com `"overlay": {"ativo": true}` no manifesto (tipo vtuber), o terminal mostra a
 `http://127.0.0.1:<porta>/overlay?token=...`. No OBS: Fonte → Navegador → cole a URL (1280×720). O fundo é
 transparente e o texto aparece enquanto a VTuber fala. O token fica salvo na pasta do agente, então a URL não muda
 entre execuções, e ele só serve para ler a legenda.
+
+## Matrix, a mãe dos agentes (v13.35)
+- A Matrix tem **todas as ferramentas dos filhos**: além de agenda, memória, lembretes, web, clima, rotina e e-mail,
+  agora também planilhas, documentos, apresentações, análise de dados e triagem, que antes eram só do Bit. O tom
+  continua o dela; o profissional fica no Bit.
+- Ela é o lugar de testar: funções novas podem ser experimentadas nela (e avaliadas com `/avaliar`) antes de irem para
+  os filhos.
+- `/saude todos` (ou, no app, Comandos → 👨‍👩‍👧 Saúde de todos) mostra como está cada agente da nuvem: no ar, com
+  falhas, aprovações esperando ou sem sinal. Cada agente publica a sua saúde a cada minuto no armazenamento
+  persistente.

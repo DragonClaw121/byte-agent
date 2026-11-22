@@ -37,8 +37,11 @@ def load_profile_data(data_dir: Path) -> dict:
         return {}
 
 
+WORK_SKILLS = {"dados", "apresentacoes", "documentos", "email"}
+
+
 def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optional[str] = None, profile: Optional[str] = None,
-                  web: Optional[bool] = None, profile_data: Optional[dict] = None) -> Any:
+                  web: Optional[bool] = None, profile_data: Optional[dict] = None, work: Optional[bool] = None) -> Any:
     """Monta banco, roteador, e-mail, terminal e serviço usando `data_dir` como armazenamento persistente.
     Com profile="trabalho" ativa o prompt profissional e instala as ferramentas de trabalho (uma instância por perfil)."""
     data_dir = Path(data_dir).expanduser()
@@ -67,9 +70,14 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         llm.base_model_spec = llm.current_model_spec()
     service = engine.ByteEcosystemService(db, llm, engine.RealEmailConnector(db),
                                           engine.MultiFrameGameTerminal(db, data_dir / "workspace"))
-    if profile and engine.ACTIVE_PROFILE == "trabalho":
+    if work is None:
+        work = engine.ACTIVE_PROFILE == "trabalho"
+    if profile and work:
+        # v13.35 (R1): as ferramentas de trabalho (planilhas, documentos, apresentações, análise, triagem) também na
+        # Matrix, a "mãe" que tem tudo o que os filhos têm. O tom profissional continua só no perfil de trabalho.
         from .work import WorkAssistant
-        service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem
+        if engine.ACTIVE_PROFILE == "trabalho":
+            service.proactive_engine.autonomous_mode_enabled = False     # sem bate-papo espontâneo; lembretes e rotinas seguem
         WorkAssistant(service, data_dir, profile_data).install()
     if web:
         engine.install_web_access(service, data_dir)
@@ -322,11 +330,12 @@ class Runtime:
     def _build_unlocked(self, profile: str, model: Optional[str]) -> Any:
         if self.manifest is not None:
             service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile,
-                                    web="web" in self.manifest["habilidades"], profile_data=self.manifest["dono"])
+                                    web="web" in self.manifest["habilidades"], profile_data=self.manifest["dono"],
+                                    work=bool(WORK_SKILLS & set(self.manifest["habilidades"])) or profile == "trabalho")
             agents.apply_identity(self.manifest)
             agents.apply_to_service(service, self.manifest)     # o "modelo" do manifesto, se houver, vence o --model
         else:
-            service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile)
+            service = build_service(self.dirs[profile], self.args.ollama_url, model, profile=profile, work=True)   # Matrix: tudo
         if self.manifest is None or self.agent_menu:
             service.profile_switcher = self.switch
         if self.agent_menu:

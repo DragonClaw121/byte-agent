@@ -65,3 +65,28 @@ def test_health_command(tmp_path):
         svc.proactive_engine.stop()
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_family_health_shared_through_storage(tmp_path, monkeypatch):
+    """v13.35 (R1): na nuvem, cada agente publica a sua saúde; a Matrix mostra todos com /saude todos."""
+    monkeypatch.setenv("BYTE_DADOS_PERSISTENTES", str(tmp_path / "store"))
+    from test_native_tools import TOOL_MODEL, FakeOllama
+    fake = FakeOllama()
+    svc = headless.build_service(tmp_path / "d", ollama_url=fake.url, model=TOOL_MODEL, profile="pessoal", web=False)
+    try:
+        assert "saude_compartilhada" in svc.scheduler.jobs
+        relogio.publish_health(svc)
+        import json
+        import time
+        (tmp_path / "store" / "saude" / "bit.json").write_text(json.dumps(
+            {"agent": "Bit", "version": "13.35", "ok": False, "at": time.time(), "llm_ready": True,
+             "failing": ["Gatilhos (agenda, e-mail, tarefas)"], "pending_approvals": 2}))
+        (tmp_path / "store" / "saude" / "kronus.json").write_text(json.dumps(
+            {"agent": "Kronus", "version": "13.35", "ok": True, "at": time.time() - 900, "llm_ready": True}))
+        text = svc.extra_actions["health"]({"todos": True})["text"]
+        assert "🟠 Bit v13.35: com falhas: Gatilhos" in text and "2 aprovação(ões) esperando" in text
+        assert "🔴 Kronus v13.35: sem sinal há 15 min" in text and "🟢 Matrix" in text
+    finally:
+        svc.proactive_engine.stop()
+        fake.httpd.shutdown()
+        engine.apply_profile("pessoal")
