@@ -1298,19 +1298,23 @@ class App:
                              font=("Segoe UI", 10), activestyle="none", exportselection=False, height=1)
         listbox.pack(fill="both", expand=True)
         entries: Dict[str, Any] = {}
-        for key, label in (("nome", "Nome"), ("uso", "Quando usar"), ("assunto", "Assunto")):
-            self.label(right, label, 9, self.MUTED).pack(anchor="w")
-            e = tk.Entry(right, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
-            e.pack(fill="x", ipady=self.px(3), pady=(0, self.px(4)))
+        form = tk.Frame(right, bg=self.BG)
+        form.pack(fill="x")
+        form.grid_columnconfigure(1, weight=1)
+        for i, (key, label) in enumerate((("nome", "Nome"), ("uso", "Quando usar"), ("assunto", "Assunto"))):
+            self.label(form, label, 9, self.MUTED).grid(row=i, column=0, sticky="w", padx=(0, self.px(6)))
+            e = tk.Entry(form, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
+            e.grid(row=i, column=1, sticky="ew", ipady=self.px(2), pady=(0, self.px(3)))
             entries[key] = e
         self.label(right, "Texto (use {{nome}}, {{pedido}}... onde muda)", 9, self.MUTED).pack(anchor="w")
         text = tk.Text(right, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
                        font=("Segoe UI", 10), height=1, width=1, borderwidth=0, padx=self.px(6), pady=self.px(6))
         sig_box = tk.Frame(win, bg=self.BG)
         self.label(sig_box, "Assinatura (vai no fim de todo e-mail)", 9, self.MUTED).pack(anchor="w")
-        sig = tk.Text(sig_box, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
+        sig_row = tk.Frame(sig_box, bg=self.BG)
+        sig_row.pack(fill="x")
+        sig = tk.Text(sig_row, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
                       font=("Segoe UI", 10), height=2, width=1, borderwidth=0, padx=self.px(6), pady=self.px(4))
-        sig.pack(fill="x")
 
         def show(res: Dict[str, Any]) -> None:
             state["items"] = list(res.get("modelos") or [])
@@ -1384,9 +1388,10 @@ class App:
         self.button(buttons, "Novo", new).pack(side="left", padx=self.px(6))
         self.button(buttons, "Apagar", delete).pack(side="left")
         text.pack(fill="both", expand=True)
-        self.button(sig_box, "Salvar assinatura",
+        self.button(sig_row, "Salvar assinatura",
                     lambda: call({"acao": "assinatura", "assinatura": sig.get("1.0", "end").strip()}, "✔ Assinatura salva.")
-                    ).pack(anchor="w", pady=(self.px(4), 0))
+                    ).pack(side="right", padx=(self.px(6), 0))
+        sig.pack(side="left", fill="x", expand=True)
         sig_box.pack(side="bottom", fill="x", padx=self.px(12), pady=(0, self.px(10)))
         status.pack(side="bottom", anchor="w", padx=self.px(12), pady=(self.px(4), self.px(4)))
         body.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(8))
