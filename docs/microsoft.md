@@ -3,8 +3,16 @@
 Funciona com conta **pessoal** (Outlook.com, Hotmail) e de **empresa** (Microsoft 365).
 
 ## Conectar
-1. É preciso o aplicativo "Byte Email" no seu Azure (`BYTE_MS_CLIENT_ID`). Se você já rodou `scripts/email-conta.sh`
-   com uma conta Outlook, ele existe. Se não, veja `docs/email.md`, parte "Outlook".
+1. É preciso o aplicativo "Byte Email" no seu Azure (`BYTE_MS_CLIENT_ID`) e a chave que criptografa os logins. No
+   Cloud Shell, baixe o script:
+   ```
+   curl -sLO https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/scripts/microsoft-app.sh
+   ```
+   E rode uma vez:
+   ```
+   bash microsoft-app.sh
+   ```
+   O `email-conta.sh` faz a mesma coisa quando você adiciona uma conta Outlook ou Hotmail.
 2. No Telegram do agente (ou no app, em Comandos → 🔑 Conectar a Microsoft):
    ```
    /microsoft entrar
