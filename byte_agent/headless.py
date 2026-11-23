@@ -103,6 +103,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         rotina.install(service)                             # v13.29: aprende a rotina e sugere no momento certo
         if embeddings is not None:
             _install_memory_reindex(service, embeddings)
+        from . import reunioes
+        reunioes.install(service, data_dir)                 # v13.36: reuniões com transcrição ao vivo e ata
         from . import app_comandos
         app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
         from . import nuvem as _nuvem

@@ -71,6 +71,12 @@
                 android:value="Assistente pessoal: recebe lembretes do servidor do usuário e os entrega como chamada no relógio." />
         </service>
 
+        <!-- app 2.1: gravação de reunião (continua com a tela apagada; notificação "Gravando reunião") -->
+        <service
+            android:name=".ReuniaoService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

@@ -42,6 +42,7 @@ HELP_TEXT = (
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
     "/rotina — o que o agente aprendeu (casa, saídas, horários) | /rotina aceitar <n> | /rotina off|on | /rotina esquecer\n"
     "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
+    "📝 Reuniões: grave pelo app (transcrição ao vivo) ou mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
     "/saude — está tudo funcionando? (tarefas de fundo, erros, memória, tokens do dia) | /saude todos — todos os agentes\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
@@ -324,7 +325,11 @@ class TelegramBridge:
         for item in items:
             for chat_id in self.allowed:
                 # rotinas (ex.: triagem da manhã) podem trazer rascunhos de e-mail: chegam com os botões de aprovação
-                self.send_with_cards(chat_id, str(item.get("message", "")), prefix="🤖 ")
+                message = str(item.get("message", ""))
+                self.send_with_cards(chat_id, message, prefix="🤖 ")
+                generated = re.findall(r"Arquivos gerados em entregas/: ([^\n]+)", message)
+                if generated:                                     # v13.36: a ata (.docx) chega junto
+                    self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
         return len(items)
 
     # ---------------- tratamento ----------------
@@ -346,6 +351,11 @@ class TelegramBridge:
             self._handle_callback(chat_id, upd["callback_query"])
             return
         message = upd.get("message") or {}
+        caption = str(message.get("caption") or "").strip()
+        media = message.get("audio") or message.get("voice") or message.get("video") or message.get("document")
+        if isinstance(media, dict) and re.match(r"(?i)^\s*(/?ata|/?reuni[aã]o)\b", caption):
+            self._handle_meeting_file(chat_id, media, caption)      # v13.36: gravação de reunião -> transcrição e ata
+            return
         spoken = message.get("voice") or message.get("audio") or message.get("video_note")
         if isinstance(spoken, dict):                         # v12.3: comando de voz
             self._handle_voice(chat_id, spoken, private=(message.get("chat") or {}).get("type") == "private")
@@ -472,6 +482,21 @@ class TelegramBridge:
                 self.last_error = f"voz: {type(err).__name__}"
         elif res.get("audio_error"):
             self.last_error = f"voz: {res['audio_error']}"
+
+    def _handle_meeting_file(self, chat_id: int, media: Dict[str, Any], caption: str) -> None:
+        if "meeting_file" not in getattr(self.service, "extra_actions", {}):
+            self.send(chat_id, "Atas de reunião não estão ligadas neste agente.")
+            return
+        if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
+            self.send(chat_id, "O Telegram só deixa bots baixarem arquivos de até 20 MB. Para gravações maiores, use o app do "
+                               "celular: aba Comandos → 📝 Reunião → Enviar gravação.")
+            return
+        data = self._download(media.get("file_id"), 20 * 1024 * 1024)
+        title = re.sub(r"(?i)^\s*/?(ata|reuni[aã]o)\b[:\s-]*", "", caption).strip()
+        res = self._dispatch("meeting_file", {"data": data, "name": str(media.get("file_name") or "reuniao.ogg"),
+                                              "mime": str(media.get("mime_type") or "audio/ogg"), "title": title})
+        self.send(chat_id, f"📝 Recebi \"{res.get('title')}\" (#{res.get('id')}). Estou transcrevendo; a ata chega aqui quando "
+                           "ficar pronta (alguns minutos para reuniões longas).")
 
     def _handle_document(self, chat_id: int, doc: Dict[str, Any]) -> None:
         """Planilha enviada como documento -> pasta de arquivos do perfil de trabalho."""
@@ -783,6 +808,17 @@ class TelegramBridge:
             except RuntimeError as err:
                 text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
             self.send(chat_id, text or "Saúde indisponível.")
+        elif cmd == "/reunioes":
+            self.send(chat_id, self._dispatch("meeting_list").get("text") or "Reuniões indisponíveis.")
+        elif cmd == "/ata":
+            if not arg.lstrip("#").isdigit():
+                self.send(chat_id, "Use: /ata <número> (veja em /reunioes)")
+                return
+            res = self._dispatch("meeting_minutes", {"id": int(arg.lstrip("#"))})
+            self.send_with_cards(chat_id, str(res.get("text") or ""))
+            generated = re.findall(r"Arquivos gerados em entregas/: ([^\n]+)", str(res.get("text") or ""))
+            if generated:
+                self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
         elif cmd == "/clima":
             try:
                 text = self._dispatch("weather_now", {"cidade": arg, "dias": 3}).get("text")

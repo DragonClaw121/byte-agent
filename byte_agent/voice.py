@@ -308,34 +308,35 @@ class Transcriber:
             return f"faster-whisper ({self.model or 'small'})"
         return None
 
-    def transcribe(self, audio: bytes, mime: str = "audio/ogg") -> str:
+    def transcribe(self, audio: bytes, mime: str = "audio/ogg", prompt: Optional[str] = None) -> str:
+        """prompt (v13.36): dica de contexto para o Whisper — nas reuniões, o final do que já foi transcrito."""
         if not audio:
             raise VoiceError("Áudio vazio.")
         if len(audio) > MAX_AUDIO_BYTES:
             raise VoiceError("Áudio grande demais (limite de 15 MB).")
         if self.backend in {"http", "local"}:
-            text = self._http(audio, mime) if self.backend == "http" else self._local(audio, mime)
+            text = self._http(audio, mime, prompt) if self.backend == "http" else self._local(audio, mime)
             return "" if echoes_prompt(text) or is_phantom(text) else text
         raise VoiceError("Transcrição de voz não configurada: defina BYTE_STT_URL (ex.: Groq, gratuito) ou instale faster-whisper. "
                          "Guia: docs/voz.md")
 
-    def _http(self, audio: bytes, mime: str) -> str:
+    def _http(self, audio: bytes, mime: str, prompt: Optional[str] = None) -> str:
         """v12.9: até 3 tentativas. Rede instável (Wi-Fi, VPN, WSL) e limites momentâneos do serviço (429/5xx) faziam a
         transcrição estourar o tempo; erros definitivos (chave, permissão, tamanho) não são repetidos."""
         last: Optional[Exception] = None
         for attempt in range(3):
             try:
-                return self._http_once(audio, mime)
+                return self._http_once(audio, mime, prompt)
             except _RetryableVoiceError as err:
                 last = err
                 if attempt < 2:
                     _retry_pause(min(10.0, err.wait_s or (2.0 * (attempt + 1))))
         raise VoiceError(f"{last} (depois de 3 tentativas). Se acontecer sempre, teste a rede até o serviço de transcrição.")
 
-    def _http_once(self, audio: bytes, mime: str) -> str:
+    def _http_once(self, audio: bytes, mime: str, prompt: Optional[str] = None) -> str:
         endpoint = self.url if self.url.endswith("/audio/transcriptions") else self.url + "/audio/transcriptions"
         fields = {"model": self.model or "whisper-1", "language": self.language, "response_format": "json"}
-        prompt = stt_prompt()
+        prompt = " ".join(str(prompt).split())[-600:] if prompt else stt_prompt()
         if prompt:
             fields["prompt"] = prompt                      # v13.19: vocabulário esperado (nomes dos agentes)
         body, ctype = _multipart(fields,

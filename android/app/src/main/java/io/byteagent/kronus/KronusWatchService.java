@@ -120,7 +120,8 @@ public class KronusWatchService extends Service {
                     JSONArray items = res.optJSONArray("notifications");
                     for (int i = 0; items != null && i < items.length(); i++) {
                         JSONObject it = items.getJSONObject(i);
-                        handle(prefs, it.optString("type", ""), it.optString("text", ""), it.optString("speech", ""));
+                        handle(prefs, it.optString("type", ""), it.optString("text", ""), it.optString("speech", ""),
+                                it.optJSONArray("buttons"));
                     }
                 } catch (Exception ignored) {
                     // sem rede agora: tenta na próxima volta
@@ -133,9 +134,9 @@ public class KronusWatchService extends Service {
 
     /** Lembrete e compromisso chegando tocam como chamada (se ligado); o resto vira notificação.
      *  v1.12: o resumo da manhã e o fechamento da semana também podem tocar, lidos na versão FALADA (speech). */
-    private void handle(SharedPreferences prefs, String type, String text, String speech) {
+    private void handle(SharedPreferences prefs, String type, String text, String speech, JSONArray buttons) {
         if (text.isEmpty()) return;
-        Conversa.add(this, Conversa.AVISO, text, null);           // app 2.0: todo aviso também fica na conversa
+        Conversa.add(this, Conversa.AVISO, text, buttons);        // app 2.0: todo aviso também fica na conversa (com botões)
         boolean summary = "briefing".equals(type) || "weekly_review".equals(type);
         boolean ring = ("reminder".equals(type) && prefs.getBoolean("ligar_lembretes", true))
                 || (("trigger".equals(type) && text.startsWith("📅") || "rotina".equals(type) && text.startsWith("🚗"))

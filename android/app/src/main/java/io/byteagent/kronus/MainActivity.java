@@ -127,6 +127,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         KronusCallService.uiListener = null;
         Conversa.listener = null;
+        ReuniaoService.listener = null;
         ui.removeCallbacks(pollNotes);
         super.onPause();
     }
@@ -142,6 +143,8 @@ public class MainActivity extends Activity {
             try { KronusWatchService.start(this); } catch (Exception ignored) { }
         }
         Conversa.listener = () -> ui.post(this::renderChat);
+        ReuniaoService.listener = (st, txt) -> ui.post(this::refreshMeeting);
+        refreshMeeting();
         renderChat();
         ui.removeCallbacks(pollNotes);
         ui.post(pollNotes);
@@ -555,8 +558,91 @@ public class MainActivity extends Activity {
 
     // ---------------- aba Comandos (os comandos do Telegram como botões)
     private void buildCommandsPage() {
-        cmdList = scrollPage(1);
+        LinearLayout page = scrollPage(1);
+        buildMeetingSection(page);
+        cmdList = new LinearLayout(this);
+        cmdList.setOrientation(LinearLayout.VERTICAL);
+        page.addView(cmdList);
         renderCommands(prefs.getString("comandos", ""));
+    }
+
+    // ---------------- reunião (app 2.1): grava, transcreve ao vivo, ata no fim
+    private static final int REQ_FILE = 21;
+    private TextView meetingState, meetingLive;
+    private Button meetingBtn;
+    private EditText meetingTitle;
+
+    private void buildMeetingSection(LinearLayout page) {
+        LinearLayout box = section(page, "📝 Reunião", "Grave a reunião: o texto aparece aqui enquanto ela acontece e, no fim, "
+                + "a ata (resumo, decisões e tarefas) chega na conversa e no Telegram.");
+        meetingTitle = new EditText(this);
+        meetingTitle.setHint("Título (opcional), ex.: Reunião de orçamento");
+        meetingTitle.setTextColor(INK);
+        meetingTitle.setHintTextColor(MUTED);
+        meetingTitle.setSingleLine(true);
+        box.addView(meetingTitle);
+        meetingBtn = pill("🔴 Iniciar gravação", v -> toggleMeeting());
+        box.addView(meetingBtn);
+        meetingState = label("", 13, MUTED, false);
+        box.addView(meetingState);
+        meetingLive = label("", 14, INK, false);
+        meetingLive.setTextIsSelectable(true);
+        meetingLive.setMaxLines(14);
+        meetingLive.setVerticalScrollBarEnabled(true);
+        meetingLive.setMovementMethod(new android.text.method.ScrollingMovementMethod());
+        box.addView(meetingLive);
+        box.addView(pill("📤 Enviar uma gravação (áudio ou vídeo, até 150 MB)", v -> {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"audio/*", "video/*"});
+            startActivityForResult(pick, REQ_FILE);
+        }));
+        refreshMeeting();
+    }
+
+    private void toggleMeeting() {
+        if (!paired()) {
+            showTab(3);
+            return;
+        }
+        if (ReuniaoService.recording) {
+            ReuniaoService.stop(this);
+            meetingBtn.setText("⏳ Encerrando...");
+            return;
+        }
+        if (!hasMic()) {
+            askPermissions();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_PERMS);
+        ReuniaoService.start(this, meetingTitle.getText().toString().trim());
+        meetingTitle.setText("");
+        meetingBtn.setText("⏹️ Encerrar e gerar ata");
+        meetingState.setText("Começando...");
+        meetingLive.setText("");
+    }
+
+    private void refreshMeeting() {
+        if (meetingBtn == null) return;
+        meetingBtn.setText(ReuniaoService.recording ? "⏹️ Encerrar e gerar ata" : "🔴 Iniciar gravação");
+        meetingState.setText(ReuniaoService.lastState);
+        synchronized (ReuniaoService.live) {
+            meetingLive.setText(ReuniaoService.live.toString());
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (code != REQ_FILE || result != RESULT_OK || data == null || data.getData() == null) return;
+        android.net.Uri uri = data.getData();
+        String title = meetingTitle.getText().toString().trim();
+        meetingState.setText("📤 Enviando a gravação...");
+        new Thread(() -> {
+            String msg = ReuniaoService.uploadFile(this, uri, title);
+            ui.post(() -> meetingState.setText(msg));
+            Conversa.add(this, Conversa.AVISO, msg, null);
+        }, "kronus-envio-gravacao").start();
     }
 
     private void loadCommands(boolean force) {
@@ -868,7 +954,7 @@ public class MainActivity extends Activity {
             JSONObject res = http(prefs.getString("server", "") + "/api/v1/notifications?canal=app", null, null, prefs.getString("token", ""));
             org.json.JSONArray items = res.optJSONArray("notifications");
             for (int i = 0; items != null && i < items.length(); i++)
-                Conversa.add(this, Conversa.AVISO, items.getJSONObject(i).optString("text"), null);
+                Conversa.add(this, Conversa.AVISO, items.getJSONObject(i).optString("text"), items.getJSONObject(i).optJSONArray("buttons"));
         } catch (Exception ignored) {
         }
     }
@@ -1676,7 +1762,7 @@ public class MainActivity extends Activity {
         HttpURLConnection con = (HttpURLConnection) new URL(url).openConnection();
         con.setConnectTimeout(20000);
         con.setReadTimeout(120000);
-        con.setRequestProperty("User-Agent", "kronus-android/2.0");
+        con.setRequestProperty("User-Agent", "kronus-android/2.1");
         if (token != null && !token.isEmpty()) con.setRequestProperty("Authorization", "Bearer " + token);
         if (body == null) {
             con.setRequestMethod("GET");

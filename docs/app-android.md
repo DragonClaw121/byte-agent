@@ -88,3 +88,18 @@ Cada versão nova do app é publicada no mesmo link. Baixe e instale por cima: a
 - A assinatura do APK usa uma chave "debug" guardada no repositório (permite atualizar por cima). Ela é pública:
   instale o APK **somente** do link acima. Para assinatura privada, crie no GitHub os segredos do repositório e troque
   o `signingConfig` (ver comentário em `android/app/build.gradle`).
+
+## Reuniões (app 2.1)
+Na aba **⚡ Comandos**, a seção **📝 Reunião** tem:
+- **🔴 Iniciar gravação:** o celular grava e, a cada 20 a 30 segundos (cortando numa pausa entre falas), manda o trecho
+  para o servidor. O texto transcrito **aparece na tela durante a reunião**. A gravação continua com a tela apagada; a
+  notificação "Gravando reunião" tem o botão "Parar e gerar ata". Se a rede cair, os trechos esperam e são reenviados.
+- **⏹️ Encerrar e gerar ata:** em instantes chega na conversa (e no Telegram, com o .docx) a ata: resumo, participantes
+  citados, decisões, tarefas (o quê, quem, prazo), pontos em aberto e próximos passos. Um botão pergunta se você quer
+  criar as tarefas na agenda.
+- **📤 Enviar uma gravação:** um áudio ou vídeo já gravado (Teams, Meet, gravador do celular), de até 150 MB, vira
+  transcrição e ata do mesmo jeito.
+
+Também dá para mandar o arquivo direto no Telegram com a legenda **ata** (até 20 MB, o limite do Telegram para bots).
+`/reunioes` lista as reuniões e `/ata 3` mostra a ata de uma delas.
+Avisos com botões (como "Criar 2 tarefas da reunião?") agora também mostram Aprovar e Descartar no app.

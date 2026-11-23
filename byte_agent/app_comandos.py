@@ -30,6 +30,8 @@ CATALOG: List[tuple] = [
     ("Agenda", "⏰ Novo lembrete", "/lembrete", "Quando e o quê", "30m beber água  |  amanhã 09:00 reunião", "obrigatorio"),
     ("Agenda", "📋 Lembretes", "/lembretes", "", "", ""),
     ("Agenda", "🗑️ Cancelar lembrete", "/cancelar", "Número do lembrete", "12", "obrigatorio"),
+    ("Reuniões", "📋 Reuniões gravadas", "/reunioes", "", "", ""),
+    ("Reuniões", "📝 Ver uma ata", "/ata", "Número da reunião", "3", "obrigatorio"),
     ("Memória e objetivos", "🧠 Memórias", "/memorias", "", "", ""),
     ("Memória e objetivos", "💾 Guardar na memória", "/lembrar", "O que devo lembrar?", "Prefiro reuniões de manhã", "obrigatorio"),
     ("Memória e objetivos", "🧩 Objetivos", "/objetivos", "", "", ""),

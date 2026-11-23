@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.35"
+BYTE_VERSION = "13.36"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -10211,9 +10211,21 @@ class ByteOmniServer:
                     canal = urllib.parse.parse_qs(parsed.query).get("canal", ["api"])[0]
                     items = service.db.pop_undelivered_proactive_messages("app" if canal == "app" else "api")
                     spoken = service.db.get_setting("fala_avisos", {}) or {}          # v13.24: versão falada (resumos)
+                    bridge = getattr(service, "app_bridge", None)
+
+                    def buttons_of(message: str) -> List[Dict[str, str]]:
+                        """v13.36: cartões de aprovação nos AVISOS também viram botões no app (ex.: tarefas da ata)."""
+                        if bridge is None or "```byte-" not in message:
+                            return []
+                        with bridge._lock:
+                            bridge._out = []
+                            bridge.send_with_cards(1, message)
+                            out, bridge._out = bridge._out, []
+                        return [b for m in out for b in m.get("buttons") or []]
                     self._send_json(200, {"agent": AGENT_NAME, "notifications": [
                         {"text": _CODE_FENCE_RE.sub("", str(i.get("message") or "")).strip(), "type": i.get("trigger_type"),
                          "speech": str(spoken.get(str(i.get("id")), "") or ""),
+                         "buttons": buttons_of(str(i.get("message") or "")),
                          "created_at": i.get("created_at")} for i in items]})
                     return True
                 if method == "POST" and path == "/api/v1/message":
@@ -10245,6 +10257,10 @@ class ByteOmniServer:
                                           "pending_approvals": pending,
                                           "note": ("Há ações aguardando aprovação no painel ou no Telegram." if pending else None)})
                     return True
+                for prefix, route in (getattr(service, "api_routes", None) or {}).items():   # v13.36: rotas de módulos
+                    if path.startswith(prefix):
+                        route(self, method, path, parsed.query)
+                        return True
                 self._send_json(404, {"error": "Rota desconhecida"})
                 return True
 
