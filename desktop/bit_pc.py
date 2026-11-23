@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.6"
+VERSION = "1.7"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -868,8 +868,121 @@ def write_eml(to: str, subject: str, text: str, html: str) -> str:
     return path
 
 
-def open_html_mail(to: str, subject: str, text: str, html: str) -> str:
-    """E-mail novo JÁ FORMATADO: pelo Outlook clássico; senão, um rascunho .eml. Devolve como abriu."""
+# ---------------- Outlook NOVO (olk.exe): sem COM. Abre o e-mail novo pelo mailto: (para + assunto) e cola o corpo com
+# formato no campo certo, achado pela acessibilidade do Windows (UI Automation) — só no e-mail com o MESMO assunto.
+NEW_OUTLOOK_PASTE_PS = r"""param($src, $out)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+$d = Get-Content -Raw -Encoding UTF8 $src | ConvertFrom-Json
+$A = [System.Windows.Automation.AutomationElement]
+$T = [System.Windows.Automation.TreeScope]
+$CT = [System.Windows.Automation.ControlType]
+$cond = New-Object System.Windows.Automation.OrCondition(
+  (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::Edit)),
+  (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::Document)))
+function Done($ok, $why) { ConvertTo-Json @{ok = $ok; motivo = $why} | Set-Content -Encoding UTF8 $out; exit 0 }
+$deadline = (Get-Date).AddSeconds([double]$d.espera)
+while ((Get-Date) -lt $deadline) {
+  $ids = @(Get-Process olk -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  if ($ids.Count -gt 0) {
+    foreach ($w in $A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+      if ($ids -notcontains $w.Current.ProcessId) { continue }
+      $subjectOk = $false; $body = $null
+      foreach ($e in $w.FindAll($T::Descendants, $cond)) {
+        $n = [string]$e.Current.Name
+        if ($n -match 'assunto|subject') {
+          $v = ''
+          try { $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { }
+          if ($v.Trim() -eq ([string]$d.assunto).Trim()) { $subjectOk = $true }
+        } elseif (-not $body -and $n -match 'corpo|body') { $body = $e }
+      }
+      if ($subjectOk -and $body) {
+        $body.SetFocus()
+        Start-Sleep -Milliseconds 400
+        if ($ids -notcontains $A::FocusedElement.Current.ProcessId) { Done $false 'foco' }
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 600
+        Done $true 'colado'
+      }
+    }
+  }
+  Start-Sleep -Milliseconds 800
+}
+Done $false 'sem_janela'
+"""
+
+
+def running_outlooks() -> set:
+    """Quais Outlooks estão abertos: "novo" (olk.exe) e/ou "classico" (OUTLOOK.EXE)."""
+    if not IS_WINDOWS:
+        return set()
+    try:
+        out = subprocess.run(["tasklist", "/NH", "/FO", "CSV"], capture_output=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.decode("utf-8", "replace").lower()
+    except Exception:
+        return set()
+    found = set()
+    if '"olk.exe"' in out:
+        found.add("novo")
+    if '"outlook.exe"' in out:
+        found.add("classico")
+    return found
+
+
+def mailto_handler() -> str:
+    """O app de e-mail padrão do Windows (ProgId do mailto:)."""
+    if not IS_WINDOWS:
+        return ""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\mailto\UserChoice")
+        return str(winreg.QueryValueEx(key, "ProgId")[0])
+    except OSError:
+        return ""
+
+
+def outlook_flavor(preferred: str = "") -> str:
+    """'novo' ou 'classico': a preferência do usuário; senão o que está aberto; senão o app de e-mail padrão."""
+    if preferred in ("novo", "classico"):
+        return preferred
+    running = running_outlooks()
+    if running == {"novo"}:
+        return "novo"
+    if running == {"classico"}:
+        return "classico"
+    handler = mailto_handler().lower()
+    if "outlook.url" in handler:
+        return "classico"
+    new_exe = os.path.join(os.environ.get("LOCALAPPDATA") or "", "Microsoft", "WindowsApps", "olk.exe")
+    return "novo" if (handler and os.path.exists(new_exe)) or "novo" in running else "classico"
+
+
+def copy_formatted(html: str, text: str, flavor: str) -> bool:
+    """O Outlook novo (e o navegador) aceita as imagens embutidas; o clássico (Word) prefere arquivos."""
+    return clipboard_set_html(html if flavor == "novo" else images_to_files(html), text)
+
+
+def open_new_outlook(to: str, subject: str, text: str, html: str) -> str:
+    """E-mail novo no Outlook novo: 'novo' (já colado com formato) ou 'novo_colar' (aberto; o formato está copiado)."""
+    copy_formatted(html, text, "novo")
+    os.startfile("mailto:" + urllib.parse.quote(to.strip(), safe="@,;") + "?subject=" + urllib.parse.quote(subject))  # type: ignore[attr-defined]
+    if not subject.strip():
+        return "novo_colar"                                 # sem assunto não dá para ter certeza de qual e-mail é
+    try:
+        res = _powershell(NEW_OUTLOOK_PASTE_PS, {"assunto": subject, "espera": 25}, timeout=50)
+    except Exception:
+        return "novo_colar"
+    return "novo" if isinstance(res, dict) and res.get("ok") else "novo_colar"
+
+
+def open_html_mail(to: str, subject: str, text: str, html: str, flavor: str = "") -> str:
+    """E-mail novo JÁ FORMATADO: no Outlook novo (mailto + colar) ou no clássico (COM); senão, um rascunho .eml."""
+    if IS_WINDOWS and (flavor or outlook_flavor()) == "novo":
+        try:
+            return open_new_outlook(to, subject, text, html)
+        except Exception:
+            pass
     if IS_WINDOWS:
         import shutil
         import tempfile
@@ -1779,19 +1892,41 @@ class App:
             status.configure(text="✔ Abri um e-mail novo. Se o texto não aparecer inteiro, cole (Ctrl+V): já está copiado.")
         html = str(res.get("corpo_html") or "")
 
-        def copy_formatted() -> None:
-            if clipboard_set_html(images_to_files(html), text_of()):
-                status.configure(text="✔ Copiado COM o formato do modelo: no Outlook, clique no corpo do e-mail e Ctrl+V.")
-            else:
-                copy(text_of(), "Texto")
+        def flavor() -> str:
+            return outlook_flavor(str(self.cfg.get("outlook") or ""))
+
+        def copy_formatted_now() -> None:
+            text_now = text_of()
+
+            def work() -> bool:
+                if copy_formatted(html, text_now, flavor()):
+                    return True
+                self.events.put(("call", lambda: copy(text_now, "Texto")))
+                return False
+            self.run_bg(work, lambda ok: status.configure(
+                text="✔ Copiado COM o formato do modelo: no Outlook, clique no corpo do e-mail e Ctrl+V." if ok else
+                "⚠ Não consegui copiar com formato; copiei só o texto."))
 
         def outlook() -> None:
-            status.configure(text="Abrindo um e-mail novo no Outlook, já formatado…")
+            kind = flavor()
+            status.configure(text="Abrindo um e-mail novo no Outlook" + (" novo" if kind == "novo" else "")
+                             + ", já formatado… (não mexa no teclado por alguns segundos)")
             to = fields["para"].get() if "para" in fields else ""
             subject = fields["assunto"].get() if "assunto" in fields else ""
-            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html), lambda how: status.configure(
-                text="✔ Abri no Outlook, com o formato do modelo. Revise e envie de lá." if how == "outlook" else
-                "✔ Abri um rascunho já formatado (.eml). Se abrir como e-mail recebido, use \"Copiar formatado\"."))
+            messages = {
+                "novo": "✔ Abri no Outlook novo e colei o e-mail com o formato do modelo. Revise e envie de lá.",
+                "novo_colar": "✔ Abri o e-mail novo no Outlook e o corpo formatado já está copiado: clique no corpo e "
+                              "Ctrl+V. (Se abriu no Outlook errado: Configurações do Windows → Apps → Apps padrão → "
+                              "Outlook (new) → MAILTO.)",
+                "outlook": "✔ Abri no Outlook, com o formato do modelo. Revise e envie de lá.",
+                "eml": "✔ Abri um rascunho já formatado (.eml). Se abrir como e-mail recebido, use \"Copiar formatado\"."}
+            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html, kind),
+                        lambda how: status.configure(text=messages.get(how, messages["eml"])))
+
+        def switch_outlook() -> None:
+            self.cfg["outlook"] = "classico" if flavor() == "novo" else "novo"
+            save_config(self.cfg, self.config_path)
+            which.configure(text=tk_safe(f"Outlook: {'novo' if self.cfg['outlook'] == 'novo' else 'clássico'} (trocar)"))
 
         def preview() -> None:
             import tempfile
@@ -1801,10 +1936,15 @@ class App:
                 fh.write(html if re.search(r"(?i)<meta[^>]+charset", html) else '<meta charset="utf-8">' + html)
             open_path(path)
         if html:
-            self.button(buttons, "Copiar formatado", copy_formatted, primary=True).pack(side="left")
+            self.button(buttons, "Copiar formatado", copy_formatted_now, primary=True).pack(side="left")
             self.button(buttons, "Abrir no Outlook", outlook).pack(side="left", padx=self.px(6))
             self.button(buttons, "Ver", preview).pack(side="left")
             self.button(buttons, "Só o texto", lambda: copy(text_of(), "Texto")).pack(side="left", padx=self.px(6))
+            which = self.label(buttons, "Outlook: … (trocar)", 8, self.MUTED, cursor="hand2")
+            which.pack(side="left", padx=(self.px(4), 0))
+            which.bind("<Button-1>", lambda _e: switch_outlook())
+            self.run_bg(flavor, lambda k: alive(which) and which.configure(
+                text=f"Outlook: {'novo' if k == 'novo' else 'clássico'} (trocar)"))
         else:
             self.button(buttons, "Copiar o texto", lambda: copy(text_of(), "Texto"), primary=True).pack(side="left")
         if res.get("tipo") == "email" and not html:
@@ -2722,6 +2862,14 @@ def autotest(out_path: str) -> int:
                 result["area_transferencia_html"] = bool(ok_set and "<table" in got and "color:#c00" in got)
                 if not result["area_transferencia_html"]:
                     problems.append(f"área de transferência com formato: não voltou igual ({got[:120]!r})")
+                try:                                                    # Outlook novo: o script de colar roda e,
+                    uia = _powershell(NEW_OUTLOOK_PASTE_PS, {"assunto": "teste-bit", "espera": 2}, timeout=40)
+                    result["outlook_novo_colar"] = uia.get("motivo") if isinstance(uia, dict) else str(uia)
+                    result["outlook_tipo"] = outlook_flavor()           # sem Outlook novo aberto, não cola nada
+                    if result["outlook_novo_colar"] not in ("sem_janela", "colado"):
+                        problems.append(f"Outlook novo: script de colar respondeu {result['outlook_novo_colar']}")
+                except Exception as err:
+                    problems.append(f"Outlook novo: script de colar falhou: {err}")
                 acts = app.templates_actions
                 acts["novo"]()
                 acts["colar"]()

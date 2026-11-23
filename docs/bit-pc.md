@@ -101,8 +101,15 @@ pronto sai igual ao modelo.
   não continuou, ou se o modelo for muito grande, o e-mail sai só em texto e a janela avisa.
 - **No e-mail pronto:**
   - **Copiar formatado:** no Outlook, clique no corpo do e-mail e `Ctrl+V`;
-  - **Abrir no Outlook:** abre um e-mail novo já formatado, com destinatário e assunto, para você revisar e enviar.
-    Sem o Outlook clássico, abre um rascunho `.eml`;
+  - **Abrir no Outlook:** abre um e-mail novo já formatado, com destinatário e assunto, para você revisar e enviar:
+    - **Outlook novo (v1.7):** o Bit abre o e-mail novo pelo próprio Outlook novo (o "app de e-mail padrão" do
+      Windows) e cola o corpo com o formato e as imagens no campo da mensagem — só no e-mail com o mesmo assunto,
+      achado pela acessibilidade do Windows. Não mexa no teclado por alguns segundos. Se não der para colar sozinho, o
+      corpo formatado fica copiado: clique no corpo e `Ctrl+V`;
+    - **Outlook clássico:** pelo próprio Outlook (automação COM);
+    - o Bit escolhe pelo Outlook que está aberto; para fixar, clique em **Outlook: novo/clássico (trocar)** na janela;
+    - se o e-mail abrir no Outlook errado: Configurações do Windows → Apps → Apps padrão → Outlook (new) → `MAILTO`;
+    - sem nenhum dos dois, abre um rascunho `.eml`;
   - **Ver:** mostra no navegador como vai ficar;
   - **Só o texto:** copia o que está na caixa. As edições feitas na caixa valem para essa opção.
 - O Bit **nunca envia sozinho**: o envio é sempre seu, pelo Outlook. Scripts e códigos dentro do HTML são removidos.
