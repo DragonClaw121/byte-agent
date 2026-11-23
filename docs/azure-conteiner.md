@@ -196,6 +196,10 @@ Os dados continuam: ele salva ao desligar e restaura ao ligar.
 - O orçamento de US$ 15 com alerta em 80% (Gerenciamento de Custos) continua valendo.
 - Para pausar tudo sem apagar: aplicativo → **Desativar** (fica sem custo de processamento; os dados ficam no
   armazenamento).
+- **Armazenamento caro?** Os dados da Byte ocupam poucos MB. Se a fatura mostrar reais por dia em "Storage", o
+  compartilhamento foi criado com capacidade **provisionada** (cobra o tamanho, IOPS e banda reservados, mesmo vazios)
+  ou na camada Premium. No Cloud Shell, `bash custo-armazenamento.sh` mostra o motivo e
+  `bash custo-armazenamento.sh reduzir` põe no mínimo.
 
 ## Painel pela internet (v13.6)
 Com `BYTE_PAINEL_REMOTO=1` (o script já liga), o endereço HTTPS do contêiner também abre os painéis, **só com o
