@@ -29,21 +29,18 @@ android {
                 storePassword senha
                 keyAlias 'kronus'
                 keyPassword senha
-            } else {
-                storeFile rootProject.file('app/kronus-debug.keystore')
-                storePassword 'android'
-                keyAlias 'kronus'
-                keyPassword 'android'
             }
         }
     }
+    // Sem a chave (compilação no seu PC): assina com a chave de depuração do próprio Android Studio.
+    def assinar = (novaChave.exists() && !senha.isEmpty()) ? signingConfigs.assinatura : signingConfigs.debug
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.assinatura
+            signingConfig assinar
         }
         debug {
-            signingConfig signingConfigs.assinatura
+            signingConfig assinar
         }
     }
     compileOptions {

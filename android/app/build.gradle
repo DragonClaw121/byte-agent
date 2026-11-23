@@ -18,8 +18,7 @@ android {
     }
 
     // Assinatura: a chave fica SÓ nos segredos do GitHub (KRONUS_KEYSTORE_B64 + KRONUS_KEYSTORE_SENHA), gerada por
-    // scripts/chave-app.sh. O workflow grava a chave em kronus.p12 antes de compilar. Sem ela (até você criar a nova),
-    // usa a chave antiga do repositório, que é pública e vai ser removida.
+    // scripts/chave-app.sh. O workflow grava a chave em kronus.p12 antes de compilar e apaga depois.
     def novaChave = file('kronus.p12')
     def senha = System.getenv('KRONUS_KEYSTORE_SENHA') ?: ''
     signingConfigs {
@@ -30,21 +29,18 @@ android {
                 storePassword senha
                 keyAlias 'kronus'
                 keyPassword senha
-            } else {
-                storeFile file('kronus-debug.keystore')
-                storePassword 'android'
-                keyAlias 'kronus'
-                keyPassword 'android'
             }
         }
     }
+    // Sem a chave (compilação no seu PC): assina com a chave de depuração do próprio Android Studio.
+    def assinar = (novaChave.exists() && !senha.isEmpty()) ? signingConfigs.kronus : signingConfigs.debug
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.kronus
+            signingConfig assinar
         }
         debug {
-            signingConfig signingConfigs.kronus
+            signingConfig assinar
         }
     }
     compileOptions {

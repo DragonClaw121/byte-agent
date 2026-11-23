@@ -25,10 +25,8 @@ jobs:
           if [ -n "$KRONUS_KEYSTORE_B64" ]; then
             printf '%s' "$KRONUS_KEYSTORE_B64" | base64 -d > android/app/kronus.p12
             echo "Assinando com a chave dos segredos."
-          elif [ ! -f android/app/kronus-debug.keystore ]; then
-            echo "::error::Falta o segredo KRONUS_KEYSTORE_B64 (rode scripts/chave-app.sh no Cloud Shell)."; exit 1
           else
-            echo "::warning::Assinando com a chave antiga (pública). Rode scripts/chave-app.sh para criar a nova."
+            echo "::error::Falta o segredo KRONUS_KEYSTORE_B64 (rode scripts/chave-app.sh no Cloud Shell)."; exit 1
           fi
       - name: Compilar
         working-directory: android
