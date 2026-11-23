@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.43"
+BYTE_VERSION = "13.44"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7164,6 +7164,7 @@ class ByteEcosystemService:
                     "profile": ACTIVE_PROFILE,
                     "profile_switch_available": callable(self.profile_switcher),
                     "agent_name": AGENT_NAME,
+                    "voice_page": bool(getattr(self, "api_enabled", False) and getattr(self, "device_registry", None)),
                     "voice": self.voice_status(),
                     "agent": ({k: ACTIVE_AGENT[k] for k in ("id", "nome", "tipo", "habilidades")} if ACTIVE_AGENT else None),
                 }
@@ -7495,6 +7496,9 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">Matrix</button>
         <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
       </div>
+      <a id="b90-voice-link" href="/voz" target="_blank" rel="noopener" class="b90-btn-sec"
+         style="display:none; font-size:0.7rem; padding:2px 8px; margin:0; text-decoration:none;"
+         title="Abre a página de voz deste agente numa nova aba, já conectada" onclick="return window.b90OpenVoice(event)">🎙️ Página de voz</a>
       <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Troca o agente em execução; cada um guarda os próprios dados">
         <select id="b90-agent-menu" class="b90-select" style="width:auto; font-size:0.7rem; padding:2px 6px;" onchange="window.b90AgentArm()"></select>
         <button type="button" id="b90-agent-go" class="b90-btn-sec" style="display:none; font-size:0.68rem; padding:2px 8px;" onclick="window.b90SwitchAgent()">Confirmar troca</button>
@@ -8697,6 +8701,18 @@ pygame.time.Clock().tick(60)</textarea>
         <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleRemove(${p.n})">🚫 Remover</button></span></div>`;
     }).join('') || '<span style="color:var(--muted);">Ninguém além de você usa este agente.</span>';
   }
+  window.b90OpenVoice = function(ev) {            // v13.44: página de voz do Kronus, já conectada
+    ev.preventDefault();
+    let known = '';
+    try { known = localStorage.getItem('byte_voice_token') || ''; } catch (e) {}
+    const tab = window.open('about:blank', '_blank');   // abre antes de esperar o servidor (senão o navegador bloqueia)
+    if (known) { if (tab) tab.location = '/voz'; return false; }
+    b90Call('voice_page_token', {}, true).then(res => {
+      if (res.error || !res.token) { if (tab) tab.close(); alert(res.error || 'Não consegui abrir a página de voz.'); return; }
+      if (tab) tab.location = '/voz#token=' + encodeURIComponent(res.token); else location.href = '/voz#token=' + encodeURIComponent(res.token);
+    });
+    return false;
+  };
   window.b90PeopleCmd = async function(cmd, arg) {
     const out = document.getElementById('b90-people-out');
     const res = await b90Call('people_command', { cmd, arg }, true);
@@ -8802,6 +8818,8 @@ pygame.time.Clock().tick(60)</textarea>
     b90RenderBriefings(st);
     b90RenderMeetings(st);
     b90RenderPeople(st);
+    const voiceLink = document.getElementById('b90-voice-link');
+    if (voiceLink) voiceLink.style.display = st.voice_page ? 'inline-block' : 'none';
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');

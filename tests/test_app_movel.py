@@ -196,3 +196,22 @@ def test_android_app_has_its_own_notification_queue(tmp_path, monkeypatch):
     finally:
         rt.stop()
         fake.httpd.shutdown()
+
+
+def test_panel_voice_button_gets_a_device_token_only_on_the_kronus(tmp_path):
+    """v13.44: o botão "Página de voz" do painel entra conectado; agente sem app/API não mostra o botão."""
+    from byte_agent import headless
+    import test_voice as tv
+    fake = tv.FakeOllama()
+    try:
+        service = headless.build_service(tmp_path / "d", ollama_url=fake.url, model=tv.TOOL_MODEL, profile="pessoal", web=False)
+        assert service.dispatch_request("status", {})["voice_page"] is False
+        assert "Kronus" in service.dispatch_request("voice_page_token", {})["error"]
+        service.api_enabled = True
+        assert service.dispatch_request("status", {})["voice_page"] is True
+        res = service.dispatch_request("voice_page_token", {})
+        assert service.device_registry.verify(res["token"])["name"] == "Navegador (botão do painel)"
+        service.proactive_engine.stop()
+    finally:
+        fake.httpd.shutdown()
+        engine.apply_profile("pessoal")

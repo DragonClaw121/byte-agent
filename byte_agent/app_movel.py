@@ -230,7 +230,14 @@ def install(service: Any) -> DeviceRegistry:
                        + (f"\n💻 Para gravar reuniões no notebook: {base}/reuniao#parear={out['code']}" if base else ""))
         return out
 
+    def voice_page_token(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """v13.44: o botão "Página de voz" do painel já entra conectado (vira um aparelho em /dispositivos)."""
+        if not getattr(service, "api_enabled", False):
+            raise PermissionError("A página de voz é do Kronus (agente com app/API ligado).")
+        return {"token": reg.pair(reg.new_code()["code"], "Navegador (botão do painel)"), "url": "/voz"}
+
     service.extra_actions.update({
+        "voice_page_token": voice_page_token,
         "device_pair_code": pair_code,
         "device_list": lambda payload: {"devices": reg.list()},
         "device_revoke": lambda payload: {"revoked": reg.revoke(int(payload.get("device_id") or 0))},
