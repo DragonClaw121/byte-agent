@@ -72,24 +72,9 @@ echo "    $N_OLD arquivos copiados (cópia de segurança também em $COPIA)"
 [ -f "$COPIA/conteiner-iniciar.sh" ] || echo "    aviso: conteiner-iniciar.sh não estava na raiz do compartilhamento antigo"
 
 say "4/4 Apontando o contêiner para $NEW e ligando a Byte"
-az containerapp env storage set -g "$RG" -n "$ENV_NAME" --storage-name dados --azure-file-account-name "$NEW" \
-   --azure-file-account-key "$NEW_KEY" --azure-file-share-name "$SHARE" --access-mode ReadWrite -o none
 unset OLD_KEY NEW_KEY
-for rev in $REVS; do
-  az containerapp revision activate -g "$RG" -n "$APP" --revision "$rev" -o none
-  az containerapp revision restart -g "$RG" -n "$APP" --revision "$rev" -o none 2>/dev/null || true
-done
-
-cat <<EOF
-
-Pronto. Em 1 a 2 minutos a Byte volta. Confira no Telegram: /status e /agenda (suas tarefas e lembretes têm que estar lá).
-
-Deu tudo certo? Então apague a conta antiga (é ela que custa caro; não tem volta):
-    az storage account delete -g $RG -n $OLD --yes
-
-Algo errado? Volte para a conta antiga (nada nela foi mexido):
-    OLD_KEY=\$(az storage account keys list -g $RG -n $OLD --query "[0].value" -o tsv)
-    az containerapp env storage set -g $RG -n $ENV_NAME --storage-name dados --azure-file-account-name $OLD \\
-       --azure-file-account-key "\$OLD_KEY" --azure-file-share-name $SHARE --access-mode ReadWrite -o none
-    az containerapp revision restart -g $RG -n $APP --revision $REVS
-EOF
+# A Azure não deixa trocar a conta da ligação "dados": o concluir cria uma ligação nova e troca o volume do contêiner.
+CONCLUIR="$(dirname "$0")/armazenamento-concluir.sh"
+[ -f "$CONCLUIR" ] || curl -s -o "$CONCLUIR" \
+  https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/scripts/armazenamento-concluir.sh
+bash "$CONCLUIR" "$NEW"
