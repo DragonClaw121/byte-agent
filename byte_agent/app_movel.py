@@ -226,7 +226,8 @@ def install(service: Any) -> DeviceRegistry:
         out["link"] = f"{base}/voz#parear={out['code']}" if base else ""
         out["text"] = (f"📱 Código para conectar o app: {out['code']} (vale {out['expires_in_min']} min, uma vez só).\n"
                        + (f"No celular, toque: {out['link']}\nDepois: menu do navegador → Instalar app / Adicionar à tela inicial."
-                          if out["link"] else "Abra a página /voz do agente no celular e digite o código."))
+                          if out["link"] else "Abra a página /voz do agente no celular e digite o código.")
+                       + (f"\n💻 Para gravar reuniões no notebook: {base}/reuniao#parear={out['code']}" if base else ""))
         return out
 
     service.extra_actions.update({

@@ -156,3 +156,29 @@ def test_telegram_audio_with_caption_ata(svc):
     finally:
         bridge.stop()
         tg.httpd.shutdown()
+
+
+def test_notebook_page_and_pair_link(tmp_path, monkeypatch):
+    """v13.37: /reuniao (notebook: Teams, Zoom, Meet) e o link no /parear."""
+    import argparse
+    import urllib.request
+    from test_native_tools import TOOL_MODEL, FakeOllama
+    monkeypatch.setenv("KRONUS_API_TOKEN", "k" * 40)
+    monkeypatch.setenv("BYTE_WEB", "0")
+    monkeypatch.setenv("BYTE_ENDERECO_PUBLICO", "https://kronus.exemplo.com")
+    monkeypatch.chdir(tmp_path)
+    fake = FakeOllama()
+    args = argparse.Namespace(agent="kronus", agent_menu=False, data_dir=str(tmp_path / "k"), profile="pessoal", ollama_url=fake.url,
+                              model=TOOL_MODEL, host="127.0.0.1", port=0, ui_token="", telegram_token="", telegram_chat_ids="",
+                              no_autonomy=True)
+    rt = headless.Runtime(args, env={"KRONUS_API_TOKEN": "k" * 40}).start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{rt.port}/reuniao", timeout=5) as resp:
+            html = resp.read().decode()
+        assert resp.status == 200 and "Gravar reunião" in html and "getDisplayMedia" in html and "/api/v1/reuniao" in html
+        text = rt.service.dispatch_request("device_pair_code", {})["text"]
+        assert "https://kronus.exemplo.com/reuniao#parear=" in text
+    finally:
+        rt.stop()
+        fake.httpd.shutdown()
+        engine.apply_profile("pessoal")

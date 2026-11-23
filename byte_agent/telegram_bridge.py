@@ -42,7 +42,7 @@ HELP_TEXT = (
     "/atualizar — confere agora se há versão nova no GitHub (na nuvem)\n"
     "/rotina — o que o agente aprendeu (casa, saídas, horários) | /rotina aceitar <n> | /rotina off|on | /rotina esquecer\n"
     "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
-    "📝 Reuniões: grave pelo app (transcrição ao vivo) ou mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
+    "📝 Reuniões: grave pelo app ou, no notebook (Teams/Zoom/Meet), pela página /reuniao; ou mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
     "/saude — está tudo funcionando? (tarefas de fundo, erros, memória, tokens do dia) | /saude todos — todos os agentes\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"

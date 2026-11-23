@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.36"
+BYTE_VERSION = "13.37"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -10094,6 +10094,13 @@ class ByteOmniServer:
                         self._send_json(403, {"error": str(err)})
                         return True
                     self._send_json(200, {"token": tok, "agent": AGENT_NAME})
+                    return True
+                if path == "/reuniao":                    # v13.37: grava reuniões online no notebook (Teams, Zoom, Meet)
+                    if method != "GET":
+                        self._send_json(405, {"error": "Use GET"})
+                        return True
+                    from byte_agent.reuniao_pagina import MEETING_PAGE_HTML
+                    self._send_html(MEETING_PAGE_HTML)
                     return True
                 if path == "/voz":                        # v12.3: página de voz para celular/relógio (pede o token da API)
                     if method != "GET":

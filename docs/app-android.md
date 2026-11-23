@@ -103,3 +103,20 @@ Na aba **⚡ Comandos**, a seção **📝 Reunião** tem:
 Também dá para mandar o arquivo direto no Telegram com a legenda **ata** (até 20 MB, o limite do Telegram para bots).
 `/reunioes` lista as reuniões e `/ata 3` mostra a ata de uma delas.
 Avisos com botões (como "Criar 2 tarefas da reunião?") agora também mostram Aprovar e Descartar no app.
+
+## Reuniões online no notebook (v13.37)
+Para Teams, Zoom ou Meet no computador, use a página de reuniões do agente, sem instalar nada:
+1. No Telegram do Kronus, mande `/parear`. A mensagem traz o link **💻 Para gravar reuniões no notebook**. Abra no
+   **Chrome** ou no **Edge** do notebook (o acesso fica guardado nesse navegador).
+2. Escreva o título (opcional) e clique em **🔴 Gravar**. O navegador pede para compartilhar:
+   - **app do Teams ou do Zoom (Windows):** escolha **Tela inteira** e ligue **Compartilhar áudio do sistema**;
+   - **reunião no navegador:** escolha a **aba** da reunião e ligue **Compartilhar áudio da aba**.
+3. A página grava o áudio da reunião (as outras pessoas) e o seu microfone. O texto aparece ao vivo e, ao clicar em
+   **⏹️ Encerrar e gerar ata**, a ata aparece na página e chega no app e no Telegram (com o .docx).
+
+Dicas:
+- Use **fone de ouvido**: sem ele, a voz dos outros sai pela caixa de som, entra no microfone e é transcrita duas vezes.
+- **Mac:** o "áudio do sistema" depende da versão do macOS e do navegador. Com a reunião no navegador (aba), funciona
+  sempre.
+- A gravação continua com a página em segundo plano. Só não feche a aba antes de encerrar.
+- **Avise os participantes** que a reunião está sendo gravada e transcrita (LGPD).
