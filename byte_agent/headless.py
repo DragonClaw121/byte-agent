@@ -116,6 +116,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         usuarios.install(service, data_dir)                 # v13.42: multiusuário (cada convidado com espaço próprio)
         from . import pc
         pc.install(service)                                 # v13.47: Bit no PC (conversa, olhar a tela, ajuda ao vivo)
+        from . import clientes
+        clientes.install(service)                           # v13.50: pesquisa de cliente com plano de abordagem
     return service
 
 

@@ -41,6 +41,8 @@ CATALOG: List[tuple] = [
     ("Memória e objetivos", "▶️ Retomar objetivo", "/retomar", "Número do objetivo", "2", "obrigatorio"),
     ("Memória e objetivos", "⛔ Cancelar objetivo", "/cancelar_objetivo", "Número do objetivo", "2", "obrigatorio"),
     ("Pesquisa", "🔎 Busca rápida", "/buscar", "O que procurar?", "preço do dólar hoje", "obrigatorio:web"),
+    ("Pesquisa", "🏢 Pesquisar cliente", "/cliente", "Nome ou CNPJ (e, depois de |, o que você sabe das compras)",
+     "ACME Ltda | comprou 3x em 2026, último pedido R$ 12 mil em out", "obrigatorio:web"),
     ("Pesquisa", "📚 Pesquisa profunda", "/pesquisar", "Pergunta da pesquisa", "Vale a pena carro elétrico em 2027?", "obrigatorio:web"),
     ("E-mail", "📬 Caixas", "/email", "", "", "email"),
     ("E-mail", "📥 Não lidos", "/caixa", "", "", "email"),

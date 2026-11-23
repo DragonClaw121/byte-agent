@@ -51,6 +51,7 @@ HELP_TEXT = (
     "/semana — fechamento da semana agora | /semana sexta 18:00 | /semana on|off\n"
     "/permissoes — o que o agente faz sozinho | /permissao <tipo> sugerir|aprovar|automatico | /atividade — o que ele fez\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
+    "/cliente <nome ou CNPJ> | <compras que você sabe> — pesquisa do cliente (cadastro, web) e plano de abordagem em .docx\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /modelos\n"
@@ -784,6 +785,19 @@ class TelegramBridge:
                 self.send(chat_id, "Use: /ler <arquivo> [pergunta]. Envie o documento antes, como arquivo.")
                 return
             self._work(chat_id, "work_read_document", {"file": name, "question": question.strip()}, f"Lendo {name}...")
+        elif cmd == "/cliente":                                    # v13.50: pesquisa de cliente com plano de abordagem
+            if not arg:
+                self.send(chat_id, "Use: /cliente <nome ou CNPJ> | <o que você sabe das compras dele (opcional)>\n"
+                                   "Ex.: /cliente ACME Ltda | comprou 3x em 2026, último pedido R$ 12 mil em outubro")
+                return
+            if "client_research" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "A pesquisa de cliente não está disponível neste agente.")
+                return
+            who, _, internal = arg.partition("|")
+            self.send(chat_id, "🏢 Pesquisando o cliente: cadastro pelo CNPJ, web e plano de abordagem (1 a 3 minutos)...")
+            res = self._dispatch("client_research", {"cliente": who.strip(), "dados_internos": internal.strip()})
+            self.send(chat_id, str(res.get("texto") or "Pronto."))
+            self._send_outputs(chat_id, res.get("arquivos"))
         elif cmd == "/pesquisar":
             if not arg:
                 self.send(chat_id, "Use: /pesquisar <pergunta>")

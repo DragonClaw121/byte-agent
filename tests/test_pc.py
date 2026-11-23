@@ -182,3 +182,22 @@ def test_vision_sends_the_image_to_azure_in_openai_format(monkeypatch):
     assert user["content"][0] == {"type": "text", "text": "o que é isso?"}
     assert user["content"][1]["type"] == "image_url" and user["content"][1]["image_url"]["url"].startswith("data:image/jpeg")
     assert svc._vision_client.deployment == "byte-visao"                     # BYTE_AZURE_VISAO escolhe a implantação
+
+
+def test_client_research_from_the_pc_uses_the_screen_and_live_notes(bit, monkeypatch):
+    svc, _ = bit
+    token = pair(svc)
+    seen = {}
+
+    def fake_run(request, internal="", notes="", image_url=""):
+        seen.update(request=request, notes=notes, image=image_url)
+        return {"titulo": "Plano de conta — ACME", "texto": "🏢 Plano...", "resumo": "Reativar.", "arquivos": ["plano.docx"],
+                "email": {"assunto": "Oi", "corpo": "Olá!"}}
+    monkeypatch.setattr(svc.client_research, "run", fake_run)
+    call(svc, "POST", "ao-vivo", token, {"sessao": "s9", "tela": JPEG})                       # notas da tela (compras)
+    status, res = call(svc, "POST", "preparar", token, {"sessao": "s9", "tipo": "cliente", "pedido": "pesquise esse cliente"})
+    assert status == 200 and res["tipo"] == "cliente" and res["arquivos"] == ["plano.docx"] and res["corpo"] == "Olá!"
+    assert "verba R$ 15.000" in seen["notes"]
+    status, res = call(svc, "POST", "conversa", token, {"texto": "Me auxilie com uma pesquisa profunda sobre esse cliente", "tela": JPEG})
+    assert res["preparado"]["tipo"] == "cliente" and seen["image"].startswith("data:image/jpeg")   # a ficha na tela foi junto
+    assert "pesquisar_cliente" in svc.extra_tools and "client_research" in svc.extra_actions

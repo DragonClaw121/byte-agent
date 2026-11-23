@@ -58,6 +58,9 @@ No Windows, os ícones são os do próprio sistema (Segoe MDL2). A tabela mostra
   - **E-mail e texto:** abrem numa janela para revisar, com **Copiar o texto**, **Copiar o assunto** e **Abrir no
     e-mail**. "Abrir no e-mail" cria um e-mail novo no Outlook (ou no seu programa padrão) já com destinatário, assunto
     e texto. O texto também fica copiado, caso seja longo demais para entrar inteiro.
+  - **⌕ Cliente (v1.3):** pesquisa o cliente que está na tela (cadastro pelo CNPJ, web e as compras que aparecem) e
+    entrega um plano de conta (.docx) e um e-mail de abordagem. "Pesquise esse cliente", na conversa, faz o mesmo.
+    Veja [clientes.md](clientes.md).
   - **Planilha (.xlsx), apresentação (.pptx) e documento (.docx):** são criados de verdade, salvos em
     **Documentos\Bit** e abertos sozinhos.
 - **Perguntas:** com o assistente ligado, escreva na caixa ("onde fica a opção de filtro?"). A pergunta vai junto com a

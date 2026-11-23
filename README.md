@@ -216,5 +216,6 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Reuniões (v13.36–13.37):** transcrição ao vivo pelo app ou pelo notebook (Teams/Zoom/Meet) e ata com tarefas — [docs/app-android.md](docs/app-android.md)
 - **Microsoft (v13.38):** agenda do Outlook unificada, criar/mover/cancelar com aprovação, OneDrive automático e transcrições do Teams — [docs/microsoft.md](docs/microsoft.md)
 - **Google (v13.39):** Google Agenda na agenda unificada (com Meet) e Drive automático — [docs/google.md](docs/google.md)
+- **Pesquisa de cliente (v13.50):** cadastro oficial pelo CNPJ, web só sobre o cliente e plano de abordagem com os seus dados de compra (.docx + e-mail) — `/cliente`, ou "pesquise esse cliente" no Bit do PC — [docs/clientes.md](docs/clientes.md)
 - **Bit no PC (v13.47):** app para Windows — conversa, "olha minha tela" e ajuda ao vivo vendo a tela, passo a passo, com marcação de onde clicar — [docs/bit-pc.md](docs/bit-pc.md)
 - **Pessoas (v13.42):** convide outras pessoas pelo mesmo bot (link `t.me/...`) ou por um painel pessoal (`/u/<agente>`); cada uma com conversa, memória, tarefas e lembretes próprios e limite diário — [docs/pessoas.md](docs/pessoas.md)

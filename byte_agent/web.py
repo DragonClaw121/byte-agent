@@ -29,7 +29,7 @@ import socket
 import ssl
 import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -443,8 +443,9 @@ class WebAccess:
     def _sub_queries(self, question: str) -> List[str]:
         raw = self._llm([
             {"role": "system", "content": ('Você planeja pesquisas na web. Responda SOMENTE um JSON {"consultas": ["...", "..."]} com 3 consultas '
-                                           "curtas e diferentes entre si (palavras-chave, sem aspas), em português; "
-                                           "inclua uma em inglês se o tema for técnico ou internacional.")},
+                                           "curtas e diferentes entre si, em português, com palavras-chave (nada de frases como "
+                                           "'pesquisa profunda sobre'); nomes próprios exatos (empresas, pessoas, produtos) vão "
+                                           "ENTRE ASPAS; inclua uma em inglês se o tema for técnico ou internacional.")},
             {"role": "user", "content": f"Pergunta: {question}"}], max_tokens=200, json_format=True)
         try:
             items = json.loads(raw).get("consultas") if raw else None
@@ -474,6 +475,11 @@ class WebAccess:
                 if key not in seen:
                     seen.add(key)
                     candidates.append(hit)
+        terms = _proper_terms(question)                   # v13.50: só fontes que mencionam o assunto (nome próprio)
+        if terms:
+            focused = [h for h in candidates if any(t in _fold_text(f"{h.get('title', '')} {h.get('snippet', '')} {h.get('url', '')}")
+                                                     for t in terms)]
+            candidates = focused or candidates
         sources: List[Dict[str, Any]] = []
         read_errors: List[str] = []
         for hit in candidates:
@@ -604,7 +610,8 @@ class WebAccess:
                     "url": {"type": "string"}, "question": {"type": "string", "description": "O que procurar na página"}}}},
             "deep_research": {
                 "auto": True, "mission": True, "taints": True, "handler": tool_research, "intent": research_intent,
-                "description": "Pesquisa profunda: várias buscas, leitura das melhores fontes e relatório com citações. Demora alguns minutos.",
+                "description": ("Pesquisa profunda sobre um TEMA: várias buscas, leitura das melhores fontes e relatório com citações. "
+                                "Demora alguns minutos. Para cliente, empresa ou CNPJ use pesquisar_cliente."),
                 "parameters": {"type": "object", "required": ["question"], "properties": {"question": {"type": "string"}}}},
         })
         service.extra_actions.update({
@@ -620,6 +627,8 @@ class WebAccess:
             if "web_search" in getattr(service, "disabled_tools", set()):
                 return None                              # agente sem a habilidade "web"
             folded = _fold_text(message)
+            if "pesquisar_cliente" in service.extra_tools and _client_ask(folded):
+                return None                              # v13.50: a pesquisa de cliente busca do jeito certo
             asked = bool(_SEARCH_ASK_RE.search(folded))
             recent = self._last_query and time.time() - self._last_query_at < 1800
             followup = bool(recent and _FOLLOWUP_RE.search(folded))
@@ -677,12 +686,37 @@ def _fold_text(text: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", str(text).lower()) if not unicodedata.combining(c))
 
 
+_VAGUE_WORDS = set("""auxilie auxiliar ajude ajudar ajuda esse essa este esta isso isto aquele aquela cliente clientes empresa
+empresas profunda profundo tela aqui ai sobre com sem melhor tudo coisa coisas assunto tema""".split())
+
+
 def search_query_from(message: str) -> str:
-    """'Consegue fazer uma pesquisa sobre a empresa: ENGINEERING DO BRASIL S/A?' -> 'empresa: ENGINEERING DO BRASIL S/A'"""
+    """'Consegue fazer uma pesquisa sobre a empresa: ENGINEERING DO BRASIL S/A?' -> 'empresa: ENGINEERING DO BRASIL S/A'
+    v13.50: pedido vago ("me auxilie com uma pesquisa profunda sobre esse cliente") -> "" (não vira busca sem sentido)."""
     words = str(message or "").replace("\n", " ").split()
     while words and re.sub(r"[^\w]", "", _fold_text(words[0])) in _FILLER_WORDS:
         words.pop(0)
+    if all(re.sub(r"[^\w]", "", _fold_text(w)) in _FILLER_WORDS | _VAGUE_WORDS for w in words):
+        return ""
     return " ".join(words).strip(" ?!.,;:")[:200]
+
+
+def _proper_terms(question: str) -> List[str]:
+    """Siglas e nomes em MAIÚSCULAS (ex.: ASBEC, ENGINEERING) e trechos entre aspas: a fonte precisa citar ao menos um."""
+    out: List[str] = []
+    for quoted in re.findall(r'"([^"]{3,80})"', str(question or "")):
+        out.append(_fold_text(quoted).strip())
+    for word in re.findall(r"[\w&-]+", str(question or "")):
+        if len(word) >= 3 and word.isupper() and not word.isdigit():
+            folded = _fold_text(word)
+            if folded not in {"ltda", "eireli", "cnpj"} and folded not in out:
+                out.append(folded)
+    return out[:6]
+
+
+def _client_ask(folded: str) -> bool:
+    from .clientes import CLIENT_RE
+    return bool(CLIENT_RE.search(folded))
 
 
 def _slug(text: str, limit: int = 40) -> str:

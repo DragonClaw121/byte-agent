@@ -31,7 +31,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.2"
+VERSION = "1.3"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -206,6 +206,16 @@ def foreground() -> Optional[Dict[str, Any]]:
         return None
     import ctypes
     return window_info(ctypes.windll.user32.GetForegroundWindow())
+
+
+CLIENT_ASK_RE = __import__("re").compile(
+    r"\b(pesquis\w*|levant\w*|analis\w*|investig\w*|dossie|plano de (conta|abordagem)|conhecer melhor)\b.{0,60}"
+    r"\b(cliente|empresa|prospect\w*|cnpj)\b|\b(cliente|empresa)\b.{0,40}\b(pesquis\w*|levant\w*|analis\w*)\b")
+
+
+def fold(text: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(text or "").lower()) if not unicodedata.combining(c))
 
 
 def blocked_title(title: str) -> bool:
@@ -656,10 +666,13 @@ class App:
         self.label(prep, "Preparar com o que está na tela:", 8, self.MUTED).pack(anchor="w")
         kinds = tk.Frame(prep, bg=self.BG)
         kinds.pack(fill="x")
-        for kind, text in self.KINDS:
+        for i, (kind, text) in enumerate(self.KINDS):
             tk.Button(kinds, text=tk_safe(text), command=lambda k=kind: self.prepare(k), relief="flat", cursor="hand2",
                       padx=self.px(7), pady=self.px(3), bg=self.HOVER, fg=self.INK, activebackground=self.PRI,
-                      font=("Segoe UI", 9), borderwidth=0).pack(side="left", padx=(0, self.px(4)), pady=(self.px(2), 0))
+                      font=("Segoe UI", 9), borderwidth=0).grid(row=i // 3, column=i % 3, sticky="ew",
+                                                               padx=(0, self.px(4)), pady=(self.px(3), 0))
+        for col in range(3):
+            kinds.grid_columnconfigure(col, weight=1)
         self.suggest_box = tk.Frame(prep, bg=self.BG)
         self.suggest_box.pack(fill="x")
         tools = tk.Frame(f, bg=self.BG)
@@ -711,6 +724,9 @@ class App:
         self.chat.see("end")
 
     def on_reply(self, res: Dict[str, Any]) -> None:
+        if isinstance(res.get("preparado"), dict):
+            self.on_prepared(res["preparado"])
+            return
         msgs = res.get("mensagens") or []
         for m in msgs:
             self.add_message(str(m.get("text") or ""), "bit", m.get("buttons") or [])
@@ -720,6 +736,9 @@ class App:
     def ask(self, text: str) -> None:
         text = text.strip()
         if not text or self.api is None:
+            return
+        if CLIENT_ASK_RE.search(fold(text)):                      # "pesquise esse cliente": usa a tela (e as compras nela)
+            self.prepare("cliente", text)
             return
         self.add_message(text, "eu")
         if self.live is not None:                               # durante a ajuda ao vivo, a pergunta vai com a tela
@@ -906,9 +925,9 @@ class App:
 
     # ------------------------------------------------------------ preparar o trabalho (e-mail, planilha, slides...)
     KINDS = (("email", "✉ E-mail"), ("planilha", "▦ Planilha"), ("apresentacao", "▭ Slides"), ("documento", "☰ Documento"),
-             ("texto", "✎ Texto"))
+             ("texto", "✎ Texto"), ("cliente", "⌕ Cliente"))
     KIND_NAMES = {"email": "o e-mail", "planilha": "a planilha", "apresentacao": "a apresentação", "documento": "o documento",
-                  "texto": "o texto"}
+                  "texto": "o texto", "cliente": "a pesquisa do cliente (cadastro, web e plano de abordagem; 1 a 3 min)"}
 
     def take_request_text(self) -> str:
         source = self.bar_entry if self.bar is not None else self.entry
@@ -940,6 +959,15 @@ class App:
 
     def on_prepared(self, res: Dict[str, Any]) -> None:
         kind = res.get("tipo")
+        if kind == "cliente":                                     # plano de conta (.docx) + e-mail de abordagem
+            self.add_message(str(res.get("texto") or res.get("resumo") or "Pesquisa do cliente pronta."), "bit")
+            if res.get("corpo"):
+                self.open_result(dict(res, tipo="email", titulo="E-mail de abordagem"))
+            if res.get("arquivos"):
+                self.run_bg(lambda: self.save_files(list(res["arquivos"])), self.on_saved)
+            elif self.bar is not None:
+                self.show_bubble([{"text": str(res.get("resumo") or "Pesquisa do cliente pronta.")}])
+            return
         if kind in ("email", "texto"):
             self.add_message(f"✔ {res.get('titulo') or 'Pronto'}: abri numa janela para você revisar e copiar.", "bit")
             if self.bar is not None:
@@ -1130,7 +1158,15 @@ class App:
         self.reveal(win)
         click_through(win)                                        # depois de mostrar: aí a moldura existe de verdade
         self.overlay = win
-        self.root.after(8000, lambda: (win.destroy() if self.overlay is win else None))
+        self.root.after(8000, self.drop_overlay, win)
+
+    def drop_overlay(self, win: Any) -> None:
+        if self.overlay is win:
+            self.overlay = None
+        try:
+            win.destroy()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ avisos do Bit (no canto, empilhados)
     def poll_notices(self) -> None:
@@ -1161,15 +1197,22 @@ class App:
         body = tk.Label(inner, text=tk_safe(text)[:420], bg=self.CARD, fg=self.INK, wraplength=self.px(330),
                         justify="left", font=("Segoe UI", 10), cursor="hand2")
         body.pack(fill="x", padx=self.px(10), pady=(self.px(4), self.px(10)))
-        close.bind("<Button-1>", lambda e: self.close_toast(toast))
-        body.bind("<Button-1>", lambda e: (self.close_toast(toast), self.hotkey_open()))
+        close.bind("<Button-1>", lambda e=None, t=toast: self.close_toast(t))
+        body.bind("<Button-1>", lambda e=None, t=toast: (self.close_toast(t), self.hotkey_open()))
         self.toasts.append(toast)
         while len(self.toasts) > 3:
             self.close_toast(self.toasts[0])
         self.layout_toasts()
-        self.root.after(12000, lambda: self.close_toast(toast))
+        toast._bit_timer = self.root.after(12000, self.close_toast, toast)
 
     def close_toast(self, toast: Any) -> None:
+        timer = getattr(toast, "_bit_timer", None)
+        if timer:
+            try:
+                self.root.after_cancel(timer)
+            except Exception:
+                pass
+            toast._bit_timer = None
         if toast in self.toasts:
             self.toasts.remove(toast)
             try:
@@ -1257,10 +1300,13 @@ class App:
         self.bar_prep = tk.Frame(inner, bg=self.CARD)
         row1 = tk.Frame(self.bar_prep, bg=self.CARD)
         row1.pack(fill="x")
-        for kind, text in self.KINDS:
+        for i, (kind, text) in enumerate(self.KINDS):
             tk.Button(row1, text=tk_safe(text), relief="flat", cursor="hand2", bg=self.HOVER, fg=self.INK,
                       activebackground=self.PRI, font=("Segoe UI", 9), borderwidth=0, padx=self.px(6), pady=self.px(2),
-                      command=lambda k=kind: self.prepare(k)).pack(side="left", padx=(0, self.px(3)))
+                      command=lambda k=kind: self.prepare(k)).grid(row=i // 3, column=i % 3, sticky="ew",
+                                                                   padx=(0, self.px(3)), pady=(0, self.px(3)))
+        for col in range(3):
+            row1.grid_columnconfigure(col, weight=1)
         self.bar_suggest = tk.Frame(self.bar_prep, bg=self.CARD)
         self.bar_suggest.pack(fill="x", pady=(self.px(4), 0))
         self.bar_status = tk.Label(inner, text="", bg=self.CARD, fg=self.MUTED, wraplength=self.px(320), justify="left", anchor="w",
@@ -1422,15 +1468,22 @@ class App:
         more = tk.Label(foot, text="Abrir a conversa", bg=self.CARD, fg=self.PRI, font=("Segoe UI", 9, "underline"),
                         cursor="hand2")
         more.pack(side="left")
-        more.bind("<Button-1>", lambda e: self.show_window())
+        more.bind("<Button-1>", lambda e=None: self.show_window())
         close = tk.Label(foot, text="✕", bg=self.CARD, fg=self.MUTED, font=("Segoe UI", 10), cursor="hand2")
         close.pack(side="right")
-        close.bind("<Button-1>", lambda e: self.close_bubble(bubble))
+        close.bind("<Button-1>", lambda e=None, b=bubble: self.close_bubble(b))
         self.position_bubble()
         if not wait:
-            self.root.after(30000, lambda: self.close_bubble(bubble))
+            bubble._bit_timer = self.root.after(30000, self.close_bubble, bubble)
 
     def close_bubble(self, bubble: Any) -> None:
+        timer = getattr(bubble, "_bit_timer", None)
+        if timer:
+            try:
+                self.root.after_cancel(timer)
+            except Exception:
+                pass
+            bubble._bit_timer = None
         try:
             bubble.destroy()
         except Exception:
@@ -1482,6 +1535,10 @@ class FakeApi:
                                   {"tipo": "planilha", "pedido": "Planilha do orçamento dos 3 notebooks"}],
                     "resposta": "", "alvo": [0.1, 0.1, 0.2, 0.15], "notas_total": 1}
         if sub == "preparar":
+            if (body or {}).get("tipo") == "cliente":
+                return {"tipo": "cliente", "titulo": "Plano de conta — ACME", "texto": "🏢 Plano de conta — ACME\n\nResumo...",
+                        "resumo": "Cliente recorrente, sem compras há 4 meses: reativar com oferta.", "arquivos": [],
+                        "assunto": "Novidades para a ACME", "corpo": "Olá, Maria! ..."}
             if (body or {}).get("tipo") == "email":
                 return {"tipo": "email", "titulo": "Resposta à Ana", "para": "ana@empresa.com", "assunto": "Re: Orçamento",
                         "corpo": "Olá, Ana!\n\nSegue o orçamento dos 3 notebooks, com entrega até 12/12. 👍\n\nAbraços,\n[SEU NOME]",
@@ -1564,12 +1621,15 @@ def autotest(out_path: str) -> int:
             app.bar_open_prepare(True)
             app.prepare("email", "Responder à Ana")
             app.prepare("planilha", "")
+            app.ask("pesquise esse cliente pra mim")
             app.root.after(1500, step2b)
 
         def step2b() -> None:
             app.pump()
             app.root.update()
             result["resultado_email"] = len(app.result_windows)
+            if len(app.result_windows) < 2:
+                problems.append("pesquisa do cliente: a janela do e-mail de abordagem não abriu")
             result["arquivos_salvos"] = [os.path.basename(p) for p in getattr(app, "saved_paths", [])]
             if not app.result_windows:
                 problems.append("janela do e-mail pronto: não abriu")
