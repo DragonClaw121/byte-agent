@@ -503,7 +503,7 @@ class App:
         else:
             self.show_pairing()
         self.root.after(150, self.pump)
-        self.root.after(400, lambda: exclude_from_capture(self.root))
+        self.root.after(400, exclude_from_capture, self.root)
         if not test_mode:
             threading.Thread(target=hotkeys, args=(self.events,), daemon=True, name="atalhos").start()
             threading.Thread(target=self.track_foreground, daemon=True, name="janela-em-uso").start()
@@ -563,7 +563,7 @@ class App:
         self.root.deiconify()
         self.root.lift()
         self.root.attributes("-topmost", True)
-        self.root.after(300, lambda: self.root.attributes("-topmost", False))
+        self.root.after(300, self.root.attributes, "-topmost", False)
         if self.entry is not None:
             self.entry.focus_force()
 
@@ -1011,7 +1011,7 @@ class App:
         sw, sh = self.screen()
         w, h = min(self.px(600), sw - self.px(40)), min(self.px(560), sh - self.px(90))
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
-        win.after(200, lambda: exclude_from_capture(win))
+        self.root.after(200, self.later, exclude_from_capture, win)
         frame = tk.Frame(win, bg=self.BG)
         frame.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(10))
         fields: Dict[str, Any] = {}
@@ -1060,7 +1060,7 @@ class App:
     def draw_suggestions(self) -> None:
         """Os botões "Preparar" (na janela e na barra) + as sugestões do que o Bit viu."""
         for holder in (getattr(self, "suggest_box", None), getattr(self, "bar_suggest", None)):
-            if holder is None:
+            if not alive(holder):
                 continue
             for child in holder.winfo_children():
                 child.destroy()
@@ -1080,6 +1080,13 @@ class App:
             self.relayout_bar()
 
     # ------------------------------------------------------------ janelinhas sobre a tela (tamanho pelo conteúdo)
+    def later(self, func: Callable[..., Any], win: Any, *args: Any) -> None:
+        """Agendamentos ficam SEMPRE na janela principal (que nunca fecha) e conferem se a janela alvo ainda existe.
+        Agendar na própria janelinha e fechá-la antes deixava o agendamento órfão: o Tk podia disparar outra função
+        no lugar (foi o que fechava a barra compacta)."""
+        if alive(win):
+            func(win, *args)
+
     def popup(self, bg: str, border: Optional[str] = None, activate: bool = False) -> Tuple[Any, Any]:
         """Janela sem moldura, sempre por cima, fora das capturas. Nasce escondida e só aparece em place(), já
         posicionada e SEM roubar o foco (activate=True só para a barra, que tem campo de digitação)."""
@@ -1104,7 +1111,7 @@ class App:
         if not activate:
             no_activate(win)                                      # de novo: a moldura do Windows só existe depois de mostrar
             for delay in (10, 120):
-                win.after(delay, lambda: give_focus_back(before))
+                self.root.after(delay, give_focus_back, before)   # na janela principal: nunca "órfão"
         exclude_from_capture(win)
         round_corners(win)
 
@@ -1323,6 +1330,7 @@ class App:
         self.layout_toasts()
 
     def close_bar(self) -> None:
+        self.bar_suggest = None
         for name in ("bubble", "bar"):
             win = getattr(self, name)
             if win is not None:
@@ -1384,7 +1392,7 @@ class App:
         if show and not visible:
             self.bar_prep.pack(fill="x", padx=self.px(8), pady=(0, self.px(6)))
             self.bar_hint("Escreva no campo ✉ o que quer (opcional) e escolha o que preparar")
-            self.root.after(5000, lambda: self.bar_hint(""))
+            self.root.after(5000, self.bar_hint, "")
         elif not show and visible:
             self.bar_prep.pack_forget()
         self.draw_suggestions()
@@ -1504,6 +1512,14 @@ class App:
 
     def run(self) -> None:
         self.root.mainloop()
+
+
+def alive(widget: Any) -> bool:
+    """A janela ainda existe? (mexer numa janela fechada derruba o callback do Tk)"""
+    try:
+        return widget is not None and bool(widget.winfo_exists())
+    except Exception:
+        return False
 
 
 def round_corners(widget: Any) -> None:
@@ -1656,6 +1672,7 @@ def autotest(out_path: str) -> int:
             app.root.after(400, step3)
 
         def step3() -> None:
+            result["vivas_no_fim"] = {"barra": alive(app.bar), "balao": alive(app.bubble), "sugestoes_barra": alive(app.bar_suggest)}
             shot("compacto")
             for w in app.result_windows:
                 w.destroy()
@@ -1665,8 +1682,23 @@ def autotest(out_path: str) -> int:
             result["ok"] = (result["janelas"] == 4 and not problems and result["protect_roundtrip"]
                             and result["link"] is not None)
             app.root.after(300, app.root.destroy)
+        def guarded(step: Callable[[], None]) -> Callable[[], None]:
+            def run() -> None:
+                try:
+                    step()
+                except Exception as err:                      # um erro no teste não pode travar o build
+                    import traceback
+                    problems.append(f"{step.__name__}: {type(err).__name__}: {err}")
+                    result["trace"] = traceback.format_exc()[-1500:]
+                    result["problemas"] = problems
+                    app.root.after(100, app.root.destroy)
+            run.__name__ = step.__name__
+            return run
+        step1, step2, step2b, step3 = guarded(step1), guarded(step2), guarded(step2b), guarded(step3)
         app.root.after(900, step1)
+        app.root.after(60000, lambda: (problems.append("tempo esgotado (60 s)"), app.root.destroy()))
         app.run()
+        result.setdefault("problemas", problems)
         try:
             os.remove(cfg_path)
         except OSError:
