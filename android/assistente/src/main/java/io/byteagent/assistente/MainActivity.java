@@ -75,6 +75,7 @@ public class MainActivity extends Activity {
     // ------------------------------------------------------------------ primeira vez: colar o link
     private void showSetup(String prefill) {
         web = null;
+        kronusButton = null;
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(dp(24), dp(48), dp(24), dp(24));
@@ -131,10 +132,22 @@ public class MainActivity extends Activity {
         setContentView(col);
     }
 
+    static final String KRONUS_APK = "https://github.com/DragonClaw121/byte-agent/releases/download/app-kronus/kronus.apk";
+
     private void connect(String raw) {
         String[] parts = Rede.parse(raw);
         if (parts == null) {
-            status.setText("Isso não parece o link do painel (precisa ter https://, /u/ e um # com o código).");
+            String text = raw == null ? "" : raw;
+            if (text.contains("/voz#parear=")) {                // link do /parear: é do app Kronus (o do dono)
+                status.setText("Esse link é do app KRONUS (o do dono do agente), não deste. O Meu Assistente é para convidados "
+                        + "e usa o link do /painel (com /u/ no meio).\n\nSe você é o dono: abra o app Kronus → aba ⚙️ Ajustes → "
+                        + "cole este mesmo link → Conectar. Não tem o Kronus instalado? Toque em \"Baixar o Kronus\".");
+                offerKronus();
+            } else if (text.contains("/pc/")) {
+                status.setText("Esse link é do Bit no PC (Windows): cole-o no BitPC.exe, no computador.");
+            } else {
+                status.setText("Isso não parece o link do painel (precisa ter https://, /u/ e um # com o código).");
+            }
             return;
         }
         status.setTextColor(Color.rgb(170, 178, 196));
@@ -161,6 +174,21 @@ public class MainActivity extends Activity {
                 status.setText(msg);
             });
         }).start();
+    }
+
+    private Button kronusButton;
+
+    private void offerKronus() {
+        if (kronusButton != null) return;
+        kronusButton = new Button(this);
+        kronusButton.setText("Baixar o Kronus");
+        kronusButton.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(KRONUS_APK)));
+            } catch (Exception ignored) {
+            }
+        });
+        ((LinearLayout) status.getParent()).addView(kronusButton);
     }
 
     // ------------------------------------------------------------------ o painel pessoal
