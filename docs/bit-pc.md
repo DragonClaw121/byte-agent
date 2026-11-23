@@ -4,11 +4,18 @@ O Bit ganha um app para Windows: os "olhos e mãos" dele no computador. O céreb
 conversa, memória, tarefas e e-mails do Telegram.
 
 ## Instalar e conectar
-1. Baixe o app: https://github.com/DragonClaw121/byte-agent/releases/download/app-bit-pc/BitPC.exe
-   O app não é assinado. Na primeira vez, o Windows pode mostrar "O Windows protegeu o computador": clique em
-   **Mais informações → Executar assim mesmo**. Em PC de empresa, a TI pode bloquear: peça a liberação.
-2. No Telegram, mande **`/pc`** para o Bit. Ele responde com um link `https://.../pc/bit#123456`, que vale 10
-   minutos e só uma vez.
+1. **Instalar (recomendado, v13.48):** abra o **PowerShell** (menu Iniciar → digite "PowerShell") e cole:
+   ```
+   irm https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/desktop/instalar.ps1 | iex
+   ```
+   Ele instala o Python **oficial** (python.org, só para o seu usuário, sem administrador), as bibliotecas e o app, e
+   cria o atalho **"Bit no PC"** no Menu Iniciar e na Área de Trabalho. Para atualizar, rode o mesmo comando de novo.
+   *Por que não o .exe?* O Chrome e o Windows marcam como "vírus" um .exe sem assinatura digital (falso positivo comum
+   em apps feitos com o PyInstaller). Pelo comando acima, nada desconhecido é baixado: o Python vem assinado pela Python
+   Software Foundation, e o script confere essa assinatura antes de instalar.
+   O `BitPC.exe` continua em Releases para quem preferir (pode ser bloqueado).
+2. **Conectar:** no **painel do Bit** (ou da Matrix), aba **⚡ Comandos** → **🔗 Gerar link de conexão**. No
+   Telegram, o equivalente é `/pc`. O link (`https://.../pc/bit#123456`) vale 10 minutos e só uma vez.
 3. Cole o link no app e clique em **Conectar**.
 
 O PC aparece em `/dispositivos`. Para desconectar: `/desparear <id>`, ou **Desconectar** no próprio app. O código de

@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.47"
+BYTE_VERSION = "13.48"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7521,11 +7521,48 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
   <div class="b90-tabs">
     <button class="b90-tab-btn active" id="b90-btn-tab-chat" onclick="window.b90Tab('b90-tab-chat', this)">💬 Chat Metacognitivo & Tool Calling</button>
     <button class="b90-tab-btn" id="b90-btn-tab-term" onclick="window.b90Tab('b90-tab-term', this)">🎮 Terminal & Player Pygame</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-cmds" onclick="window.b90Tab('b90-tab-cmds', this); window.b90LoadCommands()">⚡ Comandos</button>
     <button class="b90-tab-btn" id="b90-btn-tab-ctx" onclick="window.b90Tab('b90-tab-ctx', this)">🗓️ Agenda Assíncrona & Memórias</button>
     <button class="b90-tab-btn" id="b90-btn-tab-arena" onclick="window.b90Tab('b90-tab-arena', this)">🏆 Busca Universal de LLMs & Arena</button>
     <button class="b90-tab-btn" id="b90-btn-tab-conn" onclick="window.b90Tab('b90-tab-conn', this)">🌐 Conexão, Setup & VRAM</button>
     <button class="b90-tab-btn" id="b90-btn-tab-email" onclick="window.b90Tab('b90-tab-email', this)">✉️ Gmail & Outlook</button>
     <button class="b90-tab-btn" id="b90-btn-tab-work" style="display:none;" onclick="window.b90Tab('b90-tab-work', this)">📊 Trabalho</button>
+  </div>
+
+  <!-- v13.48: TODOS os comandos do Telegram deste agente, em botões (a Matrix tem todos os módulos) -->
+  <div id="b90-tab-cmds" class="b90-tab-content">
+    <div class="b90-grid-equal">
+      <div class="b90-card">
+        <h3>⚡ Comandos</h3>
+        <div style="color:var(--muted); font-size:0.76rem; margin-bottom:6px;">Os mesmos do Telegram, sem precisar abrir o
+          Telegram. Os que pedem um texto (🖊️) preenchem a caixa abaixo: complete e tecle Enter.</div>
+        <div style="display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;">
+          <input id="b90-cmd-input" class="b90-input" style="flex:1; min-width:220px;" placeholder="/comando ou o texto do comando"
+            onkeydown="if(event.key==='Enter')window.b90RunCommand()" />
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90RunCommand()">Executar</button>
+          <input id="b90-cmd-filter" class="b90-input" style="width:180px;" placeholder="🔎 filtrar botões" oninput="window.b90DrawCommands()" />
+        </div>
+        <div id="b90-cmd-list" style="max-height:520px; overflow:auto;"></div>
+      </div>
+      <div class="b90-card">
+        <div id="b90-pc-box">
+        <h3>💻 Bit no PC (Windows)</h3>
+        <div style="font-size:0.8rem; margin-bottom:6px;">1. Instale no PC (veja as opções abaixo). 2. Gere o link de conexão e
+          cole no app. O link vale 10 minutos.</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90RunCommand('/pc')">🔗 Gerar link de conexão</button>
+          <button class="b90-btn-sec" style="margin:0;" onclick="window.b90RunCommand('/dispositivos')">📋 Aparelhos conectados</button>
+        </div>
+        <div style="font-size:0.74rem; color:var(--muted);">Instalar: abra o <b>PowerShell</b> no PC e cole
+          <code id="b90-pc-install" style="user-select:all;">irm https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/desktop/instalar.ps1 | iex</code>
+          <button class="b90-btn-sec" style="margin:0 0 0 4px; padding:1px 8px;" onclick="navigator.clipboard.writeText(document.getElementById('b90-pc-install').textContent)">copiar</button>
+          (instala o Python oficial, sem precisar de administrador, e cria o atalho "Bit no PC").</div>
+        </div>
+        <h3 style="margin-top:14px;">Resultado</h3>
+        <div id="b90-cmd-out" style="max-height:460px; overflow:auto; font-size:0.82rem;">
+          <span id="b90-cmd-empty" style="color:var(--muted);">As respostas aparecem aqui (com os botões de aprovação, quando houver).</span></div>
+      </div>
+    </div>
   </div>
 
   <!-- ABA 7 (v11.0): TRABALHO — análise de dados, apresentações e triagem de e-mails -->
@@ -8701,6 +8738,69 @@ pygame.time.Clock().tick(60)</textarea>
         <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleRemove(${p.n})">🚫 Remover</button></span></div>`;
     }).join('') || '<span style="color:var(--muted);">Ninguém além de você usa este agente.</span>';
   }
+  // v13.48: comandos do Telegram no painel (mesmo catálogo e mesma ponte do app Android)
+  let b90Commands = null;
+  window.b90LoadCommands = async function(force) {
+    if (b90Commands && !force) { window.b90DrawCommands(); return; }
+    const res = await b90Call('app_commands', {}, true);
+    b90Commands = res.commands || [];
+    const pcBox = document.getElementById('b90-pc-box');
+    if (pcBox) pcBox.style.display = b90Commands.some(c => c.command === '/pc') ? '' : 'none';
+    if (res.error) document.getElementById('b90-cmd-list').innerHTML = '<span style="color:var(--muted);">⚠️ ' + b90EscapeHtml(res.error) + '</span>';
+    else window.b90DrawCommands();
+  };
+  window.b90DrawCommands = function() {
+    const box = document.getElementById('b90-cmd-list');
+    if (!box || !b90Commands) return;
+    const f = (document.getElementById('b90-cmd-filter').value || '').toLowerCase();
+    const groups = {};
+    b90Commands.filter(c => !f || (c.label + ' ' + c.command + ' ' + c.group).toLowerCase().includes(f))
+      .forEach(c => (groups[c.group] = groups[c.group] || []).push(c));
+    box.innerHTML = Object.keys(groups).map(g => `<div style="margin:6px 0 2px; font-size:0.7rem; text-transform:uppercase;
+      letter-spacing:0.05em; color:var(--muted);">${b90EscapeHtml(g)}</div><div style="display:flex; flex-wrap:wrap; gap:4px;">` +
+      groups[g].map((c, i) => `<button class="b90-btn-sec" style="margin:0;" title="${b90EscapeHtml(c.command + (c.ask ? ' — ' + c.ask : ''))}"
+        onclick='window.b90PickCommand(${JSON.stringify(c).replace(/'/g, "&#39;")})'>${b90EscapeHtml(c.label)}${c.ask ? ' 🖊️' : ''}</button>`).join('') +
+      '</div>').join('') || '<span style="color:var(--muted);">Nenhum comando com esse filtro.</span>';
+  };
+  window.b90PickCommand = function(c) {
+    const input = document.getElementById('b90-cmd-input');
+    if (c.ask) {
+      input.value = c.command + ' ';
+      input.placeholder = c.ask + (c.example ? ' — ex.: ' + c.example : '');
+      input.focus();
+      if (!c.required) window.b90RunCommand(c.command);
+      return;
+    }
+    window.b90RunCommand(c.command);
+  };
+  function b90Linkify(text) {
+    return b90EscapeHtml(text).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  }
+  function b90ShowCommandOutput(label, messages, error) {
+    const out = document.getElementById('b90-cmd-out');
+    const head = `<div style="margin-top:8px; color:var(--accent, #6d8cff); font-weight:600;">› ${b90EscapeHtml(label)}</div>`;
+    const body = error ? `<div class="b90-pre" style="white-space:pre-wrap;">⚠️ ${b90EscapeHtml(error)}</div>` :
+      (messages || []).map(m => `<div class="b90-pre" style="white-space:pre-wrap; margin-top:4px;">${b90Linkify(m.text || '')}` +
+        ((m.buttons || []).length ? '<div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:6px;">' + m.buttons.map(b =>
+          `<button class="b90-btn-pri" style="margin:0;" onclick='window.b90CommandButton(${JSON.stringify(b).replace(/'/g, "&#39;")}, this)'>${b90EscapeHtml(b.label)}</button>`).join('') + '</div>' : '') +
+        '</div>').join('') || '<div style="color:var(--muted);">(sem resposta)</div>';
+    const empty = document.getElementById('b90-cmd-empty');
+    if (empty) empty.remove();
+    out.innerHTML = head + body + out.innerHTML;
+  }
+  window.b90RunCommand = async function(cmd) {
+    const input = document.getElementById('b90-cmd-input');
+    const text = (cmd || input.value || '').trim();
+    if (!text) { input.focus(); return; }
+    if (!cmd) input.value = '';
+    const res = await b90Call('app_command', { text }, true);
+    b90ShowCommandOutput(text, res.messages, res.error);
+  };
+  window.b90CommandButton = async function(b, el) {
+    el.parentElement.querySelectorAll('button').forEach(x => x.disabled = true);
+    const res = await b90Call('app_command', { callback: b.data }, true);
+    b90ShowCommandOutput(b.label, res.messages, res.error);
+  };
   window.b90OpenVoice = function(ev) {            // v13.44: página de voz do Kronus, já conectada
     ev.preventDefault();
     let known = '';

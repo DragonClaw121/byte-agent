@@ -330,7 +330,8 @@ def app_link() -> str:
 def member_catalog(service: Any, papel: str = "membro") -> List[Dict[str, Any]]:
     from .app_comandos import catalog
     allowed = MEMBER_COMMANDS | (PEOPLE_COMMANDS if papel == "admin" else set())
-    out = [c for c in catalog(service) if c["command"].split()[0] in allowed and c["command"] != "/painel"]
+    out = [c for c in catalog(service) if c["command"].split()[0] in allowed and c["command"] != "/painel"
+           and not c["command"].startswith("/email ")]                 # caixas: aba ✉️ E-mail do painel pessoal
     out.append({"group": "Conta", "label": "📊 Meu uso de hoje", "command": "/eu", "ask": "", "example": "", "required": False})
     return out
 

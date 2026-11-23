@@ -26,6 +26,21 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content autoteste.json
           exit $code
+      - name: Instalador (Python oficial por usuário + app + atalhos) e autoteste do app instalado
+        shell: pwsh
+        env:
+          BITPC_ORIGEM: ${{ github.workspace }}\desktop
+          BITPC_NAO_ABRIR: "1"
+        run: |
+          & .\desktop\instalar.ps1
+          $py = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
+          if (-not (Test-Path $py)) { throw "Python não foi instalado" }
+          $lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Bit no PC.lnk"
+          if (-not (Test-Path $lnk)) { throw "Atalho não foi criado" }
+          & $py (Join-Path $env:LOCALAPPDATA "BitPC\bit_pc.py") --autoteste instalado.json
+          $code = $LASTEXITCODE
+          Get-Content instalado.json
+          exit $code
       - name: Gerar BitPC.exe
         run: pyinstaller --noconfirm --onefile --noconsole --name BitPC --icon desktop/bit.ico desktop/bit_pc.py
       - name: Autoteste do .exe
