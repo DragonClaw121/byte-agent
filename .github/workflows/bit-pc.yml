@@ -1,0 +1,44 @@
+name: bit-pc
+# Gera o app do Bit para Windows (BitPC.exe) num Windows de verdade, testa (captura de tela + janelas) e publica em
+# "Releases", sempre no mesmo endereço:
+# https://github.com/DragonClaw121/byte-agent/releases/download/app-bit-pc/BitPC.exe
+on:
+  push:
+    branches: [main]
+    paths: ["desktop/**", ".github/workflows/bit-pc.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependências
+        run: python -m pip install --disable-pip-version-check mss==9.0.2 pillow==11.0.0 pyinstaller==6.11.1
+      - name: Autoteste em Python (captura de tela, janelas, marcação e aviso)
+        shell: pwsh
+        run: |
+          python desktop/bit_pc.py --autoteste autoteste.json
+          $code = $LASTEXITCODE
+          Get-Content autoteste.json
+          exit $code
+      - name: Gerar BitPC.exe
+        run: pyinstaller --noconfirm --onefile --noconsole --name BitPC --icon desktop/bit.ico desktop/bit_pc.py
+      - name: Autoteste do .exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\BitPC.exe -ArgumentList "--autoteste","exe.json" -Wait -PassThru
+          Get-Content exe.json
+          exit $p.ExitCode
+      - name: Publicar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete app-bit-pc --yes --cleanup-tag || true
+          gh release create app-bit-pc dist/BitPC.exe --target "$GITHUB_SHA" --title "Bit no PC para Windows (build $GITHUB_RUN_NUMBER)" \
+            --notes "Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app."

@@ -54,6 +54,7 @@ CATALOG: List[tuple] = [
     ("Pessoas", "➕ Convidar pessoa", "/convidar", "Nome (e \"admin\" no fim para administrador)", "Ana", "obrigatorio"),
     ("Pessoas", "🖥️ Painel de uma pessoa", "/pessoas painel", "Número da pessoa", "1", "obrigatorio"),
     ("Pessoas", "🚫 Remover pessoa", "/remover", "Número da pessoa (e \"apagar\" para apagar os dados)", "1", "obrigatorio"),
+    ("Agente", "💻 Conectar o PC", "/pc", "", "", ""),
     ("Agente", "🔐 Permissões", "/permissoes", "", "", ""),
     ("Agente", "🤖 Atividade", "/atividade", "", "", ""),
     ("Agente", "⚡ Gatilhos", "/gatilhos", "", "", ""),

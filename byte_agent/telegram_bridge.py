@@ -59,6 +59,7 @@ HELP_TEXT = (
     "  Planilhas e documentos novos: é só pedir (\"monte uma planilha de orçamento\", \"escreva uma proposta para...\")\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
+    "💻 /pc — código para conectar o Bit no PC (Windows): conversa, 'olha minha tela' e ajuda ao vivo\n"
     "👥 /pessoas — quem mais usa este agente (cada um com espaço próprio) | /convidar <nome> [admin] — link de convite\n"
     "  /pessoas painel <n> — link do painel da pessoa | /limite <n> <msgs/dia> | /remover <n> [apagar]\n"
     "/limpar — limpa a janela de contexto da conversa\n"
@@ -910,6 +911,11 @@ class TelegramBridge:
             self.send(chat_id, f"📨 [{msg.get('ref')}] para {msg.get('account_address')}\nDe: {msg.get('from')}\nAssunto: {msg.get('subject')}\n"
                                f"Data: {msg.get('date')}" + (f" · {msg['attachments']} anexo(s)" if msg.get("attachments") else "")
                                + f"\n\n{msg.get('body') or '(sem texto)'}\n\nPara responder, diga: \"responda o {msg.get('ref')} dizendo que...\"")
+        elif cmd == "/pc":                                         # v13.47: código para conectar o app do PC
+            if "pc_pair_code" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "O app do PC não está disponível neste agente.")
+            else:
+                self.send(chat_id, str(self._dispatch("pc_pair_code").get("text") or ""))
         elif cmd in {"/pessoas", "/convidar", "/remover", "/limite"}:
             people = getattr(self.service, "people", None)        # v13.42: multiusuário
             self.send(chat_id, people.admin_command(None, cmd, arg) if people is not None

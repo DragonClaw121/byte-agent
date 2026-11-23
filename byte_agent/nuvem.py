@@ -578,11 +578,12 @@ class Supervisor:
         base = public_address(self.env)
         self.child_env["principal"]["BYTE_PAINEIS"] = json.dumps(
             {a: f"{base}/ui?token={tokens[a]}" for a in procs if a in SEPARATE_AGENTS})
-        paths = {"/u/matrix": 8765}                  # v13.42: painéis pessoais dos convidados de cada agente
+        paths = {"/u/matrix": 8765, "/pc/matrix": 8765}   # v13.42: painéis pessoais; v13.47: app do PC
         self.child_env["principal"]["BYTE_LINK_PESSOAS"] = f"{base}/u/matrix"
         for agent in procs:
             if agent in SEPARATE_AGENTS:
                 paths[f"/u/{agent}"] = SEPARATE_AGENTS[agent]
+                paths[f"/pc/{agent}"] = SEPARATE_AGENTS[agent]
                 self.child_env.setdefault(agent, {})["BYTE_LINK_PESSOAS"] = f"{base}/u/{agent}"
         try:
             self.router = PanelRouter("0.0.0.0", public_port(self.env), routes, KRONUS_INTERNAL_PORT, paths)

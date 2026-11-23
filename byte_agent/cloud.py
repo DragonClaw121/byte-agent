@@ -50,6 +50,10 @@ def _clean_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     pending_ids: List[str] = []
     for idx, msg in enumerate(messages):
         m = {k: v for k, v in msg.items() if k in _ALLOWED_KEYS}
+        if isinstance(m.get("content"), list):           # v13.47: texto + imagens (visão), formato da OpenAI
+            m["content"] = [p for p in m["content"] if isinstance(p, dict) and p.get("type") in ("text", "image_url")]
+            out.append(m)
+            continue
         m["content"] = "" if m.get("content") is None else str(m["content"])
         if m.get("role") == "assistant" and isinstance(m.get("tool_calls"), list):
             calls = []
