@@ -221,6 +221,21 @@ class TokenVault:
             self.path.write_bytes(self.fernet.encrypt(json.dumps(data).encode()))
 
 
+def is_private_host(host: str) -> bool:
+    """True se o nome resolve para localhost, rede privada, link-local ou reservado (ou não resolve)."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(str(host or ""), None)
+    except (OSError, UnicodeError):
+        return True
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------- uma conta
 @dataclass
 class Account:
@@ -283,8 +298,10 @@ class MailHub:
 
     def __init__(self, db: Any, read_secret: Callable[[Tuple[str, ...]], str], vault: TokenVault,
                  legacy: Any = None, getter: Callable[..., Tuple[int, bytes]] = _get,
-                 imap_factory: Optional[Callable[..., Any]] = None, smtp_factory: Optional[Callable[..., Any]] = None):
+                 imap_factory: Optional[Callable[..., Any]] = None, smtp_factory: Optional[Callable[..., Any]] = None,
+                 personal: bool = False):
         self.db, self.read_secret, self.vault, self.legacy, self.getter = db, read_secret, vault, legacy, getter
+        self.personal = personal          # v13.45: espaço de um convidado: sem contas nem segredos da nuvem (do dono)
         self.imap_factory = imap_factory or (lambda host, port: imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context(), timeout=15))
         self.smtp_factory = smtp_factory
         self.pending_logins: Dict[str, Dict[str, Any]] = {}
@@ -313,7 +330,7 @@ class MailHub:
         out: List[Account] = []
         taken: set = set()
         entries: List[Tuple[str, str, str]] = []           # (id pedido, endereço, origem)
-        for raw in re.split(r"[,;\n]", os.environ.get("BYTE_EMAIL_CONTAS", "")):
+        for raw in ([] if self.personal else re.split(r"[,;\n]", os.environ.get("BYTE_EMAIL_CONTAS", ""))):
             raw = raw.strip()
             if not raw:
                 continue
@@ -334,7 +351,7 @@ class MailHub:
             seen_addr.add(addr.lower())
             acc_id = wanted if ID_RE.match(wanted or "") and wanted not in taken else account_id_for(addr, taken)
             taken.add(acc_id)
-            names = (f"BYTE_EMAIL_SENHA_{acc_id.upper()}",)
+            names: Tuple[str, ...] = () if self.personal else (f"BYTE_EMAIL_SENHA_{acc_id.upper()}",)
             if origin.startswith("antiga:"):
                 names = names + tuple(legacy.secret_names(origin.split(":", 1)[1]))
             server = self._server_for(addr)
@@ -376,6 +393,7 @@ class MailHub:
         items = [i for i in (self.db.get_setting(self.SETTING_ACCOUNTS, []) or []) if str(i.get("address", "")).lower() != acc.address.lower()]
         self.db.set_setting(self.SETTING_ACCOUNTS, items)
         self.vault.drop(f"ms:{acc.address.lower()}")
+        self.vault.drop(f"pw:{acc.address.lower()}")
         return True
 
     def set_server(self, acc_id: str, imap: str, smtp: str) -> Account:
@@ -396,7 +414,22 @@ class MailHub:
         return self.get(acc.id)
 
     # ---------------- credenciais
+    def set_password(self, acc_id: str, password: str) -> Account:
+        """v13.45: senha (de app) digitada num formulário do painel, guardada CRIPTOGRAFADA no cofre (nunca no banco)."""
+        acc = self.get(acc_id)
+        password = str(password or "").strip()
+        if not password or len(password) > 512 or "\n" in password:
+            raise ValueError("Senha vazia ou inválida.")
+        if acc.auth == "microsoft":
+            raise ValueError("Contas Microsoft não usam senha: use o login pela Microsoft.")
+        self.vault.put(f"pw:{acc.address.lower()}", password)
+        self.db.record_audit("email_password_set", "caixas", "success", {"domain": acc.address.rsplit("@", 1)[-1]})
+        return acc
+
     def _password(self, acc: Account) -> str:
+        saved = self.vault.get(f"pw:{acc.address.lower()}")
+        if saved:
+            return saved
         if acc.origin == "antiga" and self.legacy is not None:
             prov = next((p for p, a in self.legacy.accounts.items() if a.get("address", "").lower() == acc.address.lower()), None)
             if prov and self.legacy.app_passwords.get(prov):
@@ -495,7 +528,13 @@ class MailHub:
         return False
 
     # ---------------- IMAP
+    def _guard(self, host: str) -> None:
+        """Convidado (v13.45) não aponta o servidor para a rede interna da nuvem (nem localhost)."""
+        if self.personal and is_private_host(host):
+            raise PermissionError(f"Servidor de e-mail não permitido: {host} (endereço interno).")
+
     def _imap(self, acc: Account) -> Any:
+        self._guard(acc.server["imap_host"])
         conn = self.imap_factory(acc.server["imap_host"], int(acc.server["imap_port"]))
         try:
             if acc.auth == "microsoft":
@@ -504,7 +543,9 @@ class MailHub:
             else:
                 password = self._password(acc)
                 if not password:
-                    raise PermissionError(f"Falta a senha da conta {acc.id}: segredo {acc.secret_names[0]} "
+                    where = (f"segredo {acc.secret_names[0]}" if acc.secret_names
+                             else "cadastre no seu painel, aba ✉️ E-mail")
+                    raise PermissionError(f"Falta a senha da conta {acc.id}: {where} "
                                           f"({PROVIDERS.get(acc.server.get('provider'), {}).get('ajuda', 'a senha da caixa')}).")
                 conn.login(acc.address, password)
         except imaplib.IMAP4.error as err:
@@ -630,6 +671,7 @@ class MailHub:
             msg["In-Reply-To"] = msg["References"] = reply_id
         msg.set_content(str(body).strip())
         host, port, mode = acc.server["smtp_host"], int(acc.server["smtp_port"]), acc.server["smtp_mode"]
+        self._guard(host)
         ctx = ssl.create_default_context()
         factory = self.smtp_factory or (lambda h, p, m: smtplib.SMTP_SSL(h, p, timeout=20, context=ctx) if m == "ssl"
                                         else smtplib.SMTP(h, p, timeout=20))
@@ -683,8 +725,10 @@ def format_status(st: Dict[str, Any]) -> str:
             state = "✅ pronta"
         elif a["auth"] == "microsoft":
             state = "🔑 falta o login da Microsoft: /email entrar " + a["id"] + (" (aguardando você)" if a["login_pending"] else "")
-        else:
+        elif a.get("secret"):
             state = f"🔑 falta a senha (segredo {a['secret']})"
+        else:
+            state = "🔑 falta a senha de app: cadastre no seu painel (/painel → ✉️ E-mail), nunca pelo chat"
         lines.append(f"• {a['id']} — {a['address']} · {a['provider']}\n  {state}"
                      + (f"\n  ⚠️ {a['last_error']}" if a.get("last_error") else ""))
     lines.append("Comandos: /email testar <id> · /email adicionar <endereço> · /email remover <id> · "
@@ -706,11 +750,14 @@ _NO_REPLY_RE = re.compile(r"(no-?reply|nao-?responda|naoresponder|mailer-daemon|
 EMAIL_INTENT_RE = re.compile(r"\b(e-?mails?|caixas? de entrada|inbox|mensage\w+ (?:de|do|da)|respond\w+|remetente)\b")
 
 
-def install(service: Any, data_dir: Path) -> MailHub:
+def install(service: Any, data_dir: Path, personal: bool = False) -> MailHub:
+    """personal=True (v13.45): caixas de um CONVIDADO. Não vê BYTE_EMAIL_CONTAS nem lê segredos da nuvem (são do dono);
+    só o id do aplicativo da Microsoft (BYTE_MS_CLIENT_ID, para o login) e a chave do cofre (BYTE_CHAVE_TOKENS)."""
     from . import engine as _engine
-    read = getattr(_engine, "_read_secret", None) or (lambda names: next((os.environ.get(n, "") for n in names if os.environ.get(n)), ""))
-    vault = TokenVault(Path(data_dir).expanduser() / "segredos" / "tokens-email.bin", read(("BYTE_CHAVE_TOKENS",)))
-    hub = MailHub(service.db, read, vault, legacy=getattr(service, "email_client", None))
+    owner_read = getattr(_engine, "_read_secret", None) or (lambda names: next((os.environ.get(n, "") for n in names if os.environ.get(n)), ""))
+    read = (lambda names: owner_read(names) if tuple(names) == ("BYTE_MS_CLIENT_ID",) else "") if personal else owner_read
+    vault = TokenVault(Path(data_dir).expanduser() / "segredos" / "tokens-email.bin", owner_read(("BYTE_CHAVE_TOKENS",)))
+    hub = MailHub(service.db, read, vault, legacy=None if personal else getattr(service, "email_client", None), personal=personal)
     hub.notify = lambda text: service.db.enqueue_proactive_message("email", text, brain_used="E-MAIL")
     service.mail_hub = hub
 
@@ -793,6 +840,8 @@ def install(service: Any, data_dir: Path) -> MailHub:
         "mail_add": lambda p: {"account": hub.add(str(p.get("address") or ""), str(p.get("id") or "")).public(),
                                "text": format_status(hub.status())},
         "mail_remove": lambda p: {"removed": hub.remove(str(p.get("id") or ""))},
+        "mail_password": lambda p: {"account": hub.set_password(str(p.get("id") or ""), str(p.get("password") or "")).public(),
+                                    "persistent": hub.vault.persistent},
         "mail_test": lambda p: {"text": hub.test(str(p.get("id") or ""))},
         "mail_login": lambda p: hub.start_microsoft_login(str(p.get("id") or "")),
         "mail_server": lambda p: {"account": hub.set_server(str(p.get("id") or ""), str(p.get("imap") or ""), str(p.get("smtp") or "")).public()},

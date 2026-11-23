@@ -39,8 +39,9 @@ MEMBER_COMMANDS = FREE_COMMANDS | {
     "/agenda", "/feito", "/tarefa", "/memorias", "/lembrar", "/rotina", "/lembrete", "/lembretes", "/cancelar",
     "/objetivo", "/objetivos", "/retomar", "/cancelar_objetivo", "/resumo", "/semana", "/ler", "/pesquisar",
     "/buscar", "/clima", "/onde", "/reunioes", "/ata", "/arquivos", "/modelos", "/analise", "/análise",
-    "/apresentacao", "/apresentação",
+    "/apresentacao", "/apresentação", "/email", "/caixa", "/abrir", "/triagem",       # v13.45: e-mail da própria pessoa
 }
+MAIL_TOOLS = {"email_listar", "email_ler", "email_responder", "email_contas"}      # liberadas quando o espaço tem caixas
 # Ferramentas que nunca existem no espaço de um convidado (são do dono ou perigosas para terceiros).
 BLOCKED_TOOLS = {"run_python", "run_shell", "email_inbox", "email_send", "email_triage", "email_listar", "email_ler",
                  "email_responder", "email_contas", "asana_my_tasks", "asana_create_task", "notion_search",
@@ -59,6 +60,7 @@ MEMBER_HELP = (
     "/resumo — resumo do dia | /resumo config | /resumo cidade <nome> | /semana\n"
     "/clima [cidade] | /buscar <termos> | /pesquisar <pergunta>\n"
     "📝 Reunião: mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
+    "✉️ Seu e-mail: /email (contas) · /caixa (não lidas) · /triagem — cadastre a conta no /painel, aba E-mail\n"
     "/painel — link do seu painel no navegador | /eu — seu uso de hoje | /limpar — limpa a conversa\n"
     "🎙️ Nota de voz também funciona. Qualquer outro texto é conversa."
 )
@@ -278,6 +280,10 @@ class MemberMixin:
         if cmd not in MEMBER_COMMANDS:
             self.send(chat_id, "Esse comando é só do dono do agente. Envie /ajuda para ver os seus.")  # type: ignore[attr-defined]
             return
+        if cmd == "/email" and arg.strip().lower().split()[:1] in (["senha"], ["adicionar"], ["servidor"]):
+            self.send(chat_id, "✉️ Contas, senhas de app e servidores são cadastrados no seu painel pessoal, aba ✉️ E-mail "   # type: ignore[attr-defined]
+                               "(a senha nunca passa pelo chat). " + self.people.panel_message(person, from_panel=isinstance(self, AppBridge)))
+            return
         if cmd not in FREE_COMMANDS and not self._spend(chat_id):
             return
         super()._handle_command(chat_id, text)                             # type: ignore[misc]
@@ -368,6 +374,9 @@ def build_space(owner: Any, person: Dict[str, Any], root: Path) -> Any:
     if "meeting_file" in getattr(owner, "extra_actions", {}):
         from . import reunioes
         reunioes.install(service, root)
+    if "email_listar" in getattr(owner, "extra_tools", {}):
+        from . import caixas
+        caixas.install(service, root, personal=True)             # v13.45: caixas da PESSOA (nada da nuvem do dono)
     manifest = getattr(owner, "agent_manifest", None) or engine.ACTIVE_AGENT
     if manifest:
         agents.apply_to_service(service, manifest)
@@ -381,10 +390,14 @@ def build_space(owner: Any, person: Dict[str, Any], root: Path) -> Any:
 
 def seal_space(service: Any, person: Dict[str, Any]) -> None:
     """Tira do espaço tudo o que é do dono e põe o nome da pessoa no prompt."""
-    service.disabled_tools = set(getattr(service, "disabled_tools", set())) | BLOCKED_TOOLS
-    for name in BLOCKED_TOOLS:
+    hub = getattr(service, "mail_hub", None)
+    personal_mail = hub is not None and getattr(hub, "personal", False)
+    blocked = BLOCKED_TOOLS - (MAIL_TOOLS if personal_mail else set())
+    service.disabled_tools = (set(getattr(service, "disabled_tools", set())) | blocked) - (MAIL_TOOLS if personal_mail else set())
+    for name in blocked:
         service.extra_tools.pop(name, None)
-    for name in [a for a in service.extra_actions if a in BLOCKED_ACTIONS or a.startswith("mail_")]:
+    for name in [a for a in service.extra_actions
+                 if a in BLOCKED_ACTIONS or (a.startswith("mail_") and not personal_mail)]:
         service.extra_actions.pop(name, None)
     service.proactive_engine.autonomous_mode_enabled = False       # sem bate-papo espontâneo; lembretes e rotinas seguem
     service.system_prompt = service.llm.system_prompt = member_prompt(person["nome"])
@@ -666,6 +679,46 @@ class People:
         if actor is not None and (person["papel"] == "admin" and person["n"] != actor["n"]):
             raise PermissionError("Admins só gerenciam membros.")
 
+    # ---- e-mail da pessoa (formulário do painel pessoal)
+    def _email_route(self, sp: "Space", method: str, body: Optional[Dict[str, Any]]) -> Tuple[int, Dict[str, Any]]:
+        hub = getattr(sp.service, "mail_hub", None)
+        if hub is None or not getattr(hub, "personal", False):
+            return 404, {"error": "E-mail não está disponível neste agente."}
+        if method == "GET":
+            return 200, dict(hub.status(), text=_mail_text(hub))
+        if body is None:
+            return 400, {"error": "Envie JSON."}
+        action = str(body.get("action") or "")
+        try:
+            if action == "add":
+                address = str(body.get("address") or "").strip()
+                acc = next((a for a in hub.accounts() if a.address.lower() == address.lower()), None) or hub.add(address)
+                text = f"✅ Conta {acc.id} ({acc.address}) adicionada."
+                if acc.auth == "microsoft":
+                    text += " Esta conta usa o login da Microsoft: toque em \"Entrar pela Microsoft\"."
+                elif body.get("password"):
+                    hub.set_password(acc.id, str(body.get("password")))
+                    text += " Senha guardada " + ("criptografada." if hub.vault.persistent else
+                                                  "só até a nuvem reiniciar (o dono precisa configurar BYTE_CHAVE_TOKENS).")
+                    text += "\n" + hub.test(acc.id)
+                return 200, {"text": text, "accounts": hub.status()["accounts"]}
+            if action == "password":
+                acc = hub.set_password(str(body.get("id") or ""), str(body.get("password") or ""))
+                return 200, {"text": f"🔑 Senha da conta {acc.id} atualizada.\n" + hub.test(acc.id),
+                             "accounts": hub.status()["accounts"]}
+            if action == "test":
+                return 200, {"text": hub.test(str(body.get("id") or "")), "accounts": hub.status()["accounts"]}
+            if action == "login":
+                res = hub.start_microsoft_login(str(body.get("id") or ""))
+                return 200, {"text": res.get("text") or "", "accounts": hub.status()["accounts"]}
+            if action == "remove":
+                hub.remove(str(body.get("id") or ""))
+                return 200, {"text": "Conta removida (a senha e o login guardados também).", "accounts": hub.status()["accounts"]}
+        except Exception as err:                        # servidor fora do ar, senha errada...: vira mensagem, não erro 500
+            return 200, {"error": re.sub(r"^\w*Error: ", "", str(err))[:300] or type(err).__name__,
+                         "accounts": hub.status()["accounts"]}
+        return 400, {"error": "Ação desconhecida."}
+
     # ---- painel pessoal (/u/<agente>)
     def route(self, h: Any, method: str, path: str, query: str) -> None:
         parts = path.strip("/").split("/")                     # ["u", "<agente>", "api", "..."]
@@ -694,6 +747,8 @@ class People:
         if sub == "api/eu" and method == "GET":
             h._send_json(200, {"nome": person["nome"], "papel": person["papel"], "agente": engine.AGENT_NAME,
                                "uso": self.directory.used(person["n"]), "limite": person["limite"]})
+        elif sub == "api/email":
+            h._send_json(*self._email_route(sp, method, h._read_json() if method == "POST" else {}))
         elif sub == "api/commands" and method == "GET":
             h._send_json(200, {"commands": member_catalog(sp.service, person["papel"])})
         elif sub == "api/command" and method == "POST":
@@ -705,6 +760,11 @@ class People:
             h._send_json(200, {"messages": msgs})
         else:
             h._send_json(404, {"error": "Rota desconhecida"})
+
+
+def _mail_text(hub: Any) -> str:
+    from .caixas import format_status
+    return format_status(hub.status())
 
 
 def install(service: Any, data_dir: Path, autoload: bool = True) -> People:

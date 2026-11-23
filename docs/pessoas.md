@@ -83,9 +83,27 @@ um limite de mensagens por dia:
 | Dono | `/pessoas` · `/convidar <nome> [admin]` · `/pessoas painel <n>` · `/pessoas convite <n>` · `/limite <n> <msgs>` · `/remover <n> [apagar]` |
 | Convidado | `/ajuda` · `/agenda` · `/tarefa` · `/feito` · `/lembrete` · `/lembretes` · `/cancelar` · `/rotina` · `/memorias` · `/lembrar` · `/objetivo` · `/objetivos` · `/resumo` · `/semana` · `/clima` · `/onde` · `/buscar` · `/pesquisar` · `/reunioes` · `/ata` · `/painel` · `/eu` · `/limpar`, além de notas de voz e áudios de reunião com a legenda "ata". No Bit, também `/arquivos`, `/analise`, `/apresentacao` e `/modelos` |
 
+## E-mail de cada pessoa (v13.45)
+
+No Bit e na Matrix, cada convidado pode ligar as **próprias** caixas de e-mail. Elas ficam no espaço dele, separadas
+das suas:
+
+- **Onde:** painel pessoal → aba **✉️ E-mail** → endereço + senha de app → **Adicionar e testar**.
+- **Gmail, Yahoo e iCloud:** precisam de **senha de app** (no Gmail: myaccount.google.com/apppasswords, com a
+  verificação em 2 etapas ligada).
+- **E-mail da empresa (qualquer domínio):** a senha da caixa ou a senha de app, conforme o provedor.
+- **Outlook, Hotmail e Microsoft 365:** sem senha; botão **Entrar pela Microsoft** (usa o mesmo aplicativo da
+  Microsoft que você já configurou, `BYTE_MS_CLIENT_ID`). Contas de empresa podem precisar da aprovação da TI.
+- **Segurança:** a senha nunca passa pelo chat (`/email senha ...` é recusado) e fica **criptografada** no espaço da
+  pessoa com a chave `BYTE_CHAVE_TOKENS`. Sem essa chave, a senha vale só até a nuvem reiniciar.
+- **O que o convidado não vê:** as suas contas (`BYTE_EMAIL_CONTAS`) e as suas senhas. O servidor de e-mail também não
+  pode apontar para endereços internos da nuvem.
+- **Comandos do convidado:** `/email`, `/caixa`, `/abrir`, `/triagem`. As respostas continuam com o cartão de
+  aprovação, que a própria pessoa aprova.
+
 ## O que ainda não existe (próximos passos)
 
-- O convidado ainda **não conecta** o próprio e-mail, Outlook ou Google.
+- O convidado ainda não conecta o próprio **Google Agenda/Drive** nem a **agenda do Outlook** (só o e-mail).
 - O app Android continua só do dono. Os convidados usam o Telegram ou o painel pessoal.
 - Cada espaço é um agente completo rodando junto do seu. Isso funciona bem para dezenas de pessoas. Para centenas de
   usuários (uma empresa grande), o próximo passo é carregar o espaço só quando a pessoa usa e separar a cobrança por

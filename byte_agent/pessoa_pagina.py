@@ -26,10 +26,18 @@ header { padding:14px 0 8px; display:flex; align-items:baseline; gap:10px; flex-
 header h1 { font-size:1.15rem; margin:0; }
 header .sub { color:var(--muted); font-size:0.85rem; }
 nav { display:flex; gap:6px; margin-bottom:8px; }
-nav button { flex:1; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:10px; padding:8px;
+nav button { flex:1; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:10px; padding:8px 4px; white-space:nowrap; font-size:0.9rem;
   font:inherit; cursor:pointer; }
 nav button.on { background:var(--pri); color:var(--pri-ink); border-color:var(--pri); }
-#chat, #cmds { flex:1; overflow-y:auto; padding:4px 0 12px; }
+#chat, #cmds, #mail { flex:1; overflow-y:auto; padding:4px 0 12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
+.card h3 { margin:0 0 6px; font-size:0.95rem; }
+.field { display:block; width:100%; border:1px solid var(--line); border-radius:10px; padding:9px 10px; font:inherit;
+  color:var(--ink); background:var(--bg); margin:6px 0; }
+.row { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.pri { border:0; background:var(--pri); color:var(--pri-ink); border-radius:10px; padding:9px 14px; font:inherit; cursor:pointer; }
+.small { color:var(--muted); font-size:0.82rem; }
+.out { white-space:pre-wrap; margin-top:8px; }
 .msg { max-width:88%; padding:9px 12px; border-radius:14px; margin:6px 0; white-space:pre-wrap; word-wrap:break-word;
   border:1px solid var(--line); }
 .me { margin-left:auto; background:var(--me); border-bottom-right-radius:4px; }
@@ -49,9 +57,22 @@ form button { border:0; background:var(--pri); color:var(--pri-ink); border-radi
 </style></head>
 <body><div class="wrap">
 <header><h1 id="title">__TITLE__</h1><span class="sub" id="who">conectando…</span></header>
-<nav><button id="t-chat" class="on" onclick="tab('chat')">💬 Conversa</button><button id="t-cmds" onclick="tab('cmds')">⚡ Comandos</button></nav>
+<nav><button id="t-chat" class="on" onclick="tab('chat')">💬 Conversa</button><button id="t-cmds" onclick="tab('cmds')">⚡ Comandos</button><button id="t-mail" class="hidden" onclick="tab('mail')">✉️ E-mail</button></nav>
 <div id="chat"><p class="note">Seu espaço pessoal: o que você conversa aqui é só seu.</p></div>
 <div id="cmds" class="hidden"></div>
+<div id="mail" class="hidden">
+  <div id="mail-list"></div>
+  <div class="card">
+    <h3>Adicionar uma conta</h3>
+    <div class="small">Qualquer domínio (Gmail, Yahoo, iCloud, e-mail da empresa). Gmail, Yahoo e iCloud pedem uma <b>senha de app</b>
+      (Gmail: myaccount.google.com/apppasswords, com verificação em 2 etapas ligada). Outlook, Hotmail e Microsoft 365 não usam
+      senha: depois de adicionar, toque em "Entrar pela Microsoft". A senha fica criptografada no seu espaço e nunca passa pelo chat.</div>
+    <input id="m-addr" class="field" type="email" autocomplete="off" placeholder="voce@exemplo.com">
+    <input id="m-pass" class="field" type="password" autocomplete="new-password" placeholder="Senha de app (deixe vazio para Microsoft)">
+    <div class="row"><button class="pri" type="button" onclick="addMail()">Adicionar e testar</button></div>
+    <div id="m-out" class="out small"></div>
+  </div>
+</div>
 <form id="f" onsubmit="return enviar(event)"><textarea id="t" rows="1" placeholder="Escreva uma mensagem…"
   onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();enviar(event);}"></textarea><button>Enviar</button></form>
 </div>
@@ -68,8 +89,48 @@ if (location.hash.length > 20) {
 }
 const $ = id => document.getElementById(id);
 function tab(name) {
-  $('chat').classList.toggle('hidden', name !== 'chat'); $('cmds').classList.toggle('hidden', name !== 'cmds');
-  $('t-chat').classList.toggle('on', name === 'chat'); $('t-cmds').classList.toggle('on', name === 'cmds');
+  ['chat', 'cmds', 'mail'].forEach(n => { $(n).classList.toggle('hidden', n !== name); $('t-' + n).classList.toggle('on', n === name); });
+  $('f').classList.toggle('hidden', name === 'mail');
+  if (name === 'mail') loadMail();
+}
+function mailOut(res) {
+  $('m-out').textContent = res.error ? '⚠️ ' + res.error : (res.text || '');
+  if (res.accounts) drawMail(res.accounts);
+}
+function drawMail(accounts) {
+  const box = $('mail-list'); box.innerHTML = '';
+  if (!accounts.length) { box.innerHTML = '<p class="note">Nenhuma conta ainda. Adicione abaixo.</p>'; return; }
+  accounts.forEach(a => {
+    const c = document.createElement('div'); c.className = 'card';
+    const h = document.createElement('h3'); h.textContent = (a.ready ? '✅ ' : '🔑 ') + a.address; c.appendChild(h);
+    const p = document.createElement('div'); p.className = 'small';
+    p.textContent = (a.provider || '') + ' · ' + (a.ready ? 'pronta' : (a.auth === 'microsoft' ? 'falta entrar pela Microsoft' : 'falta a senha de app'))
+      + (a.last_error ? ' · ⚠️ ' + a.last_error : '');
+    c.appendChild(p);
+    const row = document.createElement('div'); row.className = 'row';
+    const btn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = label; b.onclick = fn; row.appendChild(b); };
+    if (a.auth === 'microsoft') btn('Entrar pela Microsoft', async () => mailOut(await api('email', { action: 'login', id: a.id })));
+    else btn('Trocar senha', async () => {
+      const pw = prompt('Nova senha de app para ' + a.address + ':'); if (!pw) return;
+      mailOut(await api('email', { action: 'password', id: a.id, password: pw }));
+    });
+    btn('Testar', async () => { $('m-out').textContent = 'Testando…'; mailOut(await api('email', { action: 'test', id: a.id })); });
+    btn('Remover', async () => { if (confirm('Remover ' + a.address + ' do seu espaço?')) mailOut(await api('email', { action: 'remove', id: a.id })); });
+    c.appendChild(row); box.appendChild(c);
+  });
+}
+async function loadMail() {
+  const res = await api('email');
+  if (!res.error) drawMail(res.accounts || []);
+}
+async function addMail() {
+  const address = $('m-addr').value.trim(), password = $('m-pass').value;
+  if (!address) { $('m-addr').focus(); return; }
+  $('m-out').textContent = 'Adicionando e testando…';
+  const res = await api('email', { action: 'add', address, password });
+  $('m-pass').value = '';
+  if (!res.error) $('m-addr').value = '';
+  mailOut(res);
 }
 async function api(path, body) {
   const r = await fetch(BASE + '/api/' + path, { method: body ? 'POST' : 'GET',
@@ -117,6 +178,7 @@ async function carregar() {
   document.title = AGENT + ' · ' + eu.nome;
   hist.forEach(h => bubble(h[0], !!h[1]));
   $('who').textContent = eu.nome.split(' ')[0] + ' · hoje ' + eu.uso + '/' + eu.limite + ' mensagens';
+  api('email').then(m => { if (!m.error) $('t-mail').classList.remove('hidden'); });
   const c = await api('commands');
   const groups = {};
   (c.commands || []).forEach(x => (groups[x.group] = groups[x.group] || []).push(x));

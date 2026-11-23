@@ -95,7 +95,7 @@ def test_guest_joins_by_link_and_gets_an_isolated_space(world):
     step(bridge, tg)
     assert "Comprar pão" in said(tg, ANA)[-1] and "condomínio" not in said(tg, ANA)[-1]
 
-    tg.text(5, ANA, "/email")                                     # coisas do dono ficam de fora
+    tg.text(5, ANA, "/modelo")                                    # coisas do dono ficam de fora
     tg.text(6, ANA, "/pessoas")
     tg.text(7, ANA, "/atualizar")
     step(bridge, tg)
@@ -204,7 +204,7 @@ def test_personal_panel_page_and_api(world):
     h = FakeHandler(token)
     people.route(h, "GET", "/u/matrix/api/commands", "")
     names = {c["command"] for c in h.out[1]["commands"]}
-    assert {"/tarefa", "/agenda", "/eu"} <= names and not names & {"/email", "/atualizar", "/pessoas", "/saude"}
+    assert {"/tarefa", "/agenda", "/eu", "/caixa"} <= names and not names & {"/modelo", "/atualizar", "/pessoas", "/saude"}
     h = FakeHandler(token, {"text": "/tarefa Estudar inglês"})
     people.route(h, "POST", "/u/matrix/api/command", "")
     assert h.out[0] == 200 and "Estudar inglês" in h.out[1]["messages"][0]["text"]
@@ -271,3 +271,63 @@ def test_each_guest_has_its_own_queue(tmp_path):
         fake.httpd.shutdown()
         tg.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+# ---------------------------------------------------------------- e-mail de cada convidado (v13.45)
+def test_guest_email_is_their_own_and_never_reads_the_owner_secrets(world, monkeypatch):
+    import test_caixas as tc
+    from byte_agent import caixas
+    svc, bridge, tg, _ = world
+    monkeypatch.setenv("BYTE_EMAIL_CONTAS", "dono@gmail.com")
+    monkeypatch.setenv("BYTE_EMAIL_SENHA_GMAIL", "senha-do-dono")
+    monkeypatch.setenv("BYTE_CHAVE_TOKENS", "chave-teste-cofre")
+    monkeypatch.setattr(caixas, "is_private_host", lambda host: False)
+    monkeypatch.setitem(tc.PASSWORDS, "ana@gmail.com", "app-da-ana")
+    tc.FakeIMAP.boxes = {"ana@gmail.com": [{"uid": 1, "seen": False, "raw": tc.raw("Loja <a@loja.com>", "Pedido enviado", "Chegou", "<x@y>")}],
+                         "dono@gmail.com": [{"uid": 9, "seen": False, "raw": tc.raw("Banco <b@banco.com>", "Extrato do dono", "...", "<z@y>")}]}
+    assert [a.address for a in svc.mail_hub.accounts()] == ["dono@gmail.com"]
+
+    code, _ = invite(svc)
+    tg.text(1, ANA, f"/start {code}")
+    step(bridge, tg)
+    person = svc.people.directory.by_chat(ANA)
+    sp = svc.people.space(person)
+    hub = sp.service.mail_hub
+    hub.getter, hub.imap_factory, hub.smtp_factory = tc.FakeNet(), tc.FakeIMAP, tc.FakeSMTP
+    assert hub.personal and hub.accounts() == []                          # não vê a conta do dono
+    assert hub.read_secret(("BYTE_EMAIL_SENHA_GMAIL",)) == ""            # nem os segredos da nuvem
+    assert "email_listar" not in sp.service.disabled_tools and "email_listar" in sp.service.extra_tools
+    assert "run_python" in sp.service.disabled_tools
+
+    tg.text(2, ANA, "/email senha gmail app-da-ana")                      # senha pelo chat: recusada
+    step(bridge, tg)
+    assert "nunca passa pelo chat" in said(tg, ANA)[-1]
+    assert not hub.accounts()
+
+    token = svc.people.panel_link(person).split("#")[1]
+    h = FakeHandler(token, {"action": "add", "address": "ana@gmail.com", "password": "app-da-ana"})
+    svc.people.route(h, "POST", "/u/matrix/api/email", "")
+    assert h.out[0] == 200 and "criptografada" in h.out[1]["text"] and "login ok, 1 não lida" in h.out[1]["text"]
+    vault_file = svc.people.root / str(person["n"]) / "segredos" / "tokens-email.bin"
+    assert vault_file.is_file() and b"app-da-ana" not in vault_file.read_bytes()
+    assert not (svc.people.root / str(person["n"])).joinpath("database", "byte.db").read_bytes().count(b"app-da-ana")
+    h = FakeHandler(token)
+    svc.people.route(h, "GET", "/u/matrix/api/email", "")
+    assert [a["address"] for a in h.out[1]["accounts"]] == ["ana@gmail.com"] and h.out[1]["accounts"][0]["ready"]
+
+    tg.text(3, ANA, "/caixa")
+    step(bridge, tg)
+    assert "Pedido enviado" in said(tg, ANA)[-1] and "Extrato do dono" not in said(tg, ANA)[-1]
+    h = FakeHandler(token, {"action": "remove", "id": "gmail"})
+    svc.people.route(h, "POST", "/u/matrix/api/email", "")
+    assert h.out[1]["accounts"] == [] and hub._password(caixas.Account("gmail", "ana@gmail.com", {})) == ""
+
+
+def test_guest_cannot_point_mail_to_internal_hosts(tmp_path):
+    from byte_agent import caixas
+    assert caixas.is_private_host("127.0.0.1") and caixas.is_private_host("10.0.0.5") and caixas.is_private_host("nao-existe.invalid")
+    db = engine.UnifiedDatabase(tmp_path / "b.db", engine.VectorEngine())
+    hub = caixas.MailHub(db, lambda names: "", caixas.TokenVault(tmp_path / "v.bin", ""), personal=True)
+    acc = caixas.Account("x", "x@ex.com", {"imap_host": "127.0.0.1", "imap_port": 993})
+    with pytest.raises(PermissionError, match="interno"):
+        hub._imap(acc)
