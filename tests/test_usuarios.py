@@ -331,3 +331,21 @@ def test_guest_cannot_point_mail_to_internal_hosts(tmp_path):
     acc = caixas.Account("x", "x@ex.com", {"imap_host": "127.0.0.1", "imap_port": 993})
     with pytest.raises(PermissionError, match="interno"):
         hub._imap(acc)
+
+
+def test_guest_app_route_delivers_notifications_once(world, monkeypatch):
+    """v13.46: o app "Meu Assistente" busca os avisos do espaço da pessoa (sem os cartões em JSON)."""
+    svc, _, _, _ = world
+    monkeypatch.setenv("BYTE_GITHUB_REPO", "dono/repo")
+    person, _ = svc.people.directory.add("Ana")
+    msg = svc.people.panel_message(person)
+    assert "releases/download/app-assistente/assistente.apk" in msg
+    token = msg.split("#")[1].split()[0]
+    sp = svc.people.space(person)
+    sp.service.db.enqueue_proactive_message("reminder", "⏰ Lembrete: Tomar água", brain_used="AGENDADOR")
+    h = FakeHandler(token)
+    svc.people.route(h, "GET", "/u/matrix/api/avisos", "")
+    assert h.out == (200, {"avisos": [{"type": "reminder", "text": "⏰ Lembrete: Tomar água"}]})
+    h = FakeHandler(token)
+    svc.people.route(h, "GET", "/u/matrix/api/avisos", "")
+    assert h.out[1]["avisos"] == []

@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+// "Meu Assistente": o app de quem foi CONVIDADO para um agente (Matrix, Bit ou Kronus) — v13.46.
+// Entra com o link do painel pessoal (/u/<agente>#<código>), mostra a conversa e os comandos e avisa por notificação.
+def runNumber = Integer.parseInt(System.getenv('GITHUB_RUN_NUMBER') ?: '1')
+
+android {
+    namespace 'io.byteagent.assistente'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'io.byteagent.assistente'
+        minSdk 26
+        targetSdk 35
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    // Mesma chave do app do Kronus (segredos do GitHub; veja android/app/build.gradle).
+    def novaChave = rootProject.file('app/kronus.p12')
+    def senha = System.getenv('KRONUS_KEYSTORE_SENHA') ?: ''
+    signingConfigs {
+        assinatura {
+            if (novaChave.exists() && !senha.isEmpty()) {
+                storeFile novaChave
+                storeType 'pkcs12'
+                storePassword senha
+                keyAlias 'kronus'
+                keyPassword senha
+            } else {
+                storeFile rootProject.file('app/kronus-debug.keystore')
+                storePassword 'android'
+                keyAlias 'kronus'
+                keyPassword 'android'
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.assinatura
+        }
+        debug {
+            signingConfig signingConfigs.assinatura
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

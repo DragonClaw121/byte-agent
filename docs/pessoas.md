@@ -50,6 +50,19 @@ enviado em nenhum pedido ao servidor: a página o guarda no aparelho e tira da b
 Para um endereço ainda mais simples (`https://assistente.suaempresa.com.br/u/bit`), veja
 "Domínio próprio" em [azure-conteiner.md](azure-conteiner.md).
 
+## App "Meu Assistente" para Android (v13.46)
+
+É um app sem a marca do Kronus, para quem foi convidado: https://github.com/DragonClaw121/byte-agent/releases/download/app-assistente/assistente.apk
+
+1. A pessoa instala o APK. O Android pede para permitir "instalar de fontes desconhecidas".
+2. Abre o app e cola o link do painel pessoal. Ela recebe o link com `/painel`, que já vem com o link do app.
+   Também dá para usar **Compartilhar → Meu Assistente** no link.
+3. Pronto. O app mostra o painel dela (conversa, comandos e e-mail) e entrega os avisos como notificação:
+   lembretes, resumos, atas e e-mails. Ele consulta o servidor a cada minuto.
+
+No menu **⋯** dá para desligar as notificações ou trocar o link. Se o link for trocado ou o acesso removido, o app
+avisa e pede o link novo.
+
 ## Papéis
 
 - **membro** (padrão): usa o próprio espaço.
@@ -104,7 +117,6 @@ das suas:
 ## O que ainda não existe (próximos passos)
 
 - O convidado ainda não conecta o próprio **Google Agenda/Drive** nem a **agenda do Outlook** (só o e-mail).
-- O app Android continua só do dono. Os convidados usam o Telegram ou o painel pessoal.
 - Cada espaço é um agente completo rodando junto do seu. Isso funciona bem para dezenas de pessoas. Para centenas de
   usuários (uma empresa grande), o próximo passo é carregar o espaço só quando a pessoa usa e separar a cobrança por
   pessoa.

@@ -1,6 +1,7 @@
 name: app-android
-# Compila o app Android do Kronus e publica o APK em "Releases" (tag app-kronus), sempre no mesmo endereço:
-# https://github.com/DragonClaw121/byte-agent/releases/download/app-kronus/kronus.apk
+# Compila os apps Android e publica em "Releases", sempre nos mesmos endereços:
+# Kronus (o seu):          https://github.com/DragonClaw121/byte-agent/releases/download/app-kronus/kronus.apk
+# Meu Assistente (para convidados, v13.46): .../releases/download/app-assistente/assistente.apk
 on:
   push:
     branches: [main]
@@ -45,3 +46,7 @@ jobs:
           gh release delete app-kronus --yes --cleanup-tag || true
           gh release create app-kronus kronus.apk --target "$GITHUB_SHA" --title "App Kronus para Android (build $GITHUB_RUN_NUMBER)" \
             --notes "Baixe kronus.apk no celular e instale (permita instalar de fontes desconhecidas). Cada build novo atualiza o app por cima."
+          cp android/assistente/build/outputs/apk/release/assistente-release.apk assistente.apk
+          gh release delete app-assistente --yes --cleanup-tag || true
+          gh release create app-assistente assistente.apk --target "$GITHUB_SHA" --title "App Meu Assistente para Android (build $GITHUB_RUN_NUMBER)" \
+            --notes "App para quem foi convidado para um agente. Instale, abra e cole o link do seu painel pessoal (peça /painel)."

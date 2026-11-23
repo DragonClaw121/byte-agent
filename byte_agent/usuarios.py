@@ -318,6 +318,15 @@ class MemberApp(MemberMixin, AppBridge):
         self.people, self.person_n = people, person_n
 
 
+def app_link() -> str:
+    """APK do app para convidados, publicado pelo GitHub (BYTE_GITHUB_REPO) ou BYTE_APP_CONVIDADO_URL."""
+    url = os.environ.get("BYTE_APP_CONVIDADO_URL", "").strip()
+    repo = os.environ.get("BYTE_GITHUB_REPO", "").strip()
+    if not url and re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        url = f"https://github.com/{repo}/releases/download/app-assistente/assistente.apk"
+    return url
+
+
 def member_catalog(service: Any, papel: str = "membro") -> List[Dict[str, Any]]:
     from .app_comandos import catalog
     allowed = MEMBER_COMMANDS | (PEOPLE_COMMANDS if papel == "admin" else set())
@@ -578,7 +587,10 @@ class People:
     def panel_message(self, person: Dict[str, Any], from_panel: bool = False) -> str:
         if from_panel:
             return "Você já está no seu painel. Para abrir em outro aparelho, peça /painel no Telegram (o link antigo deixa de valer)."
-        return ("🖥️ Seu painel pessoal (conversa e comandos em botões):\n" + self.panel_link(person) +
+        app = app_link()
+        return ("🖥️ Seu painel pessoal (conversa, comandos em botões e e-mail):\n" + self.panel_link(person) +
+                (f"\n\n📱 No Android, instale o app \"Meu Assistente\" ({app}), abra e cole o link acima: os avisos "
+                 "chegam como notificação." if app else "") +
                 "\n\nÉ só seu: não compartilhe. Pedir /painel de novo gera outro link e desliga o anterior.")
 
     def describe_usage(self, person: Dict[str, Any]) -> str:
@@ -747,6 +759,11 @@ class People:
         if sub == "api/eu" and method == "GET":
             h._send_json(200, {"nome": person["nome"], "papel": person["papel"], "agente": engine.AGENT_NAME,
                                "uso": self.directory.used(person["n"]), "limite": person["limite"]})
+        elif sub == "api/avisos" and method == "GET":         # v13.46: app "Meu Assistente" (notificações)
+            from .telegram_bridge import EMAIL_CARD_RE
+            items = sp.service.db.pop_undelivered_proactive_messages("app")
+            h._send_json(200, {"avisos": [{"type": i["trigger_type"], "text": EMAIL_CARD_RE.sub("", str(i["message"])).strip()}
+                                          for i in items]})
         elif sub == "api/email":
             h._send_json(*self._email_route(sp, method, h._read_json() if method == "POST" else {}))
         elif sub == "api/commands" and method == "GET":
