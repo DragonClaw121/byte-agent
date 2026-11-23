@@ -46,34 +46,66 @@ if iops or bw:
 '
 fi
 
-say "Custo do armazenamento nos últimos 30 dias, por item (pode demorar; em alguns tipos de assinatura não aparece)"
+say "Discos e snapshots na assinatura inteira (sobras de máquinas virtuais cobram como 'Armazenamento')"
+az disk list --query "[].{disco:name, grupo:resourceGroup, GiB:diskSizeGb, tipo:sku.name, estado:diskState}" -o table 2>/dev/null \
+  || echo "  (não consegui listar os discos)"
+az snapshot list --query "[].{snapshot:name, grupo:resourceGroup, GiB:diskSizeGb, tipo:sku.name}" -o table 2>/dev/null
+SOLTOS="$(az disk list --query "[?diskState=='Unattached'].id" -o tsv 2>/dev/null)"
+if [ -n "$SOLTOS" ]; then
+  echo
+  echo "  ⚠️  Há disco(s) SOLTO(S) (estado Unattached: não estão ligados a nenhuma máquina, mas são cobrados)."
+  echo "  Se forem sobras das tentativas de máquina virtual, apague com (um por linha; não tem volta):"
+  for id in $SOLTOS; do echo "    az disk delete --ids $id --yes"; done
+fi
+
+say "Contas de armazenamento na assinatura"
+az storage account list --query "[].{conta:name, grupo:resourceGroup, tipo:kind, sku:sku.name}" -o table 2>/dev/null
+
+say "Custo dos últimos 30 dias por recurso (pode demorar; em alguns tipos de assinatura não aparece)"
 START="$(date -u -d '30 days ago' +%Y-%m-%d)"; END="$(date -u +%Y-%m-%d)"
 az consumption usage list --start-date "$START" --end-date "$END" --include-meter-details -o json 2>/dev/null \
-| SA="$SA" python3 -c '
-import json, os, sys, collections
+| python3 -c '
+import json, sys, collections
 try:
     rows = json.load(sys.stdin)
 except Exception:
-    print("  (a Azure não devolveu o detalhamento: veja em Gerenciamento de Custos > Análise de custo, agrupado por Medidor)")
+    print("  (a Azure não devolveu o detalhamento: veja em Gerenciamento de Custos > Análise de custo, agrupado por Recurso)")
     sys.exit(0)
-sa = os.environ["SA"].lower()
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+def first(r, *keys):
+    for k in keys:
+        v = r.get(k)
+        if v not in (None, "", "None"):
+            return v
+    return ""
 tot = collections.Counter()
 cur = ""
 for r in rows:
-    if sa not in str(r.get("instanceName") or r.get("instanceId") or "").lower():
-        continue
     m = r.get("meterDetails") or {}
-    key = " / ".join(str(m.get(k) or "") for k in ("meterCategory", "meterSubCategory", "meterName"))
-    tot[key] += float(r.get("pretaxCost") or 0)
-    cur = r.get("currency") or cur
+    cost = 0.0
+    for k in ("pretaxCost", "costInBillingCurrency", "cost", "paygCostInBillingCurrency", "costInPricingCurrency"):
+        cost = num(r.get(k))
+        if cost:
+            break
+    if not cost:
+        continue
+    res = str(first(r, "instanceName", "resourceName", "instanceId", "resourceId")).rstrip("/").rsplit("/", 1)[-1] or "(sem nome)"
+    cat = first(m, "meterCategory") or first(r, "meterCategory", "consumedService")
+    name = first(m, "meterName") or first(r, "meterName", "product")
+    tot[f"{res} — {cat} / {name}"] += cost
+    cur = first(r, "currency", "billingCurrency", "billingCurrencyCode") or cur
 if not tot:
-    print("  (nada encontrado por aqui: veja em Gerenciamento de Custos > Análise de custo, agrupado por Medidor)")
-for k, v in tot.most_common(10):
+    print("  (sem valores aqui: veja em Gerenciamento de Custos > Análise de custo, agrupado por Recurso)")
+for k, v in tot.most_common(12):
     print(f"  {v:8.2f} {cur}  {k}")
 '
 
 if [ "${1:-}" != "reduzir" ]; then
-  say "Nada foi alterado. Se aparecer 'provisionado' acima (ou camada Premium), rode: bash custo-armazenamento.sh reduzir"
+  say "Nada foi alterado. Se o compartilhamento acima estiver acima de 32 GiB / 500 IOPS / 60 MiB/s, rode: bash custo-armazenamento.sh reduzir"
   exit 0
 fi
 
