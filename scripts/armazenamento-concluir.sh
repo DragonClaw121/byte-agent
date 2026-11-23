@@ -43,7 +43,25 @@ if not changed:
     sys.exit("o contêiner não tem volume do Azure Files")
 print(json.dumps({"properties": {"template": t}}))
 ')"
-az rest --method patch --url "https://management.azure.com${APP_ID}?api-version=2024-03-01" --body "$BODY" -o none
+# Versões novas da API conhecem os campos novos de escala (cooldownPeriod, pollingInterval); na antiga, sem eles.
+OK=""
+for ver in 2025-01-01 2025-07-01; do
+  if az rest --method patch --url "https://management.azure.com${APP_ID}?api-version=$ver" --body "$BODY" -o none 2>/tmp/concluir.err; then
+    OK=1; break
+  fi
+  echo "    (API $ver recusou; tentando outra)"
+done
+if [ -z "$OK" ]; then
+  BODY="$(printf '%s' "$BODY" | python3 -c '
+import json, sys
+b = json.load(sys.stdin)
+for k in ("cooldownPeriod", "pollingInterval"):
+    (b["properties"]["template"].get("scale") or {}).pop(k, None)
+print(json.dumps(b))
+')"
+  az rest --method patch --url "https://management.azure.com${APP_ID}?api-version=2024-03-01" --body "$BODY" -o none \
+    || { echo "A Azure recusou de novo. Mande esta saída inteira para o assistente:"; cat /tmp/concluir.err; exit 1; }
+fi
 
 say "3/3 Esperando a Byte ligar (até 4 minutos)"
 for _ in $(seq 1 24); do
