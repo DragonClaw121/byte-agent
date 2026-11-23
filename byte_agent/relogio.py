@@ -216,7 +216,7 @@ def format_health(h: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------- a família inteira (v13.35, R1)
-FAMILY_STALE_S = 300
+FAMILY_STALE_S = 900                     # v13.43: publica a cada 4 min (menos gravações no armazenamento)
 
 
 def family_dir() -> Optional[Any]:
@@ -286,7 +286,7 @@ def install(service: Any, share: bool = True) -> Scheduler:
     service.scheduler = sched
     service.proactive_engine.background_jobs.append(sched.tick)
     if share and family_dir() is not None:                         # na nuvem: cada agente conta como está, a Matrix lê todos
-        sched.add("saude_compartilhada", 60, lambda: publish_health(service), label="Saúde compartilhada")
+        sched.add("saude_compartilhada", 240, lambda: publish_health(service), label="Saúde compartilhada")
 
     def act_health(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("todos"):

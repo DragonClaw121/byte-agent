@@ -200,6 +200,10 @@ Os dados continuam: ele salva ao desligar e restaura ao ligar.
   compartilhamento foi criado com capacidade **provisionada** (cobra o tamanho, IOPS e banda reservados, mesmo vazios)
   ou na camada Premium. No Cloud Shell, `bash custo-armazenamento.sh` mostra o motivo e
   `bash custo-armazenamento.sh reduzir` põe no mínimo.
+- **Conta "FileStorage / StandardV2" (provisionada v2):** mesmo no mínimo (32 GiB, 500 IOPS, 60 MiB/s) ela cobra os
+  IOPS e a banda reservados, o que em Brazil South dá reais por dia. `bash armazenamento-barato.sh` troca por uma conta
+  StorageV2 comum, paga pelo uso (centavos por mês para alguns MB): cria a nova, para a Byte, copia tudo, aponta o
+  contêiner e religa. A conta antiga só é apagada por você, depois de conferir.
 
 ## Painel pela internet (v13.6)
 Com `BYTE_PAINEL_REMOTO=1` (o script já liga), o endereço HTTPS do contêiner também abre os painéis, **só com o
