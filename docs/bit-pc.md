@@ -26,7 +26,8 @@ acesso fica guardado cifrado com a sua conta do Windows (DPAPI).
 |---|---|
 | **Conversa** | A mesma do Telegram, com os comandos (`/agenda`, `/caixa`, `/triagem`...) e os botões de aprovação. |
 | **📸 Olhar minha tela** | Manda UMA captura da janela em uso. Dá para escrever uma pergunta antes ("o que esse erro significa?"). |
-| **🔴 Ajuda ao vivo** | Diga o objetivo ("montar uma tabela dinâmica", "ajustar esse slide no Canva") e trabalhe normalmente. O Bit acompanha a tela e orienta passo a passo. |
+| **● Assistente ao vivo** | Trabalhe normalmente: o Bit observa a tela, anota o que importa (quem pediu o quê, prazos, valores, tabelas) e sugere o que pode preparar. |
+| **Preparar** | ✉ E-mail · ▦ Planilha · ▭ Slides · ☰ Documento · ✎ Texto: o Bit faz com o que viu. Escreva antes, na caixa, o que quer (opcional): "responder à Ana aceitando o prazo", "orçamento com os 3 itens". |
 | **Avisos** | Lembretes, resumos e avisos do Bit aparecem no canto da tela. |
 | **Atalhos** | **Ctrl+Alt+B** abre o Bit. **Ctrl+Alt+L** liga ou desliga a ajuda ao vivo. Funcionam com o app minimizado. |
 
@@ -47,19 +48,31 @@ miniplayers do Spotify e do YouTube. Arraste pela alça (⋮) para onde quiser: 
 
 No Windows, os ícones são os do próprio sistema (Segoe MDL2). A tabela mostra os símbolos de reserva.
 
-### Como a ajuda ao vivo funciona
-- O app olha a tela a cada segundo, no próprio PC, mas **só manda um quadro quando a tela muda de verdade**: um menu
-  abriu, você clicou, digitou algo. No máximo um quadro a cada 2,5 s. Com a tela parada, não manda nada.
-- **Perguntas durante a ajuda:** escreva na caixa da conversa ("e agora, onde fica a opção de filtro?"). A pergunta
-  vai junto com a tela atual.
-- **Orientação:** você escolhe nas opções do app. **Texto** mostra uma janelinha no canto, com o passo atual. **Voz**
-  usa a voz do Windows em português. Pode ligar uma, as duas ou nenhuma.
-- **"Clique aqui":** quando dá, o Bit desenha um retângulo vermelho em volta do botão certo. O clique passa direto
-  por ele.
-- **Quando para:** com Ctrl+Alt+L, clicando no aviso vermelho do topo, quando o objetivo parece concluído, ou depois
-  de 3 minutos sem mudança na tela.
-- **No fim:** o Bit pergunta se deve **guardar o passo a passo como um processo** na memória. Nas próximas vezes, ele
-  já conhece o caminho. Essa é a base da etapa 3 (automação).
+### Assistente ao vivo: observa e deixa o trabalho pronto (v1.2 do app)
+- **Ligar:** botão **● Assistente ao vivo** (ou **Ctrl+Alt+L**). Aparece o aviso vermelho "Bit observando" no topo.
+- **Enquanto você trabalha:** o app olha a tela a cada 2 s, no próprio PC, mas só manda um quadro quando ela **muda**
+  (no máximo 1 a cada 6 s). Com a tela parada, não manda nada nem gasta nada. A cada quadro, o Bit anota os fatos novos
+  e mostra **sugestões** do que pode preparar: "Responder à Ana confirmando o prazo", "Planilha do orçamento".
+- **Preparar:** clique numa sugestão ou num dos botões **Preparar**. Com o assistente desligado, os botões usam só a
+  tela atual.
+  - **E-mail e texto:** abrem numa janela para revisar, com **Copiar o texto**, **Copiar o assunto** e **Abrir no
+    e-mail**. "Abrir no e-mail" cria um e-mail novo no Outlook (ou no seu programa padrão) já com destinatário, assunto
+    e texto. O texto também fica copiado, caso seja longo demais para entrar inteiro.
+  - **Planilha (.xlsx), apresentação (.pptx) e documento (.docx):** são criados de verdade, salvos em
+    **Documentos\Bit** e abertos sozinhos.
+- **Perguntas:** com o assistente ligado, escreva na caixa ("onde fica a opção de filtro?"). A pergunta vai junto com a
+  tela; se for "onde clicar", ele marca o lugar com um retângulo vermelho.
+- **Desligar:** Ctrl+Alt+L, clique no aviso vermelho, ou ele desliga sozinho depois de 20 minutos sem mudança na tela.
+  As notas da sessão ficam na conversa (o Bit lembra o contexto se você pedir algo depois).
+
+### Por que travava (corrigido na v1.2)
+- **Captura:** usava o modo do Windows que recompõe a tela inteira a cada foto (CAPTUREBLT) e fazia o sistema
+  "engasgar" por instantes. Agora está desligado.
+- **Foco:** os avisos e o balão pegavam o foco ao aparecer, e quem estava digitando no Outlook perdia a digitação.
+  Agora eles aparecem sem tirar o foco de ninguém.
+- **Retângulo vermelho:** o "deixar o clique passar" era aplicado na janela errada, então ele podia bloquear cliques
+  por alguns segundos. Agora fica certo.
+- **Ritmo:** o app olha a tela com metade da frequência de antes.
 
 ## Privacidade
 - **Só com o aviso na tela:** só olha a tela quando você pede ("Olhar minha tela") ou com a ajuda ao vivo ligada, e

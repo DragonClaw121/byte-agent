@@ -46,3 +46,14 @@ def test_config_roundtrip_without_plain_token_on_windows(tmp_path):
     cfg = bit_pc.load_config(str(path))
     assert bit_pc.unprotect(cfg["token"]) == "abc"
     assert json.loads(path.read_text())["token"].startswith("plain:" if not bit_pc.IS_WINDOWS else "dpapi:")
+
+
+def test_mail_link_opens_a_new_email_with_subject_and_body():
+    link = bit_pc.mail_link("ana@empresa.com", "Re: Orçamento", "Olá, Ana!\nSegue.")
+    assert link.startswith("mailto:ana@empresa.com?subject=Re%3A%20Or%C3%A7amento&body=Ol%C3%A1%2C%20Ana%21%0ASegue.")
+    assert len(bit_pc.mail_link("", "x", "a" * 5000)) < 2100                      # o Outlook corta links longos
+
+
+def test_tk_safe_removes_what_tk_cannot_draw():
+    assert bit_pc.tk_safe("🔔 Lembrete 📅 amanhã 👉 sala 2 ✅") == "● Lembrete ▸ amanhã ➜ sala 2 ✅"
+    assert all(ord(c) <= 0xFFFF for c in bit_pc.tk_safe("🦄🚀 teste"))

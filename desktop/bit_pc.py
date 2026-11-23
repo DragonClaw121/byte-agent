@@ -25,19 +25,21 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.1"
+VERSION = "1.2"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
                  "itaú", "itau", "bradesco", "santander", "caixa econômica", "nubank", "banco inter", "token de segurança")
-LIVE_CHECK_S = 1.0             # olha a tela a cada 1 s (no PC; não manda nada se não mudou)
-LIVE_MIN_SEND_S = 2.5          # manda no máximo 1 quadro a cada 2,5 s
-LIVE_IDLE_STOP_S = 180         # para sozinho depois de 3 min sem mudança na tela
+LIVE_CHECK_S = 2.0             # olha a tela a cada 2 s (no PC; não manda nada se não mudou)
+LIVE_MIN_SEND_S = 6.0          # o assistente observa: no máximo 1 quadro a cada 6 s (perguntas vão na hora)
+LIVE_IDLE_STOP_S = 1200        # desliga sozinho depois de 20 min sem mudança na tela (parado, não gasta nada)
+DOCS_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Bit")       # onde ficam planilhas e apresentações
 CHANGE_THRESHOLD = 4.0         # diferença média (0-255) na miniatura para contar como "mudou"
 
 
@@ -150,6 +152,17 @@ class Api:
             raise ApiError(str(out["error"]))
         return out if isinstance(out, dict) else {}
 
+    def download(self, sub: str, timeout: float = 120.0) -> bytes:
+        req = urllib.request.Request(f"{self.base}/{sub}", headers={"User-Agent": f"BitPC/{VERSION}",
+                                                                    "Authorization": f"Bearer {self.token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(80 * 1024 * 1024)
+        except urllib.error.HTTPError as err:
+            raise ApiError(f"Não consegui baixar o arquivo (HTTP {err.code}).") from None
+        except (urllib.error.URLError, OSError):
+            raise ApiError("Sem conexão com o Bit agora (internet ou servidor fora do ar).") from None
+
 
 # ================================================================== tela
 def dpi_aware() -> None:
@@ -213,6 +226,11 @@ def capture(region: Optional[Dict[str, int]] = None) -> Tuple[Any, Dict[str, int
     """Captura uma região da tela (ou o monitor principal). Devolve (imagem PIL, região)."""
     import mss
     from PIL import Image
+    if IS_WINDOWS:
+        # Sem CAPTUREBLT: com ele, cada captura obriga o Windows a recompor a tela inteira, e o sistema "engasga"
+        # (o Outlook travava por instantes). As janelas do Bit já ficam fora da captura de outro jeito.
+        import mss.windows
+        mss.windows.CAPTUREBLT = 0
     with mss.mss() as sct:
         area = region or dict(sct.monitors[1])
         shot = sct.grab({k: area[k] for k in ("left", "top", "width", "height")})
@@ -253,6 +271,27 @@ def to_screen(box: List[float], region: Dict[str, int]) -> Tuple[int, int, int, 
     x0, y0, x1, y1 = box
     return (int(region["left"] + x0 * region["width"]), int(region["top"] + y0 * region["height"]),
             int(region["left"] + x1 * region["width"]), int(region["top"] + y1 * region["height"]))
+
+
+def open_path(path: str) -> None:
+    """Abre o arquivo no programa padrão (Excel, PowerPoint, Word...)."""
+    try:
+        if IS_WINDOWS:
+            os.startfile(path)                                    # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def mail_link(to: str, subject: str, body: str) -> str:
+    q = urllib.parse.urlencode({"subject": subject, "body": body[:1800]}, quote_via=urllib.parse.quote)
+    return f"mailto:{urllib.parse.quote(to.strip(), safe='@,;')}?{q}"
+
+
+def open_mail(to: str, subject: str, body: str) -> None:
+    """E-mail novo no programa de e-mail padrão (o Outlook, no Windows da empresa), já com assunto e texto."""
+    open_path(mail_link(to, subject, body))
 
 
 # ================================================================== voz (opcional)
@@ -305,27 +344,70 @@ def hotkeys(events: "queue.Queue[Tuple[str, Any]]") -> None:
             events.put((keys[msg.wParam][1], None))
 
 
-def exclude_from_capture(widget: Any) -> None:
+def hwnd_of(win: Any) -> int:
+    """A janela "de verdade" do Windows (a moldura). Antes usávamos a interna e os estilos não pegavam."""
+    import ctypes
+    try:
+        return int(win.wm_frame(), 16)
+    except Exception:
+        return ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+
+
+def _ex_style(win: Any, add: int) -> None:
+    if not IS_WINDOWS:
+        return
+    import ctypes
+    try:
+        hwnd = hwnd_of(win)
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+        ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | add)
+    except Exception:
+        pass
+
+
+WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_LAYERED, WS_EX_TRANSPARENT = 0x08000000, 0x00000080, 0x00080000, 0x00000020
+
+
+def exclude_from_capture(win: Any) -> None:
     """As janelas do Bit não aparecem nas capturas (Windows 10 2004+). Assim o Bit nunca vê a si mesmo."""
     if not IS_WINDOWS:
         return
     import ctypes
     try:
-        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
-        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x11)       # WDA_EXCLUDEFROMCAPTURE
+        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd_of(win), 0x11)       # WDA_EXCLUDEFROMCAPTURE
     except Exception:
         pass
 
 
-def click_through(widget: Any) -> None:
+def no_activate(win: Any) -> None:
+    """Avisos, balões e marcações aparecem SEM tirar o foco de quem está digitando (no Outlook, por exemplo)."""
+    _ex_style(win, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+
+
+def click_through(win: Any) -> None:
     """A marcação vermelha não atrapalha: o clique passa para o programa embaixo."""
+    _ex_style(win, WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
+
+
+def foreground_hwnd() -> int:
     if not IS_WINDOWS:
+        return 0
+    import ctypes
+    return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+
+
+def give_focus_back(hwnd: int) -> None:
+    """Se uma janelinha do Bit pegou o foco ao aparecer, devolve para onde estava (o Outlook continua digitando)."""
+    if not IS_WINDOWS or not hwnd:
         return
     import ctypes
+    from ctypes import wintypes
     try:
-        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
-        style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
-        ctypes.windll.user32.SetWindowLongW(hwnd, -20, style | 0x00080000 | 0x00000020)   # LAYERED | TRANSPARENT
+        now = ctypes.windll.user32.GetForegroundWindow()
+        pid = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(now, ctypes.byref(pid))
+        if now != hwnd and pid.value == os.getpid():
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
     except Exception:
         pass
 
@@ -348,7 +430,7 @@ def tk_safe(text: Any) -> str:
 
 
 ICON_FONT = "Segoe MDL2 Assets"           # ícones do próprio Windows 10/11 (sem baixar nada)
-ICONS = {"chat": ("", "✎"), "olhar": ("", "◉"), "vivo": ("", "●"), "parar": ("", "■"),
+ICONS = {"preparar": ("\uE70F", "✎"), "chat": ("", "✉"), "olhar": ("", "◉"), "vivo": ("", "●"), "parar": ("", "■"),
          "voz": ("", "♪"), "mudo": ("", "♪"), "sino": ("", "!"), "abrir": ("", "⤢"),
          "fechar": ("", "✕"), "arrastar": ("", "⋮"), "enviar": ("", "➜")}
 
@@ -368,7 +450,9 @@ class App:
         self.api: Optional[Any] = None
         self.last_foreign: Optional[Dict[str, Any]] = None      # a última janela que NÃO é do Bit (o que você está fazendo)
         self.live: Optional[Dict[str, Any]] = None
-        self.overlay = self.guide = self.badge = self.bar = self.bubble = None
+        self.overlay = self.badge = self.bar = self.bubble = None
+        self.result_windows: List[Any] = []
+        self.suggest_box = self.bar_suggest = None
         self.bar_xy: Tuple[int, int] = (0, 0)
         self.bubble_xy: Tuple[int, int] = (0, 0)
         self.toasts: List[Any] = []
@@ -567,10 +651,21 @@ class App:
             tk.Checkbutton(opts, text=text, variable=var, command=self.save_options, bg=self.BG, fg=self.MUTED,
                            selectcolor=self.CARD, activebackground=self.BG, activeforeground=self.INK,
                            font=("Segoe UI", 9)).pack(side="left")
+        prep = tk.Frame(f, bg=self.BG)
+        prep.pack(side="bottom", fill="x", pady=(self.px(6), 0))
+        self.label(prep, "Preparar com o que está na tela:", 8, self.MUTED).pack(anchor="w")
+        kinds = tk.Frame(prep, bg=self.BG)
+        kinds.pack(fill="x")
+        for kind, text in self.KINDS:
+            tk.Button(kinds, text=tk_safe(text), command=lambda k=kind: self.prepare(k), relief="flat", cursor="hand2",
+                      padx=self.px(7), pady=self.px(3), bg=self.HOVER, fg=self.INK, activebackground=self.PRI,
+                      font=("Segoe UI", 9), borderwidth=0).pack(side="left", padx=(0, self.px(4)), pady=(self.px(2), 0))
+        self.suggest_box = tk.Frame(prep, bg=self.BG)
+        self.suggest_box.pack(fill="x")
         tools = tk.Frame(f, bg=self.BG)
         tools.pack(side="bottom", fill="x", pady=(self.px(8), 0))
         self.button(tools, "◉ Olhar minha tela", self.look).pack(side="left")
-        self.live_btn = self.button(tools, "● Ajuda ao vivo", self.toggle_live)
+        self.live_btn = self.button(tools, "● Assistente ao vivo", self.toggle_live)
         self.live_btn.pack(side="left", padx=self.px(6))
         row = tk.Frame(f, bg=self.BG)
         row.pack(side="bottom", fill="x")
@@ -698,10 +793,10 @@ class App:
             self.show_bubble([{"text": "Olhando a sua tela…"}], wait=True)
         self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": question, "tela": image}, timeout=120), self.on_reply)
 
-    # ------------------------------------------------------------ ajuda ao vivo
+    # ------------------------------------------------------------ assistente ao vivo (observa e PREPARA o trabalho)
     def toggle_live(self) -> None:
         if self.live is not None:
-            self.stop_live(save=None)
+            self.stop_live()
         else:
             self.start_live()
 
@@ -709,24 +804,22 @@ class App:
         if self.api is None:
             self.bring_up()
             return
-        if goal is None:
+        if goal is None:                                        # sem caixa de diálogo: nada rouba o foco
             source = self.bar_entry if self.bar is not None else self.entry
             goal = source.get().strip() if source is not None else ""
             if goal:
                 source.delete(0, "end")
-            else:
-                from tkinter import simpledialog
-                goal = simpledialog.askstring(APP_NAME, "Com o que você quer ajuda? (ex.: montar uma tabela dinâmica)",
-                                              parent=self.bar if self.bar is not None else self.root) or ""
         self.live = {"sessao": uuid.uuid4().hex[:16], "objetivo": goal.strip(), "sig": None, "sent": 0.0,
-                     "changed": time.time(), "pergunta": "", "busy": False, "last_step": ""}
-        self.add_message(f"● Ajuda ao vivo ligada{': ' + goal if goal else ''}. Trabalhe normalmente; eu acompanho e "
-                         "oriento. Ctrl+Alt+L ou o aviso vermelho para parar.", "aviso")
+                     "changed": time.time(), "pergunta": "", "busy": False, "vendo": "", "sugestoes": [], "notas": 0}
+        self.add_message("● Assistente ao vivo ligado: trabalhe normalmente. Eu observo a tela e anoto o que importa; "
+                         "quando quiser, peça um e-mail, uma planilha, uma apresentação ou um documento prontos "
+                         "(botões \"Preparar\"). Ctrl+Alt+L ou o aviso vermelho para parar.", "aviso")
         if getattr(self, "live_btn", None) is not None:
-            self.live_btn.configure(text="■ Parar ajuda ao vivo", bg=self.RED)
+            self.live_btn.configure(text="■ Parar o assistente", bg=self.RED)
         self.show_badge()
-        self.set_bar_text("Acompanhando a sua tela…" + (f" ({goal.strip()[:60]})" if goal.strip() else ""))
+        self.set_bar_text("Observando a sua tela…")
         self.update_bar()
+        self.draw_suggestions()
         if not self.test_mode:
             threading.Thread(target=self.live_loop, args=(self.live,), daemon=True, name="ao-vivo").start()
 
@@ -747,42 +840,45 @@ class App:
                 if moved:
                     live["changed"] = now
                 if now - live["changed"] > LIVE_IDLE_STOP_S and not live["pergunta"]:
-                    self.events.put(("call", lambda: self.stop_live(save=None, reason="Parei: 3 minutos sem mudança na tela.")))
+                    self.events.put(("call", lambda: self.stop_live(reason="Desliguei o assistente: 20 minutos sem mudança na tela.")))
                     return
-                if not (moved or live["pergunta"] or live["sig"] is None) or now - live["sent"] < LIVE_MIN_SEND_S:
+                if not (live["pergunta"] or live["sig"] is None or (moved and now - live["sent"] >= LIVE_MIN_SEND_S)):
                     continue
                 live["busy"], live["sent"], live["sig"] = True, now, sig
                 question, live["pergunta"] = live["pergunta"], ""
                 body = {"sessao": live["sessao"], "objetivo": live["objetivo"], "tela": encode(img), "pergunta": question}
-                self.events.put(("call", lambda t=title: self.set_badge("● Bit vendo a tela" + (f" — {t[:40]}" if t else ""))))
-                res = self.api.call("POST", "ao-vivo", body, timeout=60)
-                self.events.put(("call", lambda r=res, u=used: self.show_step(r, u)))
+                res = self.api.call("POST", "ao-vivo", body, timeout=90)
+                self.events.put(("call", lambda r=res, u=used, t=title: self.show_observation(r, u, t)))
             except Exception as err:
                 msg = str(err)
                 self.events.put(("call", lambda m=msg: self.set_badge("⚠ " + m[:70])))
-                time.sleep(5)
+                time.sleep(10)
             finally:
                 live["busy"] = False
 
-    def show_step(self, step: Dict[str, Any], region: Dict[str, int]) -> None:
-        if self.live is None or step.get("espere"):
+    def show_observation(self, obs: Dict[str, Any], region: Dict[str, int], title: str = "") -> None:
+        if self.live is None or obs.get("espere"):
             return
-        text = str(step.get("passo") or "").strip()
-        if step.get("novo", True) and text and text != self.live.get("last_step"):
-            self.live["last_step"] = text
-            self.add_message("➜ " + text, "bit")
-            if self.text_var.get():
-                self.show_guide(text)
+        if obs.get("vendo"):
+            self.live["vendo"] = obs["vendo"]
+            self.set_badge("● Bit observando" + (f" — {title[:40]}" if title else ""))
+            self.set_bar_text("◉ " + obs["vendo"])
+        self.live["notas"] = int(obs.get("notas_total") or self.live["notas"])
+        if obs.get("sugestoes") and obs["sugestoes"] != self.live["sugestoes"]:
+            self.live["sugestoes"] = list(obs["sugestoes"])
+            self.draw_suggestions()
+        if obs.get("resposta"):
+            self.add_message(obs["resposta"], "bit")
+            if self.bar is not None:
+                self.show_bubble([{"text": obs["resposta"]}])
             if self.speak_var.get():
-                self.voice.say(str(step.get("fala") or text))
-        if step.get("alvo"):
-            self.show_overlay(to_screen(step["alvo"], region))
-        if step.get("concluido"):
-            self.stop_live(save=None, reason="✔ Parece concluído!")
+                self.voice.say(obs["resposta"])
+        if obs.get("alvo"):
+            self.show_overlay(to_screen(obs["alvo"], region))
 
-    def stop_live(self, save: Optional[bool], reason: str = "") -> None:
+    def stop_live(self, reason: str = "", save: bool = False) -> None:
         live, self.live = self.live, None
-        for name in ("overlay", "guide", "badge"):
+        for name in ("overlay", "badge"):
             win = getattr(self, name)
             if win is not None:
                 try:
@@ -793,40 +889,196 @@ class App:
         self.voice.stop()
         if getattr(self, "live_btn", None) is not None:
             try:
-                self.live_btn.configure(text="● Ajuda ao vivo", bg=self.CARD)
+                self.live_btn.configure(text="● Assistente ao vivo", bg=self.CARD)
             except Exception:
                 pass
         self.set_bar_text("")
         self.update_bar()
+        self.draw_suggestions()
         if live is None or self.api is None:
             return
         if reason:
             self.add_message(reason, "aviso")
-        if save is None:
-            from tkinter import messagebox
-            save = bool(live.get("last_step")) and messagebox.askyesno(
-                APP_NAME, "Quer que eu guarde esse passo a passo como um processo na minha memória?",
-                parent=self.bar if self.bar is not None else self.root)
 
         def done(r: Dict[str, Any]) -> None:
-            text = str(r.get("texto") or "Ajuda ao vivo encerrada.")
-            self.add_message(text, "aviso")
-            if self.bar is not None:
-                self.show_bubble([{"text": text}])
+            self.add_message(str(r.get("texto") or "Assistente ao vivo encerrado."), "aviso")
         self.run_bg(lambda: self.api.call("POST", "ao-vivo/fim", {"sessao": live["sessao"], "guardar": bool(save)}), done)
 
+    # ------------------------------------------------------------ preparar o trabalho (e-mail, planilha, slides...)
+    KINDS = (("email", "✉ E-mail"), ("planilha", "▦ Planilha"), ("apresentacao", "▭ Slides"), ("documento", "☰ Documento"),
+             ("texto", "✎ Texto"))
+    KIND_NAMES = {"email": "o e-mail", "planilha": "a planilha", "apresentacao": "a apresentação", "documento": "o documento",
+                  "texto": "o texto"}
+
+    def take_request_text(self) -> str:
+        source = self.bar_entry if self.bar is not None else self.entry
+        if source is None:
+            return ""
+        text = source.get().strip()
+        source.delete(0, "end")
+        return text
+
+    def prepare(self, kind: str, request: Optional[str] = None) -> None:
+        """Com o assistente ligado, usa o que ele anotou da tela; desligado, manda a tela atual junto."""
+        if self.api is None:
+            return
+        request = self.take_request_text() if request is None else request
+        body: Dict[str, Any] = {"tipo": kind, "pedido": request}
+        if self.live is not None:
+            body["sessao"] = self.live["sessao"]
+        else:
+            image, _, _, _ = self.grab()
+            if image is None:
+                self.error("A janela em uso parece privada: não vou olhar.")
+                return
+            body["tela"] = image
+        what = self.KIND_NAMES.get(kind, kind)
+        self.add_message(f"Preparar {what}" + (f": {request}" if request else ""), "eu")
+        if self.bar is not None:
+            self.show_bubble([{"text": f"Preparando {what}…"}], wait=True)
+        self.run_bg(lambda: self.api.call("POST", "preparar", body, timeout=300), self.on_prepared)
+
+    def on_prepared(self, res: Dict[str, Any]) -> None:
+        kind = res.get("tipo")
+        if kind in ("email", "texto"):
+            self.add_message(f"✔ {res.get('titulo') or 'Pronto'}: abri numa janela para você revisar e copiar.", "bit")
+            if self.bar is not None:
+                self.show_bubble([{"text": f"✔ {res.get('titulo') or 'Pronto'} (abri numa janela)"}])
+            self.open_result(res)
+            return
+        files = list(res.get("arquivos") or [])
+        self.run_bg(lambda: self.save_files(files), self.on_saved)
+
+    def save_files(self, names: List[str]) -> List[str]:
+        os.makedirs(DOCS_DIR, exist_ok=True)
+        paths = []
+        for name in names:
+            safe = os.path.basename(str(name))
+            data = self.api.download("arquivo/" + urllib.parse.quote(safe))
+            path = os.path.join(DOCS_DIR, safe)
+            with open(path, "wb") as fh:
+                fh.write(data)
+            paths.append(path)
+        return paths
+
+    def on_saved(self, paths: List[str]) -> None:
+        if not paths:
+            self.error("O Bit não gerou nenhum arquivo agora; tente de novo.")
+            return
+        names = ", ".join(os.path.basename(p) for p in paths)
+        self.add_message(f"✔ Pronto: {names} (em Documentos\\Bit). Abri para você revisar.", "bit")
+        if self.bar is not None:
+            self.show_bubble([{"text": f"✔ Pronto: {names}\nSalvo em Documentos\\Bit e aberto."}])
+        if not self.test_mode:
+            for path in paths:
+                open_path(path)
+        self.saved_paths = paths
+
+    def open_result(self, res: Dict[str, Any]) -> None:
+        """Janela normal (essa pode ter foco: você vai editar/copiar), com o texto pronto."""
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title(tk_safe(res.get("titulo") or "Pronto") + " — Bit")
+        win.configure(bg=self.BG)
+        sw, sh = self.screen()
+        w, h = min(self.px(600), sw - self.px(40)), min(self.px(560), sh - self.px(90))
+        win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        win.after(200, lambda: exclude_from_capture(win))
+        frame = tk.Frame(win, bg=self.BG)
+        frame.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(10))
+        fields: Dict[str, Any] = {}
+        if res.get("tipo") == "email":
+            for key, label in (("para", "Para"), ("assunto", "Assunto")):
+                row = tk.Frame(frame, bg=self.BG)
+                row.pack(fill="x", pady=(0, self.px(6)))
+                self.label(row, label, 9, self.MUTED, width=8, anchor="w").pack(side="left")
+                entry = tk.Entry(row, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
+                entry.insert(0, str(res.get(key) or ""))
+                entry.pack(side="left", fill="x", expand=True, ipady=self.px(4))
+                fields[key] = entry
+        buttons = tk.Frame(frame, bg=self.BG)
+        buttons.pack(side="bottom", fill="x", pady=(self.px(8), 0))
+        body = tk.Text(frame, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
+                       font=("Segoe UI", 10), padx=self.px(8), pady=self.px(8), width=1, height=1, borderwidth=0)
+        body.insert("1.0", str(res.get("corpo") or res.get("texto") or ""))
+        body.pack(fill="both", expand=True)
+        fields["corpo"] = body
+
+        def text_of() -> str:
+            return body.get("1.0", "end").strip()
+
+        def copy(value: str, what: str) -> None:
+            win.clipboard_clear()
+            win.clipboard_append(value)
+            status.configure(text=f"✔ {what} copiado.")
+
+        def mail() -> None:
+            copy(text_of(), "Texto")
+            open_mail(fields["para"].get() if "para" in fields else "", fields["assunto"].get() if "assunto" in fields else "",
+                      text_of())
+            status.configure(text="✔ Abri um e-mail novo. Se o texto não aparecer inteiro, cole (Ctrl+V): já está copiado.")
+        self.button(buttons, "Copiar o texto", lambda: copy(text_of(), "Texto"), primary=True).pack(side="left")
+        if res.get("tipo") == "email":
+            self.button(buttons, "Copiar o assunto", lambda: copy(fields["assunto"].get(), "Assunto")).pack(
+                side="left", padx=self.px(6))
+            self.button(buttons, "Abrir no e-mail", mail).pack(side="left")
+        self.button(buttons, "Fechar", win.destroy).pack(side="right")
+        status = self.label(frame, "Revise e ajuste o texto à vontade antes de copiar.", 9, self.MUTED)
+        status.pack(side="bottom", anchor="w", pady=(self.px(6), 0))
+        win.lift()
+        win.focus_force()
+        self.result_windows.append(win)
+
+    def draw_suggestions(self) -> None:
+        """Os botões "Preparar" (na janela e na barra) + as sugestões do que o Bit viu."""
+        for holder in (getattr(self, "suggest_box", None), getattr(self, "bar_suggest", None)):
+            if holder is None:
+                continue
+            for child in holder.winfo_children():
+                child.destroy()
+            suggestions = list((self.live or {}).get("sugestoes") or [])
+            if not suggestions:
+                continue
+            tk = self.tk
+            self.label(holder, "Sugestões do que vi:", 8, self.MUTED, bg=holder.cget("bg")).pack(anchor="w")
+            for sug in suggestions:
+                icon = dict(self.KINDS).get(sug["tipo"], "✎").split()[0]
+                btn = tk.Button(holder, text=tk_safe(f"{icon} {sug['pedido']}")[:70], relief="flat", cursor="hand2",
+                                bg=self.HOVER, fg=self.INK, activebackground=self.PRI, font=("Segoe UI", 9), anchor="w",
+                                borderwidth=0, padx=self.px(8), pady=self.px(2),
+                                command=lambda s=sug: self.prepare(s["tipo"], s["pedido"]))
+                btn.pack(fill="x", pady=(self.px(2), 0))
+        if self.bar is not None:
+            self.relayout_bar()
+
     # ------------------------------------------------------------ janelinhas sobre a tela (tamanho pelo conteúdo)
-    def popup(self, bg: str, border: Optional[str] = None) -> Tuple[Any, Any]:
-        """Janela sem moldura, sempre por cima, fora das capturas. Devolve (janela, área de conteúdo)."""
+    def popup(self, bg: str, border: Optional[str] = None, activate: bool = False) -> Tuple[Any, Any]:
+        """Janela sem moldura, sempre por cima, fora das capturas. Nasce escondida e só aparece em place(), já
+        posicionada e SEM roubar o foco (activate=True só para a barra, que tem campo de digitação)."""
         win = self.tk.Toplevel(self.root)
+        win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
         win.configure(bg=border or bg)
+        win._bit_activate = activate
         inner = self.tk.Frame(win, bg=bg)
         inner.pack(fill="both", expand=True, padx=1 if border else 0, pady=1 if border else 0)
-        win.after(100, lambda: exclude_from_capture(win))
-        win.after(100, lambda: round_corners(win))
         return win, inner
+
+    def reveal(self, win: Any) -> None:
+        activate = getattr(win, "_bit_activate", False)
+        before = foreground_hwnd()
+        win.update_idletasks()
+        if not activate:
+            no_activate(win)
+        win.deiconify()
+        win.update_idletasks()
+        if not activate:
+            no_activate(win)                                      # de novo: a moldura do Windows só existe depois de mostrar
+            for delay in (10, 120):
+                win.after(delay, lambda: give_focus_back(before))
+        exclude_from_capture(win)
+        round_corners(win)
 
     def place(self, win: Any, x: int, y: int) -> None:
         win.update_idletasks()
@@ -834,6 +1086,8 @@ class App:
         w, h = win.winfo_reqwidth(), win.winfo_reqheight()
         x, y = max(0, min(x, sw - w)), max(0, min(y, sh - h))
         win.geometry(f"{w}x{h}+{x}+{y}")
+        if win.state() == "withdrawn":
+            self.reveal(win)
         if win is self.bar:
             self.bar_xy = (x, y)                                  # a posição real só existe depois de desenhada
         elif win is self.bubble:
@@ -841,11 +1095,11 @@ class App:
 
     def show_badge(self) -> None:
         self.badge, inner = self.popup(self.RED)
-        self.badge_label = self.tk.Label(inner, text=tk_safe("● Bit vendo a tela · clique para parar"), bg=self.RED,
+        self.badge_label = self.tk.Label(inner, text=tk_safe("● Bit observando · clique para parar"), bg=self.RED,
                                          fg="white", font=("Segoe UI", 10, "bold"), cursor="hand2",
                                          padx=self.px(14), pady=self.px(4))
         self.badge_label.pack(fill="both", expand=True)
-        self.badge_label.bind("<Button-1>", lambda e: self.stop_live(save=None))
+        self.badge_label.bind("<Button-1>", lambda e: self.stop_live())
         self.center_badge()
 
     def center_badge(self) -> None:
@@ -858,40 +1112,23 @@ class App:
             self.badge_label.configure(text=tk_safe(text + " · clique para parar"))
             self.center_badge()
 
-    def show_guide(self, text: str) -> None:
-        if self.bar is not None:                               # no modo compacto, o passo aparece na própria barra
-            self.set_bar_text("➜ " + text)
-            return
-        if self.guide is not None:
-            self.guide.destroy()
-        self.guide, inner = self.popup(self.CARD, border=self.PRI)
-        self.tk.Label(inner, text=tk_safe("➜ " + text), bg=self.CARD, fg=self.INK, wraplength=self.px(380), justify="left",
-                      font=("Segoe UI", 11), padx=self.px(12), pady=self.px(10)).pack(fill="both", expand=True)
-        self.guide.update_idletasks()
-        sw, sh = self.screen()
-        self.place(self.guide, sw - self.guide.winfo_reqwidth() - self.px(24), sh - self.guide.winfo_reqheight() - self.px(70))
-        click_through(self.guide)
-
     def show_overlay(self, rect: Tuple[int, int, int, int]) -> None:
         if self.overlay is not None:
             self.overlay.destroy()
         pad = self.px(6)
         x0, y0, x1, y1 = rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad
         w, h = max(20, x1 - x0), max(20, y1 - y0)
-        win = self.tk.Toplevel(self.root)
-        win.overrideredirect(True)
-        win.attributes("-topmost", True)
-        win.configure(bg="#ff00ff")
-        win.geometry(f"{w}x{h}+{x0}+{y0}")
+        win, inner = self.popup("#ff00ff")
         try:
             win.attributes("-transparentcolor", "#ff00ff")
         except Exception:
             pass
-        canvas = self.tk.Canvas(win, width=w, height=h, bg="#ff00ff", highlightthickness=0)
+        canvas = self.tk.Canvas(inner, width=w, height=h, bg="#ff00ff", highlightthickness=0)
         canvas.pack()
         canvas.create_rectangle(2, 2, w - 2, h - 2, outline=self.RED, width=max(3, self.px(3)))
-        win.after(100, lambda: exclude_from_capture(win))
-        click_through(win)
+        win.geometry(f"{w}x{h}+{x0}+{y0}")
+        self.reveal(win)
+        click_through(win)                                        # depois de mostrar: aí a moldura existe de verdade
         self.overlay = win
         self.root.after(8000, lambda: (win.destroy() if self.overlay is win else None))
 
@@ -998,7 +1235,8 @@ class App:
         self.bar_buttons = {}
         for key, cmd, tip in (("chat", lambda: self.bar_open_ask(), "Perguntar ao Bit (Ctrl+Alt+B)"),
                               ("olhar", lambda: self.look(self.bar_take_text()), "Olhar minha tela"),
-                              ("vivo", self.toggle_live, "Ajuda ao vivo (Ctrl+Alt+L)"),
+                              ("vivo", self.toggle_live, "Assistente ao vivo: observa e prepara (Ctrl+Alt+L)"),
+                              ("preparar", lambda: self.bar_open_prepare(), "Preparar e-mail, planilha, slides, documento"),
                               ("voz", self.toggle_voice, "Orientação por voz: liga/desliga"),
                               ("sino", self.show_notices, "Avisos"),
                               ("abrir", self.show_window, "Abrir a janela completa"),
@@ -1016,6 +1254,15 @@ class App:
         self.bar_entry.bind("<Escape>", lambda e: self.bar_open_ask(False))
         send = self.icon(self.bar_ask, "enviar", lambda: self.ask(self.bar_take_text()), "Enviar")
         send.pack(side="left", padx=(0, self.px(6)))
+        self.bar_prep = tk.Frame(inner, bg=self.CARD)
+        row1 = tk.Frame(self.bar_prep, bg=self.CARD)
+        row1.pack(fill="x")
+        for kind, text in self.KINDS:
+            tk.Button(row1, text=tk_safe(text), relief="flat", cursor="hand2", bg=self.HOVER, fg=self.INK,
+                      activebackground=self.PRI, font=("Segoe UI", 9), borderwidth=0, padx=self.px(6), pady=self.px(2),
+                      command=lambda k=kind: self.prepare(k)).pack(side="left", padx=(0, self.px(3)))
+        self.bar_suggest = tk.Frame(self.bar_prep, bg=self.CARD)
+        self.bar_suggest.pack(fill="x", pady=(self.px(4), 0))
         self.bar_status = tk.Label(inner, text="", bg=self.CARD, fg=self.MUTED, wraplength=self.px(320), justify="left", anchor="w",
                                    font=("Segoe UI", 9), padx=self.px(10))
         self.bar.update_idletasks()
@@ -1082,6 +1329,19 @@ class App:
         if show:
             self.bar.focus_force()
             self.bar_entry.focus_set()
+
+    def bar_open_prepare(self, show: Optional[bool] = None) -> None:
+        if self.bar is None:
+            return
+        visible = bool(self.bar_prep.winfo_manager())
+        show = (not visible) if show is None else show
+        if show and not visible:
+            self.bar_prep.pack(fill="x", padx=self.px(8), pady=(0, self.px(6)))
+            self.bar_hint("Escreva no campo ✉ o que quer (opcional) e escolha o que preparar")
+            self.root.after(5000, lambda: self.bar_hint(""))
+        elif not show and visible:
+            self.bar_prep.pack_forget()
+        self.draw_suggestions()
 
     def bar_take_text(self) -> str:
         if self.bar is None:
@@ -1199,7 +1459,7 @@ def round_corners(widget: Any) -> None:
         return
     import ctypes
     try:
-        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
+        hwnd = hwnd_of(widget)
         pref = ctypes.c_int(2)                                   # DWMWCP_ROUND
         ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
     except Exception:
@@ -1217,10 +1477,22 @@ class FakeApi:
         if sub == "conversa":
             return {"mensagens": [{"text": "Feito.", "buttons": [{"label": "✅ Aprovar", "data": "ok:1"}]}]}
         if sub == "ao-vivo":
-            return {"passo": "Clique em Inserir", "alvo": [0.1, 0.1, 0.2, 0.15], "concluido": False, "fala": "Clique", "novo": True}
+            return {"vendo": "Outlook: e-mail da Ana pedindo o orçamento de 3 notebooks 📧", "notas": "Ana pede orçamento",
+                    "sugestoes": [{"tipo": "email", "pedido": "Responder à Ana confirmando o orçamento e o prazo de 12/12"},
+                                  {"tipo": "planilha", "pedido": "Planilha do orçamento dos 3 notebooks"}],
+                    "resposta": "", "alvo": [0.1, 0.1, 0.2, 0.15], "notas_total": 1}
+        if sub == "preparar":
+            if (body or {}).get("tipo") == "email":
+                return {"tipo": "email", "titulo": "Resposta à Ana", "para": "ana@empresa.com", "assunto": "Re: Orçamento",
+                        "corpo": "Olá, Ana!\n\nSegue o orçamento dos 3 notebooks, com entrega até 12/12. 👍\n\nAbraços,\n[SEU NOME]",
+                        "arquivos": []}
+            return {"tipo": "planilha", "titulo": "Orçamento", "arquivos": ["planilha_orcamento.xlsx"]}
         if sub == "ao-vivo/fim":
-            return {"texto": "Encerrada."}
+            return {"texto": "Encerrado."}
         return {"avisos": []}
+
+    def download(self, sub: str, timeout: float = 120.0) -> bytes:
+        return b"PK\x03\x04 planilha de teste"
 
 
 def autotest(out_path: str) -> int:
@@ -1239,6 +1511,8 @@ def autotest(out_path: str) -> int:
         cfg_path = os.path.join(config_dir(), "autoteste.json")
         if os.path.exists(cfg_path):
             os.remove(cfg_path)
+        global DOCS_DIR
+        DOCS_DIR = os.path.join(os.path.dirname(prefix), "documentos-teste")
         app = App(api_factory=FakeApi, config_path=cfg_path, test_mode=True)
         result["icones_windows"] = app.has_icons
         app.link_entry.insert(0, "https://x.azurecontainerapps.io/pc/bit#123456")
@@ -1285,9 +1559,31 @@ def autotest(out_path: str) -> int:
 
         def step2() -> None:
             app.pump()
-            app.start_live("montar uma tabela dinâmica")
-            app.show_step(FakeApi("", "").call("POST", "ao-vivo"), region)
+            app.start_live("responder e-mails")
+            app.show_observation(FakeApi("", "").call("POST", "ao-vivo"), region, "Outlook")
+            app.bar_open_prepare(True)
+            app.prepare("email", "Responder à Ana")
+            app.prepare("planilha", "")
+            app.root.after(1500, step2b)
+
+        def step2b() -> None:
+            app.pump()
             app.root.update()
+            result["resultado_email"] = len(app.result_windows)
+            result["arquivos_salvos"] = [os.path.basename(p) for p in getattr(app, "saved_paths", [])]
+            if not app.result_windows:
+                problems.append("janela do e-mail pronto: não abriu")
+            else:
+                fits(app.result_windows[-1], "e-mail pronto")
+            if result["arquivos_salvos"] != ["planilha_orcamento.xlsx"]:
+                problems.append(f"planilha não foi salva: {result['arquivos_salvos']}")
+            if IS_WINDOWS:
+                import ctypes
+                for win, name in ((app.bubble, "balão"), (app.badge, "aviso vermelho")):
+                    if win is not None and not ctypes.windll.user32.GetWindowLongW(hwnd_of(win), -20) & WS_EX_NOACTIVATE:
+                        problems.append(f"{name}: pode roubar o foco (sem WS_EX_NOACTIVATE)")
+                if app.overlay is not None and not ctypes.windll.user32.GetWindowLongW(hwnd_of(app.overlay), -20) & WS_EX_TRANSPARENT:
+                    problems.append("marcação vermelha: não deixa o clique passar")
             for win, name in ((app.bar, "barra"), (app.bubble, "balao"), (app.badge, "aviso vermelho")):
                 if win is None:
                     problems.append(f"{name}: não abriu")
@@ -1301,7 +1597,9 @@ def autotest(out_path: str) -> int:
 
         def step3() -> None:
             shot("compacto")
-            app.stop_live(save=False)
+            for w in app.result_windows:
+                w.destroy()
+            app.stop_live()
             app.show_window()
             result["problemas"] = problems
             result["ok"] = (result["janelas"] == 4 and not problems and result["protect_roundtrip"]
