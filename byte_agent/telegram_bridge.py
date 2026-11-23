@@ -52,6 +52,7 @@ HELP_TEXT = (
     "/permissoes — o que o agente faz sozinho | /permissao <tipo> sugerir|aprovar|automatico | /atividade — o que ele fez\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/cliente <nome ou CNPJ> | <compras que você sabe> — pesquisa do cliente (cadastro, web) e plano de abordagem em .docx\n"
+    "/modelos_email — seus modelos de e-mail | /modelo_email <nome> | <situação> (texto na linha de baixo) | /assinatura <texto>\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
     "Perfil de trabalho: /arquivos | /analise <arquivo> [pergunta] | /apresentacao <tema> | /modelos\n"
@@ -785,6 +786,41 @@ class TelegramBridge:
                 self.send(chat_id, "Use: /ler <arquivo> [pergunta]. Envie o documento antes, como arquivo.")
                 return
             self._work(chat_id, "work_read_document", {"file": name, "question": question.strip()}, f"Lendo {name}...")
+        elif cmd in {"/modelos_email", "/modelo_email", "/assinatura"}:   # v13.51: modelos-base de e-mail
+            templates = getattr(self.service, "email_templates", None)
+            if templates is None:
+                self.send(chat_id, "Modelos de e-mail indisponíveis neste agente.")
+                return
+            from .modelos_email import format_list, parse_command
+            raw = text.partition(" ")[2] if " " in text.split("\n", 1)[0] else text.partition("\n")[2]
+            try:
+                if cmd == "/assinatura":
+                    if raw.strip():
+                        templates.set_signature(raw)
+                        msg = "✅ Assinatura salva. Todo e-mail que eu preparar termina com ela."
+                    else:
+                        msg = "Assinatura atual:\n" + (templates.signature() or "(nenhuma) — defina com /assinatura <texto>")
+                elif cmd == "/modelos_email" or not raw.strip():
+                    msg = format_list(templates.list(), templates.signature())
+                else:
+                    word, _, rest = raw.strip().partition(" ")
+                    if word.lower() == "apagar":
+                        msg = f"🗑️ Modelo \"{templates.delete(rest)['nome']}\" apagado."
+                    elif word.lower() == "ver":
+                        t = templates.get(rest)
+                        msg = f"✉️ {t['nome']}" + (f" — {t['uso']}" if t["uso"] else "") + \
+                              (f"\nAssunto: {t['assunto']}" if t["assunto"] else "") + f"\n\n{t['corpo']}"
+                    else:
+                        f = parse_command(raw)
+                        if not f["corpo"]:
+                            raise ValueError("Escreva o texto do modelo na linha de baixo, ex.:\n/modelo_email Follow-up de "
+                                             "orçamento | depois de mandar proposta\nOlá, {{nome}}! ...")
+                        t = templates.save(f["nome"], f["corpo"], f["uso"], f["assunto"])
+                        msg = (f"✅ Modelo \"{t['nome']}\" salvo" + (f" (campos: {', '.join(t['campos'])})" if t["campos"] else "")
+                               + ". Vou usá-lo quando a situação combinar.")
+            except ValueError as err:
+                msg = f"⚠️ {err}"
+            self.send(chat_id, msg)
         elif cmd == "/cliente":                                    # v13.50: pesquisa de cliente com plano de abordagem
             if not arg:
                 self.send(chat_id, "Use: /cliente <nome ou CNPJ> | <o que você sabe das compras dele (opcional)>\n"

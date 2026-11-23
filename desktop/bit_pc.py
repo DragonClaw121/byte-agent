@@ -31,7 +31,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.3"
+VERSION = "1.4"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -248,6 +248,58 @@ def capture(region: Optional[Dict[str, int]] = None) -> Tuple[Any, Dict[str, int
     return img, {k: int(area[k]) for k in ("left", "top", "width", "height")}
 
 
+def print_window(hwnd: int) -> Optional[Tuple[Any, Dict[str, int]]]:
+    """Fotografa a JANELA em uso pelo próprio Windows (PrintWindow): o que estiver por cima dela, como a barra do Bit,
+    não aparece, e nada pisca na tela. Devolve (imagem, região na tela) ou None (janela que não deixa: aí vale o plano B)."""
+    if not IS_WINDOWS or not hwnd:
+        return None
+    import ctypes
+    from ctypes import wintypes
+    from PIL import Image
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    rect = wintypes.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    if w < 80 or h < 60 or w * h > 80_000_000:
+        return None
+    screen_dc = user32.GetDC(0)
+    mem_dc = gdi32.CreateCompatibleDC(screen_dc)
+    bmp = gdi32.CreateCompatibleBitmap(screen_dc, w, h)
+    old = gdi32.SelectObject(mem_dc, bmp)
+    try:
+        if not user32.PrintWindow(hwnd, mem_dc, 2):                     # PW_RENDERFULLCONTENT (Chrome, Edge, Office)
+            return None
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                        ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                        ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+        header = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(w * h * 4)
+        if not gdi32.GetDIBits(mem_dc, bmp, 0, h, buf, ctypes.byref(header), 0):
+            return None
+        img = Image.frombuffer("RGB", (w, h), buf, "raw", "BGRX", 0, 1)
+    finally:
+        gdi32.SelectObject(mem_dc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(0, screen_dc)
+    lo, hi = img.convert("L").getextrema()
+    if hi - lo < 10:                                                    # tudo preto/branco: a janela não deixou
+        return None
+    region = {"left": rect.left, "top": rect.top, "width": w, "height": h}
+    info = window_info(hwnd)                                            # tira a borda invisível do Windows 10/11
+    if info:
+        l, t, r, b = info["rect"]
+        box = (max(0, l - rect.left), max(0, t - rect.top), min(w, r - rect.left), min(h, b - rect.top))
+        if box[2] - box[0] > 80 and box[3] - box[1] > 60:
+            img = img.crop(box)
+            region = {"left": rect.left + box[0], "top": rect.top + box[1], "width": box[2] - box[0], "height": box[3] - box[1]}
+    return img, region
+
+
 def virtual_screen() -> Dict[str, int]:
     import mss
     with mss.mss() as sct:
@@ -302,6 +354,85 @@ def mail_link(to: str, subject: str, body: str) -> str:
 def open_mail(to: str, subject: str, body: str) -> None:
     """E-mail novo no programa de e-mail padrão (o Outlook, no Windows da empresa), já com assunto e texto."""
     open_path(mail_link(to, subject, body))
+
+
+def html_to_text(html: str) -> str:
+    import html as html_lib
+    import re
+    text = re.sub(r"(?is)<(style|script|head)[^>]*>.*?</\1>", " ", html)
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html_lib.unescape(text).replace("\xa0", " ")
+    lines = [" ".join(line.split()) for line in text.split("\n")]
+    out, blank = [], False
+    for line in lines:
+        if line or not blank:
+            out.append(line)
+        blank = not line
+    return "\n".join(out).strip()
+
+
+def read_outlook_template(path: str) -> Optional[Dict[str, str]]:
+    """Um modelo .oft do Outlook (mesmo formato do .msg): assunto e texto."""
+    try:
+        import olefile                                        # pip install olefile (o instalador já instala)
+    except ImportError:
+        return None
+    try:
+        ole = olefile.OleFileIO(path)
+    except Exception:
+        return None
+    try:
+        def text(prop: str) -> str:
+            for suffix, enc in (("001F", "utf-16-le"), ("001E", "cp1252")):
+                name = f"__substg1.0_{prop}{suffix}"
+                if ole.exists(name):
+                    return ole.openstream(name).read().decode(enc, "replace").rstrip("\x00").strip()
+            return ""
+        subject, body = text("0037"), text("1000")
+        if not body and ole.exists("__substg1.0_10130102"):
+            body = html_to_text(ole.openstream("__substg1.0_10130102").read().decode("utf-8", "replace"))
+    finally:
+        ole.close()
+    if len(body.strip()) < 10:
+        return None
+    name = os.path.splitext(os.path.basename(path))[0]
+    return {"nome": name[:80], "assunto": subject[:200], "corpo": body.replace("\r\n", "\n")[:8000], "uso": ""}
+
+
+def outlook_files() -> Tuple[List[Dict[str, str]], List[Tuple[str, str]]]:
+    """Modelos (.oft) e assinaturas (.txt) que o Outlook clássico guarda no PC."""
+    appdata = os.environ.get("APPDATA") or ""
+    templates: List[Dict[str, str]] = []
+    folders = [os.path.join(appdata, "Microsoft", "Templates"),
+               os.path.join(os.path.expanduser("~"), "Documents", "Custom Office Templates"),
+               os.path.join(os.path.expanduser("~"), "Documents", "Modelos Personalizados do Office")]
+    for folder in folders:
+        if os.path.isdir(folder):
+            for name in sorted(os.listdir(folder)):
+                if name.lower().endswith(".oft"):
+                    item = read_outlook_template(os.path.join(folder, name))
+                    if item:
+                        templates.append(item)
+    signatures: List[Tuple[str, str]] = []
+    sig_dir = os.path.join(appdata, "Microsoft", "Signatures")
+    if os.path.isdir(sig_dir):
+        files = [os.path.join(sig_dir, n) for n in os.listdir(sig_dir) if n.lower().endswith((".txt", ".htm"))]
+        for path in sorted(files, key=os.path.getmtime, reverse=True):
+            raw = open(path, "rb").read()
+            for enc in ("utf-16", "utf-8", "cp1252"):
+                try:
+                    text = raw.decode(enc) if enc != "utf-16" or raw[:2] in (b"\xff\xfe", b"\xfe\xff") else None
+                except UnicodeDecodeError:
+                    text = None
+                if text:
+                    break
+            if text:
+                text = html_to_text(text) if path.lower().endswith(".htm") else text.strip()
+                stem = os.path.splitext(os.path.basename(path))[0]
+                if text and stem not in [n for n, _ in signatures]:
+                    signatures.append((stem, text[:1500]))
+    return templates, signatures
 
 
 # ================================================================== voz (opcional)
@@ -673,6 +804,9 @@ class App:
                                                                padx=(0, self.px(4)), pady=(self.px(3), 0))
         for col in range(3):
             kinds.grid_columnconfigure(col, weight=1)
+        tk.Button(prep, text=tk_safe("☰ Meus modelos de e-mail e assinatura"), command=self.open_templates, relief="flat",
+                  cursor="hand2", bg=self.BG, fg=self.PRI, activebackground=self.BG, font=("Segoe UI", 9, "underline"),
+                  borderwidth=0, anchor="w").pack(anchor="w", pady=(self.px(3), 0))
         self.suggest_box = tk.Frame(prep, bg=self.BG)
         self.suggest_box.pack(fill="x")
         tools = tk.Frame(f, bg=self.BG)
@@ -786,11 +920,63 @@ class App:
                 return region, info["title"]
         return {}, ""
 
+    def clean_capture(self, region: Optional[Dict[str, int]]) -> Tuple[Any, Dict[str, int]]:
+        """Foto da tela SEM o Bit: primeiro a janela em uso direto (PrintWindow); se ela não deixar, as janelas do Bit
+        ficam invisíveis por um instante (sem fechar nem roubar o foco) durante a foto."""
+        info = self.last_foreign
+        if info and region:
+            shot = print_window(info["hwnd"])
+            if shot is not None:
+                return shot
+        if threading.current_thread() is threading.main_thread():
+            return self.hidden_capture(region)
+        box: Dict[str, Any] = {}
+        done = threading.Event()
+
+        def job() -> None:
+            try:
+                box["r"] = self.hidden_capture(region)
+            except Exception as err:
+                box["e"] = err
+            finally:
+                done.set()
+        self.events.put(("call", job))
+        if not done.wait(6.0):
+            raise RuntimeError("a tela está ocupada agora")
+        if "e" in box:
+            raise box["e"]
+        return box["r"]
+
+    def our_windows(self) -> List[Any]:
+        return [w for w in [self.root, self.bar, self.bubble, self.badge, self.overlay] + list(self.toasts)
+                + list(self.result_windows) + list(getattr(self, "extra_windows", [])) if alive(w)]
+
+    def hidden_capture(self, region: Optional[Dict[str, int]]) -> Tuple[Any, Dict[str, int]]:
+        saved = []
+        for win in self.our_windows():
+            try:
+                if win.winfo_ismapped():
+                    saved.append((win, float(win.attributes("-alpha"))))
+                    win.attributes("-alpha", 0.0)
+            except Exception:
+                continue
+        self.last_hidden = len(saved)
+        try:
+            self.root.update_idletasks()
+            time.sleep(0.15)                                  # o Windows redesenha o que estava atrás
+            return capture(region or None)
+        finally:
+            for win, alpha in saved:
+                try:
+                    win.attributes("-alpha", alpha)
+                except Exception:
+                    pass
+
     def grab(self) -> Tuple[Optional[str], Optional[Dict[str, int]], Optional[List[int]], str]:
         region, title = self.target_region()
         if region is None:
             return None, None, None, title
-        img, used = capture(region or None)
+        img, used = self.clean_capture(region)
         return encode(img), used, signature(img), title
 
     def look(self, question: Optional[str] = None) -> None:
@@ -852,7 +1038,8 @@ class App:
                 if region is None:
                     self.events.put(("call", lambda: self.set_badge("‖ Janela privada: não estou olhando")))
                     continue
-                img, used = capture(region or None)
+                direct = print_window(self.last_foreign["hwnd"]) if self.last_foreign and region else None
+                img, used = direct or capture(region or None)        # só para ver se mudou: não esconde nada
                 sig = signature(img)
                 now = time.time()
                 moved = difference(sig, live["sig"]) >= CHANGE_THRESHOLD
@@ -865,6 +1052,8 @@ class App:
                     continue
                 live["busy"], live["sent"], live["sig"] = True, now, sig
                 question, live["pergunta"] = live["pergunta"], ""
+                if direct is None:                                # a foto que vai para o Bit é sempre sem o Bit
+                    img, used = self.clean_capture(region)
                 body = {"sessao": live["sessao"], "objetivo": live["objetivo"], "tela": encode(img), "pergunta": question}
                 res = self.api.call("POST", "ao-vivo", body, timeout=90)
                 self.events.put(("call", lambda r=res, u=used, t=title: self.show_observation(r, u, t)))
@@ -1009,7 +1198,7 @@ class App:
         win.title(tk_safe(res.get("titulo") or "Pronto") + " — Bit")
         win.configure(bg=self.BG)
         sw, sh = self.screen()
-        w, h = min(self.px(600), sw - self.px(40)), min(self.px(560), sh - self.px(90))
+        w, h = min(self.px(720), sw - self.px(40)), min(self.px(560), sh - self.px(90))
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
         self.root.after(200, self.later, exclude_from_capture, win)
         frame = tk.Frame(win, bg=self.BG)
@@ -1050,12 +1239,149 @@ class App:
             self.button(buttons, "Copiar o assunto", lambda: copy(fields["assunto"].get(), "Assunto")).pack(
                 side="left", padx=self.px(6))
             self.button(buttons, "Abrir no e-mail", mail).pack(side="left")
+        def save_as_template() -> None:
+            from tkinter import simpledialog
+            name = simpledialog.askstring(APP_NAME, "Nome do modelo (ex.: Follow-up de orçamento):", parent=win)
+            if not name:
+                return
+            use = simpledialog.askstring(APP_NAME, "Quando usar? (opcional, ex.: 3 dias depois da proposta)", parent=win) or ""
+            body = {"acao": "salvar", "nome": name, "uso": use, "corpo": text_of(), "origem": "pc",
+                    "assunto": fields["assunto"].get() if "assunto" in fields else ""}
+            self.run_bg(lambda: self.api.call("POST", "modelos", body),
+                        lambda r: status.configure(text=f"✔ Salvo como o modelo \"{name}\". Troque nomes e números por {{{{campos}}}} se quiser."))
+        if res.get("tipo") == "email":
+            self.button(buttons, "Salvar como modelo", save_as_template).pack(side="left", padx=self.px(6))
         self.button(buttons, "Fechar", win.destroy).pack(side="right")
-        status = self.label(frame, "Revise e ajuste o texto à vontade antes de copiar.", 9, self.MUTED)
+        hint = (f"Baseado no seu modelo \"{res['modelo']}\". " if res.get("modelo") else "") + \
+            "Revise e ajuste o texto à vontade antes de copiar."
+        status = self.label(frame, hint, 9, self.MUTED)
         status.pack(side="bottom", anchor="w", pady=(self.px(6), 0))
         win.lift()
         win.focus_force()
         self.result_windows.append(win)
+
+    def open_templates(self) -> None:
+        """Modelos de e-mail e assinatura: o Bit usa o que combina com cada situação."""
+        if self.api is None:
+            return
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Modelos de e-mail — Bit")
+        win.configure(bg=self.BG)
+        sw, sh = self.screen()
+        w, h = min(self.px(820), sw - self.px(40)), min(self.px(600), sh - self.px(90))
+        win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        self.extra_windows = [x for x in getattr(self, "extra_windows", []) if alive(x)] + [win]
+        self.root.after(200, self.later, exclude_from_capture, win)
+        state: Dict[str, Any] = {"items": [], "n": None}
+        top = tk.Frame(win, bg=self.BG)
+        top.pack(fill="x", padx=self.px(12), pady=(self.px(10), 0))
+        self.label(top, "Seus modelos de e-mail", 13, bold=True).pack(side="left")
+        status = self.label(win, "O Bit usa o modelo que combina com a situação e mantém o seu texto e tom.", 9, self.MUTED,
+                            wraplength=w - self.px(40))
+        body = tk.Frame(win, bg=self.BG)
+        left = tk.Frame(body, bg=self.BG)
+        right = tk.Frame(body, bg=self.BG)
+        listbox = tk.Listbox(left, bg=self.CARD, fg=self.INK, selectbackground=self.PRI, relief="flat", borderwidth=0,
+                             font=("Segoe UI", 10), activestyle="none", exportselection=False)
+        listbox.pack(fill="both", expand=True)
+        entries: Dict[str, Any] = {}
+        for key, label in (("nome", "Nome"), ("uso", "Quando usar"), ("assunto", "Assunto")):
+            self.label(right, label, 9, self.MUTED).pack(anchor="w")
+            e = tk.Entry(right, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
+            e.pack(fill="x", ipady=self.px(3), pady=(0, self.px(4)))
+            entries[key] = e
+        self.label(right, "Texto (use {{nome}}, {{pedido}}... onde muda)", 9, self.MUTED).pack(anchor="w")
+        text = tk.Text(right, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
+                       font=("Segoe UI", 10), height=1, width=1, borderwidth=0, padx=self.px(6), pady=self.px(6))
+        sig_box = tk.Frame(win, bg=self.BG)
+        self.label(sig_box, "Assinatura (vai no fim de todo e-mail)", 9, self.MUTED).pack(anchor="w")
+        sig = tk.Text(sig_box, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
+                      font=("Segoe UI", 10), height=3, width=1, borderwidth=0, padx=self.px(6), pady=self.px(4))
+        sig.pack(fill="x")
+
+        def show(res: Dict[str, Any]) -> None:
+            state["items"] = list(res.get("modelos") or [])
+            listbox.delete(0, "end")
+            for t in state["items"]:
+                listbox.insert("end", tk_safe(f"{t['nome']}" + (f" — {t['uso']}" if t.get("uso") else "")))
+            if "assinatura" in res and not sig.get("1.0", "end").strip():
+                sig.insert("1.0", res.get("assinatura") or "")
+            if res.get("importados") is not None:
+                status.configure(text=f"✔ {res['importados']} modelo(s) importado(s) do Outlook.")
+
+        def pick(_e: Any = None) -> None:
+            sel = listbox.curselection()
+            if not sel:
+                return
+            t = state["items"][sel[0]]
+            state["n"] = t["n"]
+            for key in entries:
+                entries[key].delete(0, "end")
+                entries[key].insert(0, t.get(key) or "")
+            text.delete("1.0", "end")
+            text.insert("1.0", t.get("corpo") or "")
+        listbox.bind("<<ListboxSelect>>", pick)
+
+        def new() -> None:
+            state["n"] = None
+            listbox.selection_clear(0, "end")
+            for e in entries.values():
+                e.delete(0, "end")
+            text.delete("1.0", "end")
+            entries["nome"].focus_set()
+
+        def call(payload: Dict[str, Any], msg: str) -> None:
+            def done(res: Dict[str, Any]) -> None:
+                show(res)
+                status.configure(text=msg)
+            self.run_bg(lambda: self.api.call("POST", "modelos", payload), done,
+                        lambda m: status.configure(text="⚠ " + tk_safe(m)))
+
+        def save() -> None:
+            call({"acao": "salvar", "origem": "pc", "corpo": text.get("1.0", "end").strip(),
+                  **{k: e.get().strip() for k, e in entries.items()}}, "✔ Modelo salvo.")
+
+        def delete() -> None:
+            if state["n"] is not None:
+                call({"acao": "apagar", "n": state["n"]}, "✔ Modelo apagado.")
+                new()
+
+        def import_outlook() -> None:
+            status.configure(text="Procurando os modelos (.oft) e a assinatura do Outlook…")
+
+            def work() -> Dict[str, Any]:
+                found, signatures = outlook_files()
+                if not found and not signatures:
+                    raise ApiError("Não achei modelos (.oft) nem assinaturas do Outlook neste PC. No Outlook novo, os "
+                                   "modelos ficam na nuvem: abra cada um, copie e cole aqui.")
+                return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found,
+                                                         "assinatura": signatures[0][1] if signatures else ""})
+
+            def done(res: Dict[str, Any]) -> None:
+                sig.delete("1.0", "end")
+                show(res)
+            self.run_bg(work, done, lambda m: status.configure(text="⚠ " + tk_safe(m)))
+
+        actions = tk.Frame(top, bg=self.BG)
+        actions.pack(side="right")
+        self.button(actions, "Importar do Outlook", import_outlook, primary=True).pack(side="left")
+        buttons = tk.Frame(right, bg=self.BG)
+        buttons.pack(side="bottom", fill="x", pady=(self.px(6), 0))
+        self.button(buttons, "Salvar modelo", save, primary=True).pack(side="left")
+        self.button(buttons, "Novo", new).pack(side="left", padx=self.px(6))
+        self.button(buttons, "Apagar", delete).pack(side="left")
+        text.pack(fill="both", expand=True)
+        self.button(sig_box, "Salvar assinatura",
+                    lambda: call({"acao": "assinatura", "assinatura": sig.get("1.0", "end").strip()}, "✔ Assinatura salva.")
+                    ).pack(anchor="w", pady=(self.px(4), 0))
+        sig_box.pack(side="bottom", fill="x", padx=self.px(12), pady=(0, self.px(10)))
+        status.pack(side="bottom", anchor="w", padx=self.px(12), pady=(self.px(4), self.px(4)))
+        body.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(8))
+        left.pack(side="left", fill="both", expand=False, ipadx=self.px(80))
+        right.pack(side="left", fill="both", expand=True, padx=(self.px(10), 0))
+        self.templates_window, self.templates_list = win, listbox
+        self.run_bg(lambda: self.api.call("GET", "modelos"), show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
     def draw_suggestions(self) -> None:
         """Os botões "Preparar" (na janela e na barra) + as sugestões do que o Bit viu."""
@@ -1314,6 +1640,9 @@ class App:
                                                                    padx=(0, self.px(3)), pady=(0, self.px(3)))
         for col in range(3):
             row1.grid_columnconfigure(col, weight=1)
+        tk.Button(self.bar_prep, text=tk_safe("☰ Meus modelos de e-mail"), command=self.open_templates, relief="flat",
+                  cursor="hand2", bg=self.CARD, fg=self.PRI, activebackground=self.CARD, font=("Segoe UI", 9, "underline"),
+                  borderwidth=0).pack(anchor="w")
         self.bar_suggest = tk.Frame(self.bar_prep, bg=self.CARD)
         self.bar_suggest.pack(fill="x", pady=(self.px(4), 0))
         self.bar_status = tk.Label(inner, text="", bg=self.CARD, fg=self.MUTED, wraplength=self.px(320), justify="left", anchor="w",
@@ -1557,11 +1886,16 @@ class FakeApi:
                         "assunto": "Novidades para a ACME", "corpo": "Olá, Maria! ..."}
             if (body or {}).get("tipo") == "email":
                 return {"tipo": "email", "titulo": "Resposta à Ana", "para": "ana@empresa.com", "assunto": "Re: Orçamento",
+                        "modelo": "Follow-up de orçamento",
                         "corpo": "Olá, Ana!\n\nSegue o orçamento dos 3 notebooks, com entrega até 12/12. 👍\n\nAbraços,\n[SEU NOME]",
                         "arquivos": []}
             return {"tipo": "planilha", "titulo": "Orçamento", "arquivos": ["planilha_orcamento.xlsx"]}
         if sub == "ao-vivo/fim":
             return {"texto": "Encerrado."}
+        if sub == "modelos":
+            items = [{"n": 1, "nome": "Follow-up de orçamento", "uso": "3 dias depois da proposta", "assunto": "Proposta {{pedido}}",
+                      "corpo": "Olá, {{nome}}!\n\nConseguiu avaliar a proposta?\n\nAbraço,", "usos": 2}]
+            return {"modelos": items, "assinatura": "Gabriel · Comercial"}
         return {"avisos": []}
 
     def download(self, sub: str, timeout: float = 120.0) -> bytes:
@@ -1673,6 +2007,36 @@ def autotest(out_path: str) -> int:
 
         def step3() -> None:
             result["vivas_no_fim"] = {"barra": alive(app.bar), "balao": alive(app.bubble), "sugestoes_barra": alive(app.bar_suggest)}
+            app.open_templates()
+            app.root.after(800, step3b)
+
+        def step3b() -> None:
+            app.pump()
+            win = getattr(app, "templates_window", None)
+            if not alive(win):
+                problems.append("janela de modelos: não abriu")
+            else:
+                fits(win, "modelos de e-mail")
+                result["modelos_na_lista"] = app.templates_list.size()
+                if result["modelos_na_lista"] != 1:
+                    problems.append("janela de modelos: a lista não carregou")
+            before = [float(w.attributes("-alpha")) for w in app.our_windows()]
+            app.hidden_capture(None)                                      # o Bit some na foto e volta igual
+            after = [float(w.attributes("-alpha")) for w in app.our_windows()]
+            result["janelas_escondidas_na_foto"] = getattr(app, "last_hidden", 0)
+            if before != after or not result["janelas_escondidas_na_foto"]:
+                problems.append(f"foto sem o Bit: transparência não voltou ({before} -> {after})")
+            if IS_WINDOWS:
+                direct_shot = print_window(hwnd_of(app.root))
+                result["printwindow"] = list(direct_shot[0].size) if direct_shot else None
+                if direct_shot is None:
+                    problems.append("PrintWindow não fotografou a janela")
+            shot("modelos")
+            if alive(win):
+                win.destroy()
+            app.root.after(100, step3c)
+
+        def step3c() -> None:
             shot("compacto")
             for w in app.result_windows:
                 w.destroy()
@@ -1695,6 +2059,7 @@ def autotest(out_path: str) -> int:
             run.__name__ = step.__name__
             return run
         step1, step2, step2b, step3 = guarded(step1), guarded(step2), guarded(step2b), guarded(step3)
+        step3b, step3c = guarded(step3b), guarded(step3c)
         app.root.after(900, step1)
         app.root.after(60000, lambda: (problems.append("tempo esgotado (60 s)"), app.root.destroy()))
         app.run()

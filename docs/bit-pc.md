@@ -68,6 +68,26 @@ No Windows, os ícones são os do próprio sistema (Segoe MDL2). A tabela mostra
 - **Desligar:** Ctrl+Alt+L, clique no aviso vermelho, ou ele desliga sozinho depois de 20 minutos sem mudança na tela.
   As notas da sessão ficam na conversa (o Bit lembra o contexto se você pedir algo depois).
 
+### Modelos de e-mail e assinatura (v1.4 do app)
+- Em **Preparar → ☰ Meus modelos de e-mail e assinatura** (também na barra compacta):
+  - crie, edite e apague modelos, cada um com nome, "quando usar", assunto e texto. Use `{{nome}}`, `{{pedido}}`...
+    onde muda;
+  - defina a sua **assinatura**.
+- **Importar do Outlook:** lê os modelos que o Outlook clássico guarda no PC (arquivos `.oft` em
+  `%APPDATA%\Microsoft\Templates`) e a sua assinatura (`%APPDATA%\Microsoft\Signatures`). No Outlook novo, os modelos
+  ficam na nuvem: abra cada um, copie e cole.
+- **Salvar como modelo:** num e-mail que o Bit preparou e você ajustou, clique em **Salvar como modelo**.
+- **Uso automático:** ao preparar um e-mail, o Bit escolhe o modelo que combina com a situação, mantém o seu texto e
+  tom, preenche o que muda e assina. A janela mostra "Baseado no seu modelo …". Sem modelo adequado, ele escreve no seu
+  estilo (saudações e despedidas dos seus modelos).
+
+### O Bit não aparece mais nas fotos da tela (v1.4)
+- **Captura direta:** o app fotografa a janela em uso diretamente pelo Windows (Outlook, Excel, navegador...). O que
+  estiver por cima, como a barra, o balão e os avisos do Bit, não aparece, e nada pisca na tela.
+- **Reserva:** quando a janela não permite a captura direta, as janelas do Bit ficam invisíveis por ~0,15 s durante a
+  foto e voltam iguais, sem roubar o foco.
+- **No assistente ao vivo:** só a foto que vai para o Bit é tirada assim. A checagem de "a tela mudou?" não esconde nada.
+
 ### Por que travava (corrigido na v1.2)
 - **Captura:** usava o modo do Windows que recompõe a tela inteira a cada foto (CAPTUREBLT) e fazia o sistema
   "engasgar" por instantes. Agora está desligado.

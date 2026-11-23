@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.50"
+BYTE_VERSION = "13.51"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7525,7 +7525,7 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
     <button class="b90-tab-btn" id="b90-btn-tab-ctx" onclick="window.b90Tab('b90-tab-ctx', this)">🗓️ Agenda Assíncrona & Memórias</button>
     <button class="b90-tab-btn" id="b90-btn-tab-arena" onclick="window.b90Tab('b90-tab-arena', this)">🏆 Busca Universal de LLMs & Arena</button>
     <button class="b90-tab-btn" id="b90-btn-tab-conn" onclick="window.b90Tab('b90-tab-conn', this)">🌐 Conexão, Setup & VRAM</button>
-    <button class="b90-tab-btn" id="b90-btn-tab-email" onclick="window.b90Tab('b90-tab-email', this)">✉️ Gmail & Outlook</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-email" onclick="window.b90Tab('b90-tab-email', this); window.b90LoadTemplates()">✉️ Gmail & Outlook</button>
     <button class="b90-tab-btn" id="b90-btn-tab-work" style="display:none;" onclick="window.b90Tab('b90-tab-work', this)">📊 Trabalho</button>
   </div>
 
@@ -8020,6 +8020,31 @@ pygame.time.Clock().tick(60)</textarea>
 
   <!-- ABA 6: GMAIL & OUTLOOK -->
   <div id="b90-tab-email" class="b90-tab-content">
+    <div class="b90-card" style="margin-bottom:12px;">
+      <h3>✉️ Modelos de e-mail (o Bit escreve como você)</h3>
+      <div style="color:var(--muted); font-size:0.76rem; margin-bottom:6px;">Sempre que o Bit preparar um e-mail (Bit no PC,
+        triagem, respostas, plano de cliente), ele usa o modelo que combina com a situação, mantendo o seu texto e tom.
+        Use <code>{{nome}}</code>, <code>{{pedido}}</code>... onde muda. Sem modelo adequado, ele escreve no seu estilo.</div>
+      <div class="b90-grid-equal">
+        <div>
+          <div id="b90-tpl-list" style="max-height:260px; overflow:auto; font-size:0.82rem;"></div>
+          <span class="b90-label" style="margin-top:8px; display:block;">Assinatura (vai no fim de todo e-mail)</span>
+          <textarea id="b90-tpl-sig" class="b90-input" rows="3" placeholder="Gabriel Amorim&#10;Comercial · (11) 99999-0000"></textarea>
+          <button class="b90-btn-sec" style="margin-top:4px;" onclick="window.b90SaveSignature()">Salvar assinatura</button>
+        </div>
+        <div>
+          <input id="b90-tpl-nome" class="b90-input" placeholder="Nome (ex.: Follow-up de orçamento)" />
+          <input id="b90-tpl-uso" class="b90-input" style="margin-top:4px;" placeholder="Quando usar (ex.: 3 dias depois de mandar a proposta)" />
+          <input id="b90-tpl-assunto" class="b90-input" style="margin-top:4px;" placeholder="Assunto (opcional; pode ter {{campos}})" />
+          <textarea id="b90-tpl-corpo" class="b90-input" rows="8" style="margin-top:4px;" placeholder="Olá, {{nome}}!&#10;&#10;Passando para saber se conseguiu avaliar a proposta do {{pedido}}..."></textarea>
+          <div style="display:flex; gap:6px; margin-top:4px;">
+            <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SaveTemplate()">Salvar modelo</button>
+            <button class="b90-btn-sec" style="margin:0;" onclick="window.b90ClearTemplate()">Novo</button>
+          </div>
+          <div id="b90-tpl-fb" style="font-size:0.74rem; color:var(--muted); margin-top:4px;"></div>
+        </div>
+      </div>
+    </div>
     <div class="b90-grid">
       <div class="b90-card">
         <h3>Integração Gmail & Outlook (IMAP / SMTP)</h3>
@@ -8800,6 +8825,40 @@ pygame.time.Clock().tick(60)</textarea>
     el.parentElement.querySelectorAll('button').forEach(x => x.disabled = true);
     const res = await b90Call('app_command', { callback: b.data }, true);
     b90ShowCommandOutput(b.label, res.messages, res.error);
+  };
+  // v13.51: modelos-base de e-mail
+  let b90Templates = [];
+  window.b90LoadTemplates = async function() {
+    const res = await b90Call('email_templates_list', {}, true);
+    if (res.error) { document.getElementById('b90-tpl-list').textContent = '⚠️ ' + res.error; return; }
+    b90Templates = res.modelos || [];
+    const sig = document.getElementById('b90-tpl-sig');
+    if (sig && document.activeElement !== sig) sig.value = res.assinatura || '';
+    document.getElementById('b90-tpl-list').innerHTML = b90Templates.map(t => `<div class="b90-row-item"><span><b>${b90EscapeHtml(t.nome)}</b>
+      <span style="color:var(--muted);">${b90EscapeHtml(t.uso || '')} · usado ${t.usos}x</span></span><span style="display:flex; gap:4px;">
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90EditTemplate(${t.n})">Editar</button>
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90DeleteTemplate(${t.n})">Apagar</button></span></div>`).join('')
+      || '<span style="color:var(--muted);">Nenhum modelo ainda: crie ao lado (ou importe do Outlook pelo Bit no PC).</span>';
+  };
+  window.b90EditTemplate = function(n) {
+    const t = b90Templates.find(x => x.n === n); if (!t) return;
+    const v = id => document.getElementById(id);
+    v('b90-tpl-nome').value = t.nome; v('b90-tpl-uso').value = t.uso || ''; v('b90-tpl-assunto').value = t.assunto || ''; v('b90-tpl-corpo').value = t.corpo;
+  };
+  window.b90ClearTemplate = function() { ['b90-tpl-nome', 'b90-tpl-uso', 'b90-tpl-assunto', 'b90-tpl-corpo'].forEach(id => document.getElementById(id).value = ''); };
+  window.b90SaveTemplate = async function() {
+    const v = id => document.getElementById(id).value;
+    const res = await b90Call('email_template_save', { nome: v('b90-tpl-nome'), uso: v('b90-tpl-uso'), assunto: v('b90-tpl-assunto'), corpo: v('b90-tpl-corpo'), origem: 'painel' }, true);
+    document.getElementById('b90-tpl-fb').textContent = res.error ? '⚠️ ' + res.error : '✅ Modelo salvo.';
+    if (!res.error) { window.b90ClearTemplate(); window.b90LoadTemplates(); }
+  };
+  window.b90DeleteTemplate = async function(n) {
+    if (!confirm('Apagar este modelo?')) return;
+    await b90Call('email_template_delete', { n }, true); window.b90LoadTemplates();
+  };
+  window.b90SaveSignature = async function() {
+    const res = await b90Call('email_signature', { assinatura: document.getElementById('b90-tpl-sig').value }, true);
+    document.getElementById('b90-tpl-fb').textContent = res.error ? '⚠️ ' + res.error : '✅ Assinatura salva.';
   };
   window.b90OpenVoice = function(ev) {            // v13.44: página de voz do Kronus, já conectada
     ev.preventDefault();

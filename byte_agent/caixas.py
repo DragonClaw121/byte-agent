@@ -793,9 +793,18 @@ def install(service: Any, data_dir: Path, personal: bool = False) -> MailHub:
         if not sender or _NO_REPLY_RE.search(sender):
             return "ERRO: essa mensagem veio de um endereço que não recebe respostas (no-reply)."
         subject = msg["subject"] if re.match(r"(?i)^\s*re:", msg["subject"]) else f"Re: {msg['subject']}"
-        signature = str((getattr(service, "work", None) and service.work.profile.get("assinatura")) or "").strip()
-        if signature and signature.split("\n")[0] not in body:
-            body = f"{body}\n\n{signature}"
+        templates = getattr(service, "email_templates", None)
+        if templates is not None and (templates.signature() or turn.get("email_template")):
+            tpl = None
+            try:
+                tpl = templates.get(turn["email_template"]) if turn.get("email_template") else None
+            except ValueError:
+                tpl = None
+            body = templates.finish(body, tpl)                 # v13.51: assinatura e uso do modelo do usuário
+        else:
+            signature = str((getattr(service, "work", None) and service.work.profile.get("assinatura")) or "").strip()
+            if signature and signature.split("\n")[0] not in body:
+                body = f"{body}\n\n{signature}"
         try:
             action_id, card = service.propose_email(sender, subject, body, in_reply_to=msg.get("message_id", ""), account=msg["account"])
         except ValueError as err:

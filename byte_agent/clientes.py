@@ -288,6 +288,9 @@ class ClientResearch:
         except Exception:
             pass
         numbered = "\n\n".join(f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}" for s in sources) or "(nenhuma)"
+        templates, tpl, email_block = getattr(self.service, "email_templates", None), None, ""
+        if templates is not None:                              # v13.51: o e-mail de abordagem segue o modelo do usuário
+            tpl, email_block = templates.guidance(f"abordagem de cliente {ident.get('foco') or ''} {request}")
         plan = self._json(
             "Você é um analista comercial sênior e escreve em português do Brasil. Monte um PLANO DE CONTA prático para o "
             "usuário acionar este cliente de forma estratégica. Regras: use SOMENTE o cadastro, as fontes e os dados internos "
@@ -300,7 +303,7 @@ class ClientResearch:
             "(compras)', 'Oportunidades', 'Riscos e pontos de atenção', 'Estratégia de acionamento' (canal, quem procurar, "
             "melhor momento, argumento principal, oferta, objeções prováveis e como responder) e 'Próximos passos' "
             "(3 a 5, com prazo); \"email\": {\"assunto\": \"...\", \"corpo\": \"e-mail de abordagem pronto, curto e "
-            "personalizado, assinatura [SEU NOME]\"}}.",
+            "personalizado, assinatura [SEU NOME]\"}}." + (f"\n\nPARA O E-MAIL DE ABORDAGEM:\n{email_block}" if email_block else ""),
             f"PEDIDO DO USUÁRIO: {request}\nFOCO: {ident.get('foco') or 'não informado'}\n"
             f"QUEM É O USUÁRIO (a nossa empresa): {json.dumps(profile, ensure_ascii=False) or 'não informado'}\n"
             f"CADASTRO OFICIAL (CNPJ):\n{json.dumps(reg, ensure_ascii=False) if reg else 'não encontrado'}\n"
@@ -320,6 +323,8 @@ class ClientResearch:
             if reg.get("atividades_secundarias"):
                 sections.insert(2, {"titulo": "Atividades secundárias (CNAE)", "itens": reg["atividades_secundarias"]})
         email = plan.get("email") if isinstance(plan.get("email"), dict) else {}
+        if templates is not None and email.get("corpo"):
+            email["corpo"] = templates.finish(str(email["corpo"]), tpl)
         if email.get("corpo"):
             sections.append({"titulo": "Rascunho do e-mail de abordagem",
                              "paragrafos": [f"Assunto: {email.get('assunto', '')}"] + str(email["corpo"]).split("\n\n")})

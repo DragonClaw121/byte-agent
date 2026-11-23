@@ -114,6 +114,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         install_update_action(service)                      # v13.41: o resultado volta para o bot de quem pediu
         from . import usuarios
         usuarios.install(service, data_dir)                 # v13.42: multiusuário (cada convidado com espaço próprio)
+        from . import modelos_email
+        modelos_email.install(service)                      # v13.51: modelos-base de e-mail e assinatura do usuário
         from . import pc
         pc.install(service)                                 # v13.47: Bit no PC (conversa, olhar a tela, ajuda ao vivo)
         from . import clientes

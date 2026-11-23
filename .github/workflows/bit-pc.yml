@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
       - name: Dependências
         run: |
-          python -m pip install --disable-pip-version-check mss==9.0.2 pillow==11.0.0 pyinstaller==6.11.1
+          python -m pip install --disable-pip-version-check mss==9.0.2 pillow==11.0.0 olefile==0.47 pyinstaller==6.11.1
           mkdir fotos
       - name: Autoteste em Python (janela, avisos, modo compacto, ajuda ao vivo) em 100% e 150%
         shell: pwsh

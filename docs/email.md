@@ -77,3 +77,22 @@ aplicativo, ou o "SMTP AUTH" para enviar. O Bit mostra o motivo exato quando o s
 - O login da Microsoft fica num arquivo próprio, **criptografado** com a chave `chave-tokens`, e é renovado sozinho.
   Para desconectar, use `/email remover` ou revogue o "Byte Email" em account.microsoft.com → Privacidade → Aplicativos.
 - Ler é só leitura: nada é marcado como lido, apagado ou movido.
+
+
+## Modelos-base e assinatura (v13.51)
+O Bit escreve os e-mails a partir dos SEUS modelos: o rascunho da triagem, as respostas na conversa, o Bit no PC e o
+e-mail de abordagem do plano de cliente.
+- **Cadastrar:**
+  - no painel (aba **Gmail & Outlook → Modelos de e-mail**);
+  - no Bit no PC (**☰ Meus modelos**, com importação do Outlook);
+  - no Telegram ou no app:
+    ```
+    /modelo_email Follow-up de orçamento | 3 dias depois de mandar a proposta
+    Assunto: Proposta {{pedido}}
+    Olá, {{nome}}! Passando para saber se conseguiu avaliar a proposta...
+    ```
+- **Comandos:** `/modelos_email` lista; `/modelo_email ver <n>` e `/modelo_email apagar <n>`; `/assinatura <texto>`
+  define a assinatura.
+- **Como o Bit usa:** escolhe o modelo pela situação (nome e "quando usar"), mantém o texto e o tom, preenche os
+  `{{campos}}` e marca `[PREENCHER: ...]` no que não souber. Sem modelo adequado, escreve no seu estilo e com a sua
+  assinatura.

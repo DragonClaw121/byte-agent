@@ -51,6 +51,8 @@ CATALOG: List[tuple] = [
     ("E-mail", "➕ Adicionar caixa", "/email adicionar", "Endereço (e um id opcional)", "voce@empresa.com.br trabalho", "obrigatorio:email"),
     ("E-mail", "🔑 Entrar na Microsoft (caixa)", "/email entrar", "Id da conta", "outlook", "obrigatorio:email"),
     ("E-mail", "🧪 Testar caixa", "/email testar", "Id da conta", "gmail", "obrigatorio:email"),
+    ("E-mail", "🧩 Modelos de e-mail", "/modelos_email", "", "", ""),
+    ("E-mail", "✍️ Assinatura", "/assinatura", "Sua assinatura (vazio = mostrar a atual)", "Gabriel Amorim | Comercial", "opcional"),
     ("Trabalho", "📁 Arquivos", "/arquivos", "", "", "trabalho"),
     ("Trabalho", "📑 Modelos", "/modelos", "", "", "trabalho"),
     ("Trabalho", "📈 Analisar arquivo", "/analise", "Arquivo (e uma pergunta, opcional)", "vendas.xlsx qual mês vendeu mais?", "obrigatorio:trabalho"),
