@@ -213,3 +213,5 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Clima, localização e notícias (v13.28):** todo agente consulta o tempo de verdade; o Kronus segue onde você está (app 1.13) — `/clima`, `/onde`
 - **Rotina (v13.29):** aprende casa, saídas e horários; avisa chuva na saída, hora de sair e repetições — [docs/rotina.md](docs/rotina.md)
 - **Base sólida (R0, v13.31–13.34):** aprovações no banco por 24 h, um processo por agente, memória por significado (Azure), relógio central com `/saude` e aviso quando algo falha — [docs/azure-conteiner.md](docs/azure-conteiner.md)
+- **Reuniões (v13.36–13.37):** transcrição ao vivo pelo app ou pelo notebook (Teams/Zoom/Meet) e ata com tarefas — [docs/app-android.md](docs/app-android.md)
+- **Microsoft (v13.38):** agenda do Outlook unificada, criar/mover/cancelar com aprovação, OneDrive automático e transcrições do Teams — [docs/microsoft.md](docs/microsoft.md)

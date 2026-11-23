@@ -316,6 +316,7 @@ class Meetings:
             secoes.append({"titulo": "Transcrição", "paragrafos": [ln for ln in m["transcript"].splitlines() if ln.strip()][:2000]})
             when = datetime.fromtimestamp(float(m["started_at"])).strftime("%d/%m/%Y %H:%M")
             documentos.write_document(self.outputs / name, {"titulo": f"Ata — {m['title']}", "subtitulo": when, "secoes": secoes})
+            documentos.publish_output(self.service, self.outputs / name)       # v13.38: OneDrive automático
             return name
         except Exception:
             return None

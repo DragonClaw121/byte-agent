@@ -23,6 +23,11 @@ CATEGORIES: Dict[str, Dict[str, Any]] = {
     "tarefas": {"label": "Tarefas da agenda", "tools": {"add_task", "complete_task"}, "default": "automatico"},
     "memorias": {"label": "Memórias (fatos e preferências)", "tools": {"add_memory"}, "default": "automatico"},
     "objetivos": {"label": "Objetivos de longo prazo", "tools": {"criar_objetivo"}, "default": "automatico"},
+    "calendario": {"label": "Criar, mover e cancelar compromissos (Outlook, Google)",
+                   "tools": {"agenda_criar_evento", "agenda_mover_evento", "agenda_cancelar_evento"},
+                   "default": "aprovar", "floor": "aprovar"},
+    "nuvem": {"label": "Salvar arquivos no OneDrive / Google Drive", "tools": {"onedrive_salvar", "drive_salvar"},
+              "default": "automatico"},
     "codigo": {"label": "Rodar código", "tools": {"run_python", "run_shell"}, "default": "aprovar", "floor": "aprovar"},
     "email": {"label": "Enviar e-mail", "tools": {"email_send"}, "default": "aprovar", "floor": "aprovar"},
     "integracoes": {"label": "Escrever no Asana, Notion e Teams",
@@ -91,6 +96,15 @@ def describe_call(tool: str, args: Dict[str, Any]) -> str:
         return f"{kind} \"{str(a.get('text', ''))[:120]}\" {when}{rep}".strip()
     if tool == "cancel_reminder":
         return f"Cancelar o lembrete #{a.get('id')}"
+    if tool == "agenda_criar_evento":
+        who = f", com {a.get('convidados')}" if a.get("convidados") else ""
+        return f"Criar o compromisso \"{str(a.get('titulo', ''))[:100]}\" em {a.get('inicio')}{who}" + (" (Teams)" if a.get("online") else "")
+    if tool == "agenda_mover_evento":
+        return f"Mudar o compromisso {a.get('ref')} para {a.get('inicio')}"
+    if tool == "agenda_cancelar_evento":
+        return f"Cancelar o compromisso {a.get('ref')}"
+    if tool in {"onedrive_salvar", "drive_salvar"}:
+        return f"Salvar {a.get('arquivo')} na nuvem"
     if tool == "criar_objetivo":
         return f"Criar o objetivo \"{str(a.get('titulo') or a.get('title') or '')[:120]}\""
     return f"Usar {tool}"

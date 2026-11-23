@@ -252,7 +252,9 @@ class TriggerEngine:
             mail_ready = bool(hub and any(hub.ready(a) for a in hub.accounts())) or bool(mail and mail.status().get("credentials_ready"))
         except Exception:
             mail_ready = False
-        return {"agenda": bool(self.read_secret(("BYTE_AGENDA_ICS",))), "email": mail_ready,
+        from . import calendarios
+        return {"agenda": bool(self.read_secret(("BYTE_AGENDA_ICS",))) or calendarios.has_providers(self.service),
+                "email": mail_ready,
                 "tarefa_parada": True, "objetivo_travado": getattr(self.service, "goal_runner", None) is not None}
 
     def status(self) -> Dict[str, Any]:
@@ -316,18 +318,26 @@ class TriggerEngine:
     # ---------------- vigias
     def _watch_agenda(self, now: float) -> List[Event]:
         lead = max(1.0, _env_float("BYTE_GATILHO_AGENDA_MIN", 30.0)) * 60.0
-        text = self.ics_fetcher(self.read_secret(("BYTE_AGENDA_ICS",)))
+        from . import calendarios
         start = datetime.fromtimestamp(now, timezone.utc)
         end = datetime.fromtimestamp(now + lead, timezone.utc)
+        found: List[Dict[str, Any]] = []
+        url = self.read_secret(("BYTE_AGENDA_ICS",))
+        if url:
+            for ev in parse_ics(self.ics_fetcher(url)):
+                for occ in occurrences(ev, start, end):
+                    found.append({"when": occ, "all_day": bool(ev.get("all_day")), "title": ev.get("title") or "compromisso",
+                                  "location": ev.get("location") or "", "uid": ev.get("uid") or ev.get("title") or ""})
         out: List[Event] = []
-        for ev in parse_ics(text):
+        for ev in calendarios.merge(found, calendarios.provider_events(self.service, start, end)):   # v13.38: + contas
             if ev.get("all_day"):
                 continue                                  # evento de dia inteiro não tem "começa em 30 min"
-            for occ in occurrences(ev, start, end):
-                mins = max(0, int(round((occ.timestamp() - now) / 60)))
-                where = f" — {ev['location']}" if ev.get("location") else ""
-                out.append(Event(f"agenda|{ev.get('uid') or ev.get('title')}|{int(occ.timestamp())}",
-                                 f"📅 Em {mins} min ({_local(occ.timestamp()):%H:%M}): {ev.get('title') or 'compromisso'}{where}"))
+            occ = ev["when"]
+            mins = max(0, int(round((occ.timestamp() - now) / 60)))
+            where = f" — {ev['location']}" if ev.get("location") else ""
+            online = " (online)" if ev.get("online_url") else ""
+            out.append(Event(f"agenda|{ev.get('uid') or ev.get('title')}|{int(occ.timestamp())}",
+                             f"📅 Em {mins} min ({_local(occ.timestamp()):%H:%M}): {ev.get('title') or 'compromisso'}{where}{online}"))
         return out
 
     def _unseen_headers(self) -> List[Dict[str, str]]:

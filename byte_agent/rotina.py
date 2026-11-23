@@ -255,15 +255,14 @@ class Routine:
     def rule_time_to_leave(self, now_epoch: float) -> List[gatilhos.Event]:
         local = getattr(self.service, "local", None)
         here = local.current() if local else None
-        ics = self._ics()
-        if not (here and ics):
+        if not (here and self._has_calendar()):
             return []
         start = datetime.fromtimestamp(now_epoch, timezone.utc)
         out: List[gatilhos.Event] = []
-        for ev in gatilhos.parse_ics(self.ics_fetcher(ics)):
-            if ev.get("all_day") or not ev.get("location"):
-                continue
-            for occ in gatilhos.occurrences(ev, start, start + timedelta(hours=3)):
+        for ev in self._events(start, start + timedelta(hours=3)):
+            if ev.get("all_day") or not ev.get("location") or ev.get("online_url"):
+                continue                                  # reunião online não precisa de "hora de sair"
+            for occ in [ev["when"]]:
                 dest = self._geocode_place(ev["location"])
                 if not dest:
                     continue
@@ -363,6 +362,22 @@ class Routine:
         except Exception:
             return ""
 
+    def _events(self, start: datetime, end: datetime) -> List[Dict[str, Any]]:
+        """v13.38: agenda iCal + contas conectadas (Outlook, Google), sem repetir."""
+        from . import calendarios
+        found: List[Dict[str, Any]] = []
+        ics = self._ics()
+        if ics:
+            for ev in gatilhos.parse_ics(self.ics_fetcher(ics)):
+                for occ in gatilhos.occurrences(ev, start, end):
+                    found.append({"when": occ, "all_day": bool(ev.get("all_day")), "title": ev.get("title") or "compromisso",
+                                  "location": ev.get("location") or "", "uid": ev.get("uid") or ev.get("title") or ""})
+        return calendarios.merge(found, calendarios.provider_events(self.service, start, end))
+
+    def _has_calendar(self) -> bool:
+        from . import calendarios
+        return bool(self._ics()) or calendarios.has_providers(self.service)
+
     def _fired(self, key: str, repeat_s: float, now: float) -> bool:
         with self.db.connection() as conn:
             row = conn.execute("SELECT fired_at FROM trigger_log WHERE key = ?", (key,)).fetchone()
@@ -374,18 +389,16 @@ class Routine:
                          "ON CONFLICT(key) DO UPDATE SET fired_at = excluded.fired_at", (key, now))
 
     def free_slots(self, now: datetime) -> List[Tuple[datetime, datetime]]:
-        ics = self._ics()
-        if not ics:
+        if not self._has_calendar():
             return []
         first, last = self.active_window(now.weekday())
         day0 = now.replace(hour=max(8, first), minute=0, second=0, microsecond=0)
         day1 = now.replace(hour=min(19, max(last, 18)), minute=0, second=0, microsecond=0)
         busy = []
-        for ev in gatilhos.parse_ics(self.ics_fetcher(ics)):
+        for ev in self._events(day0, day1):
             if ev.get("all_day"):
                 continue
-            for occ in gatilhos.occurrences(ev, day0, day1):
-                busy.append((occ, occ + timedelta(hours=1)))
+            busy.append((ev["when"], ev.get("end") or ev["when"] + timedelta(hours=1)))
         busy.sort()
         free, cursor = [], max(day0, now)
         for b0, b1 in busy:

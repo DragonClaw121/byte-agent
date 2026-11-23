@@ -27,7 +27,8 @@ AGENT_TYPES = {
 
 # Habilidade -> ferramentas que ela libera. get_datetime fica sempre ligada.
 SKILLS: Dict[str, Tuple[str, ...]] = {
-    "agenda": ("list_tasks", "add_task", "complete_task"),
+    "agenda": ("list_tasks", "add_task", "complete_task", "agenda_eventos", "agenda_criar_evento", "agenda_mover_evento",
+               "agenda_cancelar_evento"),
     "memoria": ("search_memories", "add_memory"),
     "lembretes": ("schedule_reminder", "list_reminders", "cancel_reminder"),
     "web": ("web_search", "fetch_url", "deep_research", "noticias"),
@@ -36,7 +37,7 @@ SKILLS: Dict[str, Tuple[str, ...]] = {
     "apresentacoes": ("create_presentation",),
     "codigo": ("run_python", "run_shell"),
     "integracoes": ("asana_my_tasks", "asana_create_task", "notion_search", "notion_read_page", "notion_create_page", "teams_post"),
-    "documentos": ("read_document", "create_document", "list_templates"),
+    "documentos": ("read_document", "create_document", "list_templates", "onedrive_salvar", "drive_salvar"),
 }
 ALWAYS_ON_TOOLS = ("get_datetime", "clima", "localizacao")       # v13.28: todo agente sabe o tempo e onde você está
 SKILL_ACTIONS: Dict[str, Tuple[str, ...]] = {          # ações do painel/Telegram que pertencem a cada habilidade

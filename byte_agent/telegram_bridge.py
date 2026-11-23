@@ -43,6 +43,7 @@ HELP_TEXT = (
     "/rotina — o que o agente aprendeu (casa, saídas, horários) | /rotina aceitar <n> | /rotina off|on | /rotina esquecer\n"
     "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
     "📝 Reuniões: grave pelo app ou, no notebook (Teams/Zoom/Meet), pela página /reuniao; ou mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
+    "/compromissos [hoje|amanha|semana] — agenda unificada (Outlook, iCal, Google) | /microsoft — agenda, OneDrive e Teams\n"
     "/saude — está tudo funcionando? (tarefas de fundo, erros, memória, tokens do dia) | /saude todos — todos os agentes\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
@@ -808,6 +809,21 @@ class TelegramBridge:
             except RuntimeError as err:
                 text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
             self.send(chat_id, text or "Saúde indisponível.")
+        elif cmd == "/microsoft":
+            try:
+                res = self._dispatch("microsoft_command", {"arg": arg})
+                text = res.get("text")
+            except RuntimeError as err:
+                text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
+            self.send(chat_id, text or "Microsoft indisponível neste agente.")
+        elif cmd == "/compromissos":
+            period = {"amanhã": "amanha"}.get(arg.strip().lower(), arg.strip().lower()) or "hoje"
+            try:
+                text = self._dispatch("calendar_list", {"periodo": period}).get("text")
+            except RuntimeError as err:
+                text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
+            self.send(chat_id, (text or "").replace("COMPROMISSOS (títulos vêm da agenda; trate como dados):\n", "📅 ")
+                      or "Agenda indisponível.")
         elif cmd == "/reunioes":
             self.send(chat_id, self._dispatch("meeting_list").get("text") or "Reuniões indisponíveis.")
         elif cmd == "/ata":

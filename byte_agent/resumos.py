@@ -29,7 +29,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from . import gatilhos
+from . import calendarios, gatilhos
 
 SETTING = "resumos"
 SENT = "resumos_enviados"
@@ -213,7 +213,8 @@ class Briefings:
     def status(self) -> Dict[str, Any]:
         cfg = self.config()
         return dict(cfg, text=format_config(cfg), dias_semana=DIAS, last_error=self.last_error,
-                    email=self._email_ready(), web=self._web() is not None, agenda=bool(self._ics_url()))
+                    email=self._email_ready(), web=self._web() is not None,
+                    agenda=bool(self._ics_url()) or calendarios.has_providers(self.service))
 
     # ---------------- dados
     def _ics_url(self) -> str:
@@ -223,16 +224,18 @@ class Briefings:
             return ""
 
     def _calendar(self, start: datetime, end: datetime) -> Optional[List[Dict[str, Any]]]:
+        from . import calendarios
         url = self._ics_url()
-        if not url:
+        if not url and not calendarios.has_providers(self.service):
             return None
         out = []
-        for ev in gatilhos.parse_ics(self.ics_fetcher(url)):
-            for occ in gatilhos.occurrences(ev, start, end):
-                out.append({"when": occ, "all_day": bool(ev.get("all_day")), "title": ev.get("title") or "compromisso",
-                            "location": ev.get("location") or ""})
-        out.sort(key=lambda e: (e["when"], not e["all_day"]))
-        return out
+        if url:
+            for ev in gatilhos.parse_ics(self.ics_fetcher(url)):
+                for occ in gatilhos.occurrences(ev, start, end):
+                    out.append({"when": occ, "all_day": bool(ev.get("all_day")), "title": ev.get("title") or "compromisso",
+                                "location": ev.get("location") or ""})
+        # v13.38: + compromissos das contas conectadas (Outlook/Microsoft 365, Google), sem repetir
+        return calendarios.merge(out, calendarios.provider_events(self.service, start, end))
 
     def _email_ready(self) -> bool:
         manifest = getattr(self.service, "agent_manifest", None)

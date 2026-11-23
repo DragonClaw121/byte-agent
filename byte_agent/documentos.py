@@ -460,6 +460,22 @@ def fill_xlsx_template(path: Path, template: Path, fields: Dict[str, Any]) -> Di
 
 
 # ---------------------------------------------------------------- ferramentas do Bit
+def publish_output(service: Any, path: Path) -> None:
+    """v13.38: avisa os ganchos (ex.: OneDrive automático) que há um arquivo novo em entregas/. Em segundo plano."""
+    import threading
+    hooks = list(getattr(service, "output_hooks", []) or [])
+    if not hooks:
+        return
+
+    def run() -> None:
+        for hook in hooks:
+            try:
+                hook(Path(path))
+            except Exception:
+                pass
+    threading.Thread(target=run, daemon=True, name="ByteEntregaNuvem").start()
+
+
 def install(work: Any) -> None:
     import json
 
@@ -492,6 +508,7 @@ def install(work: Any) -> None:
             name = stem("planilha", title) + ".xlsx"
             rep = write_spreadsheet(work.outputs / name, dict(args, titulo=title))
         service.db.record_audit("work_spreadsheet", "create_spreadsheet", "success", {"title": title, "file": name})
+        publish_output(service, work.outputs / name)
         return dict(rep, arquivo=name, titulo=title)
 
     def document(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -506,6 +523,7 @@ def install(work: Any) -> None:
         name = stem("documento", title) + ".docx"
         rep = write_document(work.outputs / name, dict(args, titulo=title), tpl)
         service.db.record_audit("work_document_created", "create_document", "success", {"title": title, "file": name})
+        publish_output(service, work.outputs / name)
         return dict(rep, arquivo=name, titulo=title)
 
     def reply(res: Dict[str, Any], what: str) -> str:

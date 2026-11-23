@@ -286,6 +286,10 @@ class WorkAssistant:
         if work_data.write_pptx(self.outputs / f"{stem}.pptx", title, deck):
             outputs.append(f"{stem}.pptx")
         self.service.db.record_audit("work_presentation", "presentation", "success", {"title": title, "slides": len(deck), "outputs": outputs})
+        from .documentos import publish_output
+        for out_name in outputs:
+            if out_name.endswith(".pptx"):
+                publish_output(self.service, self.outputs / out_name)
         return {"title": title, "slides": len(deck), "outputs": outputs, "generated_by_ai": generated_by_ai,
                 "response": f"Apresentação '{title}' pronta, com {len(deck)} slides"
                             + (" (roteiro gerado por IA: revise antes de usar)" if generated_by_ai else "")
