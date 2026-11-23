@@ -18,14 +18,20 @@ jobs:
         with:
           python-version: "3.12"
       - name: Dependências
-        run: python -m pip install --disable-pip-version-check mss==9.0.2 pillow==11.0.0 pyinstaller==6.11.1
-      - name: Autoteste em Python (captura de tela, janelas, marcação e aviso)
+        run: |
+          python -m pip install --disable-pip-version-check mss==9.0.2 pillow==11.0.0 pyinstaller==6.11.1
+          mkdir fotos
+      - name: Autoteste em Python (janela, avisos, modo compacto, ajuda ao vivo) em 100% e 150%
         shell: pwsh
         run: |
-          python desktop/bit_pc.py --autoteste autoteste.json
-          $code = $LASTEXITCODE
-          Get-Content autoteste.json
-          exit $code
+          python desktop/bit_pc.py --autoteste fotos\autoteste-100.json
+          $a = $LASTEXITCODE
+          Get-Content fotos\autoteste-100.json
+          $env:BITPC_ESCALA_TESTE = "1.5"
+          python desktop/bit_pc.py --autoteste fotos\autoteste-150.json
+          $b = $LASTEXITCODE
+          Get-Content fotos\autoteste-150.json
+          if ($a -ne 0 -or $b -ne 0) { exit 1 }
       - name: Instalador (Python oficial por usuário + app + atalhos) e autoteste do app instalado
         shell: pwsh
         env:
@@ -41,6 +47,13 @@ jobs:
           $code = $LASTEXITCODE
           Get-Content instalado.json
           exit $code
+      - name: Fotos do autoteste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fotos-bit-pc
+          path: fotos/
+          retention-days: 7
       - name: Gerar BitPC.exe
         run: pyinstaller --noconfirm --onefile --noconsole --name BitPC --icon desktop/bit.ico desktop/bit_pc.py
       - name: Autoteste do .exe

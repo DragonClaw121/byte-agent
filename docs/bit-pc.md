@@ -30,6 +30,23 @@ acesso fica guardado cifrado com a sua conta do Windows (DPAPI).
 | **Avisos** | Lembretes, resumos e avisos do Bit aparecem no canto da tela. |
 | **Atalhos** | **Ctrl+Alt+B** abre o Bit. **Ctrl+Alt+L** liga ou desliga a ajuda ao vivo. Funcionam com o app minimizado. |
 
+### Modo compacto (barra flutuante, v1.1 do app)
+O botão **▭ Modo compacto**, no topo da janela, transforma o Bit numa barrinha que fica sempre por cima, como os
+miniplayers do Spotify e do YouTube. Arraste pela alça (⋮) para onde quiser: a posição fica guardada. O app abre no
+último modo usado.
+
+| Ícone | Faz |
+|---|---|
+| ✎ | Abre o campo de pergunta. A resposta aparece num balão colado na barra, com os botões de aprovação. **Ctrl+Alt+B** também abre o campo. |
+| ◉ | Olhar minha tela (se houver texto no campo, vai como pergunta). |
+| ● / ■ | Liga ou para a ajuda ao vivo. O passo atual aparece na própria barra. |
+| ♪ | Liga ou desliga a orientação por voz. |
+| ! (com número) | Avisos não lidos. Clique para ver. |
+| ⤢ | Volta para a janela completa. |
+| ✕ | Fecha o Bit. |
+
+No Windows, os ícones são os do próprio sistema (Segoe MDL2). A tabela mostra os símbolos de reserva.
+
 ### Como a ajuda ao vivo funciona
 - O app olha a tela a cada segundo, no próprio PC, mas **só manda um quadro quando a tela muda de verdade**: um menu
   abriu, você clicou, digitou algo. No máximo um quadro a cada 2,5 s. Com a tela parada, não manda nada.

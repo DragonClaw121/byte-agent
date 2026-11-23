@@ -30,7 +30,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.0"
+VERSION = "1.1"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -331,12 +331,35 @@ def click_through(widget: Any) -> None:
 
 
 # ================================================================== o app
+# O Tk 8.6 (o das janelas do Python) não desenha emojis fora do "plano básico" do Unicode (🔔 📸 👉 ...): saem
+# quebrados. Tudo que vai para a tela passa por tk_safe, que troca os mais comuns por símbolos simples.
+EMOJI_TK = {"🔔": "●", "📸": "◉", "🔴": "●", "👉": "➜", "🙈": "⊘", "📋": "☰", "💬": "✎", "📬": "✉", "📥": "✉",
+            "📝": "✎", "📅": "▸", "🗓️": "▸", "🗓": "▸", "⏰": "⏰", "🤖": "", "💻": "", "🧠": "", "🎙️": "", "🔊": "♪",
+            "🔗": "", "📊": "", "📈": "", "📎": "", "🚗": "", "☀️": "☀", "🌤️": "☀", "🔑": "", "🧩": "", "🎯": "",
+            "🔐": "", "⚡": "", "🩺": "", "📶": "", "🧹": "", "👥": "", "✉️": "✉", "🗂️": "", "📁": "", "📑": ""}
+
+
+def tk_safe(text: Any) -> str:
+    out = str(text or "")
+    for k, v in EMOJI_TK.items():
+        out = out.replace(k, v)
+    out = "".join(ch for ch in out if ord(ch) <= 0xFFFF and ch != "️")
+    return "\n".join(" ".join(line.split()) if line.strip() else "" for line in out.split("\n")).strip()
+
+
+ICON_FONT = "Segoe MDL2 Assets"           # ícones do próprio Windows 10/11 (sem baixar nada)
+ICONS = {"chat": ("", "✎"), "olhar": ("", "◉"), "vivo": ("", "●"), "parar": ("", "■"),
+         "voz": ("", "♪"), "mudo": ("", "♪"), "sino": ("", "!"), "abrir": ("", "⤢"),
+         "fechar": ("", "✕"), "arrastar": ("", "⋮"), "enviar": ("", "➜")}
+
+
 class App:
-    BG, CARD, INK, MUTED, PRI, RED = "#12151c", "#1b1f29", "#e7e9ef", "#9aa3b5", "#6d8cff", "#ff5a52"
+    BG, CARD, HOVER, INK, MUTED, PRI, RED = "#12151c", "#1b1f29", "#2a3142", "#e7e9ef", "#9aa3b5", "#6d8cff", "#ff5a52"
 
     def __init__(self, api_factory: Callable[[str, str], Any] = Api, config_path: Optional[str] = None,
                  test_mode: bool = False):
         import tkinter as tk
+        import tkinter.font as tkfont
         self.tk = tk
         self.api_factory, self.config_path, self.test_mode = api_factory, config_path, test_mode
         self.cfg = load_config(config_path)
@@ -345,17 +368,35 @@ class App:
         self.api: Optional[Any] = None
         self.last_foreign: Optional[Dict[str, Any]] = None      # a última janela que NÃO é do Bit (o que você está fazendo)
         self.live: Optional[Dict[str, Any]] = None
-        self.overlay = self.guide = self.badge = None
+        self.overlay = self.guide = self.badge = self.bar = self.bubble = None
+        self.bar_xy: Tuple[int, int] = (0, 0)
+        self.bubble_xy: Tuple[int, int] = (0, 0)
+        self.toasts: List[Any] = []
+        self.unread: List[str] = []
+        self.bar_text, self.bar_hint_text = "", ""
+        self.entry = self.chat = None
         self.my_pid = os.getpid()
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.configure(bg=self.BG)
-        self.root.geometry("440x660")
-        self.root.minsize(360, 480)
+        # Escala do Windows (125%, 150%...): as fontes crescem com ela, então as janelas também precisam crescer.
+        dpi = self.root.winfo_fpixels("1i")
         try:
-            self.root.tk.call("tk", "scaling", self.root.winfo_fpixels("1i") / 72.0)
+            if float(os.environ.get("BITPC_ESCALA_TESTE") or 0) > 0:
+                dpi = 96.0 * float(os.environ["BITPC_ESCALA_TESTE"])
+        except ValueError:
+            pass
+        self.scale = max(1.0, dpi / 96.0)
+        try:
+            self.root.tk.call("tk", "scaling", dpi / 72.0)
         except Exception:
             pass
+        self.has_icons = ICON_FONT in tkfont.families(self.root)
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = min(self.px(480), sw - self.px(40)), min(self.px(720), sh - self.px(90))
+        self.root.geometry(f"{w}x{h}+{max(0, sw - w - self.px(40))}+{max(0, (sh - h) // 2 - self.px(20))}")
+        self.root.minsize(min(self.px(380), w), min(self.px(480), h))
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.speak_var = tk.BooleanVar(value=bool(self.cfg.get("voz", False)))
         self.text_var = tk.BooleanVar(value=bool(self.cfg.get("texto", True)))
         self.frame: Optional[Any] = None
@@ -363,6 +404,8 @@ class App:
         if self.cfg.get("base") and token:
             self.api = self.api_factory(self.cfg["base"], token)
             self.show_main()
+            if self.cfg.get("modo") == "compacto":
+                self.root.after(50, self.show_companion)
         else:
             self.show_pairing()
         self.root.after(150, self.pump)
@@ -373,20 +416,26 @@ class App:
             threading.Thread(target=self.poll_notices, daemon=True, name="avisos").start()
 
     # ------------------------------------------------------------ utilidades de interface
+    def px(self, value: float) -> int:
+        return int(round(value * self.scale))
+
+    def screen(self) -> Tuple[int, int]:
+        return self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
     def label(self, parent: Any, text: str, size: int = 10, color: Optional[str] = None, bold: bool = False, **kw: Any) -> Any:
-        return self.tk.Label(parent, text=text, bg=kw.pop("bg", self.BG), fg=color or self.INK, justify="left",
+        return self.tk.Label(parent, text=tk_safe(text), bg=kw.pop("bg", self.BG), fg=color or self.INK, justify="left",
                              font=("Segoe UI", size, "bold" if bold else "normal"), **kw)
 
     def button(self, parent: Any, text: str, cmd: Callable[[], None], primary: bool = False) -> Any:
-        return self.tk.Button(parent, text=text, command=cmd, relief="flat", cursor="hand2", padx=10, pady=5,
-                              bg=self.PRI if primary else self.CARD, fg="#0d1020" if primary else self.INK,
-                              activebackground=self.PRI, font=("Segoe UI", 10))
+        return self.tk.Button(parent, text=tk_safe(text), command=cmd, relief="flat", cursor="hand2", padx=self.px(10),
+                              pady=self.px(4), bg=self.PRI if primary else self.CARD, fg="#0d1020" if primary else self.INK,
+                              activebackground=self.PRI, font=("Segoe UI", 10), borderwidth=0)
 
     def clear(self) -> None:
         if self.frame is not None:
             self.frame.destroy()
         self.frame = self.tk.Frame(self.root, bg=self.BG)
-        self.frame.pack(fill="both", expand=True, padx=14, pady=12)
+        self.frame.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(10))
 
     def run_bg(self, work: Callable[[], Any], done: Callable[[Any], None], fail: Optional[Callable[[str], None]] = None) -> None:
         def target() -> None:
@@ -405,13 +454,15 @@ class App:
                 if kind == "call":
                     payload()
                 elif kind == "abrir":
-                    self.bring_up()
+                    self.hotkey_open()
                 elif kind == "ao_vivo":
                     self.toggle_live()
                 elif kind == "aviso":
                     self.notice(str(payload))
         except queue.Empty:
             pass
+        except Exception as err:                                  # um erro numa janela não pode parar o app
+            self.add_message(f"⚠ {type(err).__name__}: {err}", "aviso")
         self.root.after(150, self.pump)
 
     def bring_up(self) -> None:
@@ -419,14 +470,30 @@ class App:
         self.root.lift()
         self.root.attributes("-topmost", True)
         self.root.after(300, lambda: self.root.attributes("-topmost", False))
-        if getattr(self, "entry", None) is not None:
+        if self.entry is not None:
             self.entry.focus_force()
 
+    def hotkey_open(self) -> None:
+        if self.bar is not None:
+            self.bar.deiconify()
+            self.bar.lift()
+            self.bar_open_ask(True)
+        else:
+            self.bring_up()
+
     def error(self, msg: str) -> None:
-        if getattr(self, "chat", None) is not None:
-            self.add_message("⚠️ " + msg, "aviso")
+        if self.chat is not None:
+            self.add_message("⚠ " + msg, "aviso")
+            if self.bar is not None:
+                self.show_bubble([{"text": "⚠ " + msg}])
         elif getattr(self, "pair_status", None) is not None:
-            self.pair_status.configure(text=msg, fg=self.RED)
+            self.pair_status.configure(text=tk_safe(msg), fg=self.RED)
+
+    def quit(self) -> None:
+        try:
+            self.stop_live(save=False)
+        finally:
+            self.root.destroy()
 
     # ------------------------------------------------------------ conectar
     def show_pairing(self) -> None:
@@ -435,24 +502,26 @@ class App:
         self.clear()
         f = self.frame
         self.label(f, "Bit no PC", 18, bold=True).pack(anchor="w")
-        self.label(f, "1. No Telegram, mande /pc para o Bit.\n2. Copie o link que ele responder (https://...#123456)\n"
-                      "3. Cole aqui e clique em Conectar.", 10, self.MUTED).pack(anchor="w", pady=(8, 10))
+        self.label(f, "1. No painel do Bit, aba Comandos → \"Gerar link de conexão\" (ou /pc no Telegram).\n"
+                      "2. Copie o link (https://...#123456).\n3. Cole aqui e clique em Conectar.", 10, self.MUTED,
+                   wraplength=self.px(420)).pack(anchor="w", pady=(self.px(8), self.px(10)))
         self.link_entry = self.tk.Entry(f, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat",
                                         font=("Segoe UI", 10))
-        self.link_entry.pack(fill="x", ipady=6)
-        self.label(f, "Nome deste computador:", 9, self.MUTED).pack(anchor="w", pady=(10, 2))
+        self.link_entry.pack(fill="x", ipady=self.px(5))
+        self.label(f, "Nome deste computador:", 9, self.MUTED).pack(anchor="w", pady=(self.px(10), self.px(2)))
         self.name_entry = self.tk.Entry(f, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat",
                                         font=("Segoe UI", 10))
         self.name_entry.insert(0, os.environ.get("COMPUTERNAME", "Meu PC")[:40])
-        self.name_entry.pack(fill="x", ipady=6)
-        self.button(f, "Conectar", self.pair, primary=True).pack(anchor="w", pady=12)
-        self.pair_status = self.label(f, "", 10, self.MUTED, wraplength=380)
+        self.name_entry.pack(fill="x", ipady=self.px(5))
+        self.button(f, "Conectar", self.pair, primary=True).pack(anchor="w", pady=self.px(12))
+        self.pair_status = self.label(f, "", 10, self.MUTED, wraplength=self.px(420))
         self.pair_status.pack(anchor="w")
 
     def pair(self) -> None:
         parsed = parse_link(self.link_entry.get())
         if not parsed:
-            self.pair_status.configure(text="Esse não parece o link do /pc (precisa ter https://, /pc/ e #123456).", fg=self.RED)
+            self.pair_status.configure(text="Esse não parece o link de conexão (precisa ter https://, /pc/ e #123456).",
+                                       fg=self.RED)
             return
         base, code = parsed
         name = self.name_entry.get().strip() or "Meu PC"
@@ -463,19 +532,22 @@ class App:
             save_config(self.cfg, self.config_path)
             self.api = self.api_factory(base, res["token"])
             self.show_main()
-            self.add_message(f"✅ Conectado ao {res.get('agente', 'Bit')}. Atalhos: Ctrl+Alt+B abre o Bit · "
-                             "Ctrl+Alt+L liga a ajuda ao vivo.", "aviso")
+            self.add_message(f"✔ Conectado ao {res.get('agente', 'Bit')}. Atalhos: Ctrl+Alt+B abre o Bit · "
+                             "Ctrl+Alt+L liga a ajuda ao vivo. Experimente o modo compacto (botão no topo).", "aviso")
         self.run_bg(lambda: self.api_factory(base, "").call("POST", "parear", {"codigo": code, "nome": name}), done,
-                    lambda m: self.pair_status.configure(text=m, fg=self.RED))
+                    lambda m: self.pair_status.configure(text=tk_safe(m), fg=self.RED))
 
     def disconnect(self) -> None:
         self.stop_live(save=False)
+        self.close_bar()
         self.cfg.pop("token", None)
+        self.cfg["modo"] = "janela"
         save_config(self.cfg, self.config_path)
         self.api = None
+        self.root.deiconify()
         self.show_pairing()
 
-    # ------------------------------------------------------------ conversa
+    # ------------------------------------------------------------ conversa (janela completa)
     def show_main(self) -> None:
         tk = self.tk
         self.clear()
@@ -484,78 +556,96 @@ class App:
         top.pack(fill="x")
         self.label(top, self.cfg.get("agente") or "Bit", 14, bold=True).pack(side="left")
         self.button(top, "Desconectar", self.disconnect).pack(side="right")
-        box = tk.Frame(f, bg=self.CARD)
-        box.pack(fill="both", expand=True, pady=8)
-        self.chat = tk.Text(box, bg=self.CARD, fg=self.INK, wrap="word", relief="flat", font=("Segoe UI", 10),
-                            padx=8, pady=8, state="disabled", cursor="arrow")
-        bar = tk.Scrollbar(box, command=self.chat.yview)
-        self.chat.configure(yscrollcommand=bar.set)
-        bar.pack(side="right", fill="y")
-        self.chat.pack(side="left", fill="both", expand=True)
-        self.chat.tag_configure("eu", foreground=self.PRI, spacing1=6)
-        self.chat.tag_configure("bit", foreground=self.INK, spacing1=6)
-        self.chat.tag_configure("aviso", foreground=self.MUTED, spacing1=6)
-        row = tk.Frame(f, bg=self.BG)
-        row.pack(fill="x")
-        self.entry = tk.Entry(row, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
-        self.entry.pack(side="left", fill="x", expand=True, ipady=6)
-        self.entry.bind("<Return>", lambda e: self.send())
-        self.button(row, "Enviar", self.send, primary=True).pack(side="left", padx=(6, 0))
-        tools = tk.Frame(f, bg=self.BG)
-        tools.pack(fill="x", pady=(8, 0))
-        self.button(tools, "📸 Olhar minha tela", self.look).pack(side="left")
-        self.live_btn = self.button(tools, "🔴 Ajuda ao vivo", self.toggle_live)
-        self.live_btn.pack(side="left", padx=6)
+        self.button(top, "▭ Modo compacto", self.show_companion, primary=True).pack(side="right", padx=self.px(6))
+        # de baixo para cima: o que precisa sempre aparecer entra primeiro (a conversa fica com o espaço que sobrar)
+        self.label(f, "Ctrl+Alt+B abre o Bit · Ctrl+Alt+L liga/desliga a ajuda ao vivo", 8, self.MUTED,
+                   wraplength=self.px(420)).pack(
+            side="bottom", anchor="w", pady=(self.px(4), 0))
         opts = tk.Frame(f, bg=self.BG)
-        opts.pack(fill="x", pady=(6, 0))
+        opts.pack(side="bottom", fill="x", pady=(self.px(6), 0))
         for text, var in (("Orientação em texto", self.text_var), ("Orientação por voz", self.speak_var)):
             tk.Checkbutton(opts, text=text, variable=var, command=self.save_options, bg=self.BG, fg=self.MUTED,
-                           selectcolor=self.CARD, activebackground=self.BG, font=("Segoe UI", 9)).pack(side="left")
-        self.label(f, "Ctrl+Alt+B abre o Bit · Ctrl+Alt+L liga/desliga a ajuda ao vivo", 8, self.MUTED).pack(anchor="w", pady=(4, 0))
+                           selectcolor=self.CARD, activebackground=self.BG, activeforeground=self.INK,
+                           font=("Segoe UI", 9)).pack(side="left")
+        tools = tk.Frame(f, bg=self.BG)
+        tools.pack(side="bottom", fill="x", pady=(self.px(8), 0))
+        self.button(tools, "◉ Olhar minha tela", self.look).pack(side="left")
+        self.live_btn = self.button(tools, "● Ajuda ao vivo", self.toggle_live)
+        self.live_btn.pack(side="left", padx=self.px(6))
+        row = tk.Frame(f, bg=self.BG)
+        row.pack(side="bottom", fill="x")
+        self.entry = tk.Entry(row, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
+        self.entry.pack(side="left", fill="x", expand=True, ipady=self.px(5))
+        self.entry.bind("<Return>", lambda e: self.send())
+        self.button(row, "Enviar", self.send, primary=True).pack(side="left", padx=(self.px(6), 0))
+        box = tk.Frame(f, bg=self.CARD)
+        box.pack(fill="both", expand=True, pady=self.px(8))
+        self.chat = tk.Text(box, bg=self.CARD, fg=self.INK, wrap="word", relief="flat", font=("Segoe UI", 10),
+                            padx=self.px(8), pady=self.px(8), state="disabled", cursor="arrow", borderwidth=0,
+                            width=1, height=1)                     # ocupa o espaço que sobrar (não pede 80 colunas)
+        scroll = tk.Scrollbar(box, command=self.chat.yview)
+        self.chat.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.chat.pack(side="left", fill="both", expand=True)
+        self.chat.tag_configure("eu", foreground=self.PRI, spacing1=self.px(6))
+        self.chat.tag_configure("bit", foreground=self.INK, spacing1=self.px(6))
+        self.chat.tag_configure("aviso", foreground=self.MUTED, spacing1=self.px(6))
 
     def save_options(self) -> None:
         self.cfg["voz"], self.cfg["texto"] = bool(self.speak_var.get()), bool(self.text_var.get())
         save_config(self.cfg, self.config_path)
         if not self.speak_var.get():
             self.voice.stop()
+        self.update_bar()
 
     def add_message(self, text: str, who: str = "bit", buttons: Optional[List[Dict[str, str]]] = None) -> None:
-        if getattr(self, "chat", None) is None:
+        if self.chat is None:
             return
         tk = self.tk
         self.chat.configure(state="normal")
         prefix = {"eu": "Você: ", "bit": f"{self.cfg.get('agente') or 'Bit'}: ", "aviso": ""}.get(who, "")
-        self.chat.insert("end", prefix + text.strip() + "\n", who)
+        self.chat.insert("end", prefix + tk_safe(text) + "\n", who)
         for b in buttons or []:
-            btn = tk.Button(self.chat, text=b.get("label", "?"), relief="flat", bg=self.PRI, fg="#0d1020", cursor="hand2",
-                            font=("Segoe UI", 9))
+            btn = tk.Button(self.chat, text=tk_safe(b.get("label", "?")), relief="flat", bg=self.PRI, fg="#0d1020",
+                            cursor="hand2", font=("Segoe UI", 9), borderwidth=0, padx=self.px(8))
             btn.configure(command=lambda data=b.get("data", ""), label=b.get("label", ""), w=btn: self.press(data, label, w))
-            self.chat.window_create("end", window=btn, padx=3, pady=3)
+            self.chat.window_create("end", window=btn, padx=self.px(3), pady=self.px(3))
         if buttons:
             self.chat.insert("end", "\n")
         self.chat.configure(state="disabled")
         self.chat.see("end")
 
-    def show_reply(self, res: Dict[str, Any]) -> None:
-        for m in res.get("mensagens") or []:
+    def on_reply(self, res: Dict[str, Any]) -> None:
+        msgs = res.get("mensagens") or []
+        for m in msgs:
             self.add_message(str(m.get("text") or ""), "bit", m.get("buttons") or [])
+        if self.bar is not None and msgs:
+            self.show_bubble(msgs)
 
-    def send(self) -> None:
-        text = self.entry.get().strip()
+    def ask(self, text: str) -> None:
+        text = text.strip()
         if not text or self.api is None:
             return
-        self.entry.delete(0, "end")
+        self.add_message(text, "eu")
         if self.live is not None:                               # durante a ajuda ao vivo, a pergunta vai com a tela
             self.live["pergunta"] = text
-            self.add_message(text, "eu")
             return
-        self.add_message(text, "eu")
-        self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": text}, timeout=180), self.show_reply)
+        if self.bar is not None:
+            self.show_bubble([{"text": "…"}], wait=True)
+        self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": text}, timeout=180), self.on_reply)
+
+    def send(self) -> None:
+        text = self.entry.get()
+        self.entry.delete(0, "end")
+        self.ask(text)
 
     def press(self, data: str, label: str, widget: Any) -> None:
-        widget.configure(state="disabled")
+        try:
+            widget.configure(state="disabled")
+        except Exception:
+            pass
         self.add_message(label, "eu")
-        self.run_bg(lambda: self.api.call("POST", "conversa", {"botao": data}, timeout=120), self.show_reply)
+        self.run_bg(lambda: self.api.call("POST", "conversa", {"botao": data}, timeout=120), self.on_reply)
 
     # ------------------------------------------------------------ olhar a tela
     def track_foreground(self) -> None:
@@ -589,17 +679,24 @@ class App:
         img, used = capture(region or None)
         return encode(img), used, signature(img), title
 
-    def look(self) -> None:
+    def look(self, question: Optional[str] = None) -> None:
         if self.api is None:
             return
-        question = self.entry.get().strip()
-        self.entry.delete(0, "end")
+        if question is None and self.entry is not None:
+            question = self.entry.get()
+            self.entry.delete(0, "end")
+        question = (question or "").strip()
         image, _, _, title = self.grab()
         if image is None:
-            self.add_message("🙈 A janela em uso parece privada (senha, banco ou navegação anônima): não vou olhar.", "aviso")
+            msg = "⊘ A janela em uso parece privada (senha, banco ou navegação anônima): não vou olhar."
+            self.add_message(msg, "aviso")
+            if self.bar is not None:
+                self.show_bubble([{"text": msg}])
             return
-        self.add_message(("📸 " + question) if question else "📸 Olhe minha tela" + (f" ({title[:60]})" if title else ""), "eu")
-        self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": question, "tela": image}, timeout=120), self.show_reply)
+        self.add_message(("◉ " + question) if question else "◉ Olhe minha tela" + (f" ({title[:60]})" if title else ""), "eu")
+        if self.bar is not None:
+            self.show_bubble([{"text": "Olhando a sua tela…"}], wait=True)
+        self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": question, "tela": image}, timeout=120), self.on_reply)
 
     # ------------------------------------------------------------ ajuda ao vivo
     def toggle_live(self) -> None:
@@ -613,19 +710,23 @@ class App:
             self.bring_up()
             return
         if goal is None:
-            goal = self.entry.get().strip()
+            source = self.bar_entry if self.bar is not None else self.entry
+            goal = source.get().strip() if source is not None else ""
             if goal:
-                self.entry.delete(0, "end")
+                source.delete(0, "end")
             else:
                 from tkinter import simpledialog
                 goal = simpledialog.askstring(APP_NAME, "Com o que você quer ajuda? (ex.: montar uma tabela dinâmica)",
-                                              parent=self.root) or ""
+                                              parent=self.bar if self.bar is not None else self.root) or ""
         self.live = {"sessao": uuid.uuid4().hex[:16], "objetivo": goal.strip(), "sig": None, "sent": 0.0,
                      "changed": time.time(), "pergunta": "", "busy": False, "last_step": ""}
-        self.add_message(f"🔴 Ajuda ao vivo ligada{': ' + goal if goal else ''}. Trabalhe normalmente; eu acompanho e "
+        self.add_message(f"● Ajuda ao vivo ligada{': ' + goal if goal else ''}. Trabalhe normalmente; eu acompanho e "
                          "oriento. Ctrl+Alt+L ou o aviso vermelho para parar.", "aviso")
-        self.live_btn.configure(text="⏹ Parar ajuda ao vivo", bg=self.RED)
+        if getattr(self, "live_btn", None) is not None:
+            self.live_btn.configure(text="■ Parar ajuda ao vivo", bg=self.RED)
         self.show_badge()
+        self.set_bar_text("Acompanhando a sua tela…" + (f" ({goal.strip()[:60]})" if goal.strip() else ""))
+        self.update_bar()
         if not self.test_mode:
             threading.Thread(target=self.live_loop, args=(self.live,), daemon=True, name="ao-vivo").start()
 
@@ -637,7 +738,7 @@ class App:
             try:
                 region, title = self.target_region()
                 if region is None:
-                    self.events.put(("call", lambda: self.set_badge("⏸ Janela privada: não estou olhando")))
+                    self.events.put(("call", lambda: self.set_badge("‖ Janela privada: não estou olhando")))
                     continue
                 img, used = capture(region or None)
                 sig = signature(img)
@@ -658,7 +759,7 @@ class App:
                 self.events.put(("call", lambda r=res, u=used: self.show_step(r, u)))
             except Exception as err:
                 msg = str(err)
-                self.events.put(("call", lambda m=msg: self.set_badge("⚠️ " + m[:70])))
+                self.events.put(("call", lambda m=msg: self.set_badge("⚠ " + m[:70])))
                 time.sleep(5)
             finally:
                 live["busy"] = False
@@ -669,7 +770,7 @@ class App:
         text = str(step.get("passo") or "").strip()
         if step.get("novo", True) and text and text != self.live.get("last_step"):
             self.live["last_step"] = text
-            self.add_message("👉 " + text, "bit")
+            self.add_message("➜ " + text, "bit")
             if self.text_var.get():
                 self.show_guide(text)
             if self.speak_var.get():
@@ -677,7 +778,7 @@ class App:
         if step.get("alvo"):
             self.show_overlay(to_screen(step["alvo"], region))
         if step.get("concluido"):
-            self.stop_live(save=None, reason="✅ Parece concluído!")
+            self.stop_live(save=None, reason="✔ Parece concluído!")
 
     def stop_live(self, save: Optional[bool], reason: str = "") -> None:
         live, self.live = self.live, None
@@ -691,7 +792,12 @@ class App:
                 setattr(self, name, None)
         self.voice.stop()
         if getattr(self, "live_btn", None) is not None:
-            self.live_btn.configure(text="🔴 Ajuda ao vivo", bg=self.CARD)
+            try:
+                self.live_btn.configure(text="● Ajuda ao vivo", bg=self.CARD)
+            except Exception:
+                pass
+        self.set_bar_text("")
+        self.update_bar()
         if live is None or self.api is None:
             return
         if reason:
@@ -699,61 +805,97 @@ class App:
         if save is None:
             from tkinter import messagebox
             save = bool(live.get("last_step")) and messagebox.askyesno(
-                APP_NAME, "Quer que eu guarde esse passo a passo como um processo na minha memória?", parent=self.root)
-        self.run_bg(lambda: self.api.call("POST", "ao-vivo/fim", {"sessao": live["sessao"], "guardar": bool(save)}),
-                    lambda r: self.add_message(str(r.get("texto") or "Ajuda ao vivo encerrada."), "aviso"))
+                APP_NAME, "Quer que eu guarde esse passo a passo como um processo na minha memória?",
+                parent=self.bar if self.bar is not None else self.root)
 
-    # ------------------------------------------------------------ janelinhas sobre a tela
-    def topmost_window(self, x: int, y: int, w: int, h: int, bg: str) -> Any:
+        def done(r: Dict[str, Any]) -> None:
+            text = str(r.get("texto") or "Ajuda ao vivo encerrada.")
+            self.add_message(text, "aviso")
+            if self.bar is not None:
+                self.show_bubble([{"text": text}])
+        self.run_bg(lambda: self.api.call("POST", "ao-vivo/fim", {"sessao": live["sessao"], "guardar": bool(save)}), done)
+
+    # ------------------------------------------------------------ janelinhas sobre a tela (tamanho pelo conteúdo)
+    def popup(self, bg: str, border: Optional[str] = None) -> Tuple[Any, Any]:
+        """Janela sem moldura, sempre por cima, fora das capturas. Devolve (janela, área de conteúdo)."""
         win = self.tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg=bg)
-        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.configure(bg=border or bg)
+        inner = self.tk.Frame(win, bg=bg)
+        inner.pack(fill="both", expand=True, padx=1 if border else 0, pady=1 if border else 0)
         win.after(100, lambda: exclude_from_capture(win))
-        return win
+        win.after(100, lambda: round_corners(win))
+        return win, inner
+
+    def place(self, win: Any, x: int, y: int) -> None:
+        win.update_idletasks()
+        sw, sh = self.screen()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x, y = max(0, min(x, sw - w)), max(0, min(y, sh - h))
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        if win is self.bar:
+            self.bar_xy = (x, y)                                  # a posição real só existe depois de desenhada
+        elif win is self.bubble:
+            self.bubble_xy = (x, y)
 
     def show_badge(self) -> None:
-        sw = self.root.winfo_screenwidth()
-        self.badge = self.topmost_window(sw // 2 - 190, 6, 380, 30, self.RED)
-        self.badge_label = self.tk.Label(self.badge, text="● Bit vendo a tela — clique para parar", bg=self.RED, fg="white",
-                                         font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.badge, inner = self.popup(self.RED)
+        self.badge_label = self.tk.Label(inner, text=tk_safe("● Bit vendo a tela · clique para parar"), bg=self.RED,
+                                         fg="white", font=("Segoe UI", 10, "bold"), cursor="hand2",
+                                         padx=self.px(14), pady=self.px(4))
         self.badge_label.pack(fill="both", expand=True)
         self.badge_label.bind("<Button-1>", lambda e: self.stop_live(save=None))
+        self.center_badge()
+
+    def center_badge(self) -> None:
+        if self.badge is not None:
+            self.badge.update_idletasks()
+            self.place(self.badge, (self.screen()[0] - self.badge.winfo_reqwidth()) // 2, self.px(6))
 
     def set_badge(self, text: str) -> None:
         if self.badge is not None:
-            self.badge_label.configure(text=text + " · clique para parar")
+            self.badge_label.configure(text=tk_safe(text + " · clique para parar"))
+            self.center_badge()
 
     def show_guide(self, text: str) -> None:
+        if self.bar is not None:                               # no modo compacto, o passo aparece na própria barra
+            self.set_bar_text("➜ " + text)
+            return
         if self.guide is not None:
             self.guide.destroy()
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.guide = self.topmost_window(sw - 440, sh - 190, 420, 130, self.CARD)
-        lbl = self.tk.Label(self.guide, text="👉 " + text, bg=self.CARD, fg=self.INK, wraplength=400, justify="left",
-                            font=("Segoe UI", 11), padx=10, pady=8)
-        lbl.pack(fill="both", expand=True)
+        self.guide, inner = self.popup(self.CARD, border=self.PRI)
+        self.tk.Label(inner, text=tk_safe("➜ " + text), bg=self.CARD, fg=self.INK, wraplength=self.px(380), justify="left",
+                      font=("Segoe UI", 11), padx=self.px(12), pady=self.px(10)).pack(fill="both", expand=True)
+        self.guide.update_idletasks()
+        sw, sh = self.screen()
+        self.place(self.guide, sw - self.guide.winfo_reqwidth() - self.px(24), sh - self.guide.winfo_reqheight() - self.px(70))
         click_through(self.guide)
 
     def show_overlay(self, rect: Tuple[int, int, int, int]) -> None:
         if self.overlay is not None:
             self.overlay.destroy()
-        pad = 6
+        pad = self.px(6)
         x0, y0, x1, y1 = rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad
         w, h = max(20, x1 - x0), max(20, y1 - y0)
-        self.overlay = self.topmost_window(x0, y0, w, h, "#ff00ff")
+        win = self.tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#ff00ff")
+        win.geometry(f"{w}x{h}+{x0}+{y0}")
         try:
-            self.overlay.attributes("-transparentcolor", "#ff00ff")
+            win.attributes("-transparentcolor", "#ff00ff")
         except Exception:
             pass
-        canvas = self.tk.Canvas(self.overlay, width=w, height=h, bg="#ff00ff", highlightthickness=0)
+        canvas = self.tk.Canvas(win, width=w, height=h, bg="#ff00ff", highlightthickness=0)
         canvas.pack()
-        canvas.create_rectangle(2, 2, w - 2, h - 2, outline=self.RED, width=4)
-        click_through(self.overlay)
-        ov = self.overlay
-        self.root.after(8000, lambda: (ov.destroy() if self.overlay is ov else None))
+        canvas.create_rectangle(2, 2, w - 2, h - 2, outline=self.RED, width=max(3, self.px(3)))
+        win.after(100, lambda: exclude_from_capture(win))
+        click_through(win)
+        self.overlay = win
+        self.root.after(8000, lambda: (win.destroy() if self.overlay is win else None))
 
-    # ------------------------------------------------------------ avisos do Bit
+    # ------------------------------------------------------------ avisos do Bit (no canto, empilhados)
     def poll_notices(self) -> None:
         while True:
             time.sleep(60)
@@ -768,17 +910,300 @@ class App:
     def notice(self, text: str) -> None:
         if not text.strip():
             return
-        self.add_message("🔔 " + text, "aviso")
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        toast = self.topmost_window(sw - 400, sh - 340, 380, 110, self.CARD)
-        lbl = self.tk.Label(toast, text=("🔔 " + text)[:300], bg=self.CARD, fg=self.INK, wraplength=360, justify="left",
-                            font=("Segoe UI", 10), padx=10, pady=8, cursor="hand2")
-        lbl.pack(fill="both", expand=True)
-        lbl.bind("<Button-1>", lambda e: (toast.destroy(), self.bring_up()))
-        self.root.after(9000, toast.destroy)
+        self.add_message("● " + text, "aviso")
+        self.unread.append(text)
+        self.update_bar()
+        tk = self.tk
+        toast, inner = self.popup(self.CARD, border=self.PRI)
+        head = tk.Frame(inner, bg=self.CARD)
+        head.pack(fill="x", padx=self.px(10), pady=(self.px(8), 0))
+        tk.Label(head, text=tk_safe(f"● {self.cfg.get('agente') or 'Bit'}"), bg=self.CARD, fg=self.PRI,
+                 font=("Segoe UI", 9, "bold")).pack(side="left")
+        close = tk.Label(head, text="✕", bg=self.CARD, fg=self.MUTED, font=("Segoe UI", 10), cursor="hand2")
+        close.pack(side="right")
+        body = tk.Label(inner, text=tk_safe(text)[:420], bg=self.CARD, fg=self.INK, wraplength=self.px(330),
+                        justify="left", font=("Segoe UI", 10), cursor="hand2")
+        body.pack(fill="x", padx=self.px(10), pady=(self.px(4), self.px(10)))
+        close.bind("<Button-1>", lambda e: self.close_toast(toast))
+        body.bind("<Button-1>", lambda e: (self.close_toast(toast), self.hotkey_open()))
+        self.toasts.append(toast)
+        while len(self.toasts) > 3:
+            self.close_toast(self.toasts[0])
+        self.layout_toasts()
+        self.root.after(12000, lambda: self.close_toast(toast))
+
+    def close_toast(self, toast: Any) -> None:
+        if toast in self.toasts:
+            self.toasts.remove(toast)
+            try:
+                toast.destroy()
+            except Exception:
+                pass
+            self.layout_toasts()
+
+    def layout_toasts(self) -> None:
+        sw, sh = self.screen()
+        bottom = sh - self.px(70)
+        if self.bar is not None and self.bar_xy[1] > sh // 2:     # não cobre a barra compacta nem o balão dela
+            top = self.bar_xy[1]
+            if self.bubble is not None and self.bubble_xy[1] < top:
+                top = self.bubble_xy[1]
+            bottom = min(bottom, top - self.px(8))
+        for toast in reversed(self.toasts):
+            toast.update_idletasks()
+            h = toast.winfo_reqheight()
+            bottom -= h
+            self.place(toast, sw - toast.winfo_reqwidth() - self.px(24), bottom)
+            bottom -= self.px(8)
+
+    # ------------------------------------------------------------ modo compacto (barra flutuante, tipo miniplayer)
+    def icon(self, parent: Any, key: str, cmd: Optional[Callable[[], None]], tip: str = "") -> Any:
+        glyph, fallback = ICONS[key]
+        lbl = self.tk.Label(parent, text=glyph if self.has_icons else fallback,
+                            font=(ICON_FONT, 12) if self.has_icons else ("Segoe UI Symbol", 12),
+                            bg=self.CARD, fg=self.INK, padx=self.px(8), pady=self.px(5), cursor="hand2")
+        if cmd is not None:
+            lbl.bind("<Button-1>", lambda e: cmd())
+        lbl.bind("<Enter>", lambda e: (lbl.configure(bg=self.HOVER), self.bar_hint(tip)))
+        lbl.bind("<Leave>", lambda e: (lbl.configure(bg=self.CARD), self.bar_hint("")))
+        return lbl
+
+    def show_companion(self) -> None:
+        if self.api is None:
+            return
+        self.cfg["modo"] = "compacto"
+        save_config(self.cfg, self.config_path)
+        if self.bar is not None:
+            self.bar.deiconify()
+            return
+        tk = self.tk
+        self.root.withdraw()
+        self.bar, inner = self.popup(self.CARD, border=self.PRI)
+        try:
+            self.bar.attributes("-alpha", 0.97)
+        except Exception:
+            pass
+        row = tk.Frame(inner, bg=self.CARD)
+        row.pack(fill="x", padx=self.px(4), pady=self.px(3))
+        grip = self.icon(row, "arrastar", None, "Arraste para mover")
+        grip.configure(cursor="fleur", fg=self.MUTED)
+        grip.pack(side="left")
+        name = tk.Label(row, text=tk_safe(self.cfg.get("agente") or "Bit"), bg=self.CARD, fg=self.INK,
+                        font=("Segoe UI", 10, "bold"), padx=self.px(2), cursor="fleur")
+        name.pack(side="left", padx=(0, self.px(6)))
+        for w in (grip, name):
+            w.bind("<ButtonPress-1>", self.drag_start)
+            w.bind("<B1-Motion>", self.drag_move)
+            w.bind("<ButtonRelease-1>", self.drag_end)
+        self.bar_buttons = {}
+        for key, cmd, tip in (("chat", lambda: self.bar_open_ask(), "Perguntar ao Bit (Ctrl+Alt+B)"),
+                              ("olhar", lambda: self.look(self.bar_take_text()), "Olhar minha tela"),
+                              ("vivo", self.toggle_live, "Ajuda ao vivo (Ctrl+Alt+L)"),
+                              ("voz", self.toggle_voice, "Orientação por voz: liga/desliga"),
+                              ("sino", self.show_notices, "Avisos"),
+                              ("abrir", self.show_window, "Abrir a janela completa"),
+                              ("fechar", self.quit, "Fechar o Bit")):
+            self.bar_buttons[key] = self.icon(row, key, cmd, tip)
+            self.bar_buttons[key].pack(side="left")
+            if key == "sino":
+                self.bell_count = tk.Label(row, text="", bg=self.CARD, fg=self.RED, font=("Segoe UI", 8, "bold"))
+                self.bell_count.pack(side="left")
+        self.bar_ask = tk.Frame(inner, bg=self.CARD)
+        self.bar_entry = tk.Entry(self.bar_ask, bg=self.BG, fg=self.INK, insertbackground=self.INK, relief="flat",
+                                  font=("Segoe UI", 10))
+        self.bar_entry.pack(side="left", fill="x", expand=True, ipady=self.px(4), padx=(self.px(8), self.px(4)))
+        self.bar_entry.bind("<Return>", lambda e: self.ask(self.bar_take_text()))
+        self.bar_entry.bind("<Escape>", lambda e: self.bar_open_ask(False))
+        send = self.icon(self.bar_ask, "enviar", lambda: self.ask(self.bar_take_text()), "Enviar")
+        send.pack(side="left", padx=(0, self.px(6)))
+        self.bar_status = tk.Label(inner, text="", bg=self.CARD, fg=self.MUTED, wraplength=self.px(320), justify="left", anchor="w",
+                                   font=("Segoe UI", 9), padx=self.px(10))
+        self.bar.update_idletasks()
+        sw, sh = self.screen()
+        xy = self.cfg.get("barra_xy")
+        if isinstance(xy, list) and len(xy) == 2:
+            x, y = int(xy[0]), int(xy[1])
+        else:
+            x, y = sw - self.bar.winfo_reqwidth() - self.px(24), sh - self.bar.winfo_reqheight() - self.px(80)
+        self.place(self.bar, x, y)
+        self.update_bar()
+        self.layout_toasts()
+
+    def close_bar(self) -> None:
+        for name in ("bubble", "bar"):
+            win = getattr(self, name)
+            if win is not None:
+                try:
+                    win.destroy()
+                except Exception:
+                    pass
+                setattr(self, name, None)
+
+    def show_window(self) -> None:
+        self.cfg["modo"] = "janela"
+        save_config(self.cfg, self.config_path)
+        self.close_bar()
+        self.bring_up()
+
+    def drag_start(self, e: Any) -> None:
+        self._drag = (e.x_root - self.bar.winfo_x(), e.y_root - self.bar.winfo_y())
+
+    def drag_move(self, e: Any) -> None:
+        dx, dy = getattr(self, "_drag", (0, 0))
+        self.bar_xy = (e.x_root - dx, e.y_root - dy)
+        self.bar.geometry(f"+{self.bar_xy[0]}+{self.bar_xy[1]}")
+        if self.bubble is not None:
+            self.position_bubble()
+
+    def drag_end(self, e: Any) -> None:
+        self.cfg["barra_xy"] = list(self.bar_xy)
+        save_config(self.cfg, self.config_path)
+        self.layout_toasts()
+
+    def relayout_bar(self) -> None:
+        if self.bar is None:
+            return
+        self.bar.update_idletasks()
+        self.place(self.bar, *self.bar_xy)
+        if self.bubble is not None:
+            self.position_bubble()
+        self.layout_toasts()
+
+    def bar_open_ask(self, show: Optional[bool] = None) -> None:
+        if self.bar is None:
+            return
+        visible = bool(self.bar_ask.winfo_manager())
+        show = (not visible) if show is None else show
+        if show and not visible:
+            self.bar_ask.pack(fill="x", pady=(0, self.px(6)), before=self.bar_status if self.bar_status.winfo_manager() else None)
+        elif not show and visible:
+            self.bar_ask.pack_forget()
+        self.relayout_bar()
+        if show:
+            self.bar.focus_force()
+            self.bar_entry.focus_set()
+
+    def bar_take_text(self) -> str:
+        if self.bar is None:
+            return ""
+        text = self.bar_entry.get()
+        self.bar_entry.delete(0, "end")
+        return text
+
+    def set_bar_text(self, text: str) -> None:
+        self.bar_text = tk_safe(text)
+        self.refresh_bar_status()
+
+    def bar_hint(self, tip: str) -> None:
+        self.bar_hint_text = tk_safe(tip)
+        self.refresh_bar_status()
+
+    def refresh_bar_status(self) -> None:
+        if self.bar is None:
+            return
+        text = self.bar_hint_text or self.bar_text
+        if text:
+            self.bar_status.configure(text=text, fg=self.MUTED if self.bar_hint_text else self.INK)
+            if not self.bar_status.winfo_manager():
+                self.bar_status.pack(fill="x", pady=(0, self.px(6)))
+        elif self.bar_status.winfo_manager():
+            self.bar_status.pack_forget()
+        self.relayout_bar()
+
+    def update_bar(self) -> None:
+        if self.bar is None:
+            return
+        live = self.live is not None
+        glyph, fallback = ICONS["parar" if live else "vivo"]
+        self.bar_buttons["vivo"].configure(text=glyph if self.has_icons else fallback, fg=self.RED if live else self.INK)
+        glyph, fallback = ICONS["voz" if self.speak_var.get() else "mudo"]
+        self.bar_buttons["voz"].configure(text=glyph if self.has_icons else fallback,
+                                          fg=self.INK if self.speak_var.get() else self.MUTED)
+        self.bell_count.configure(text=str(len(self.unread)) if self.unread else "")
+
+    def toggle_voice(self) -> None:
+        self.speak_var.set(not self.speak_var.get())
+        self.save_options()
+        self.bar_hint("Orientação por voz: " + ("ligada" if self.speak_var.get() else "desligada"))
+
+    def show_notices(self) -> None:
+        if not self.unread:
+            self.show_bubble([{"text": "Nenhum aviso novo."}])
+            return
+        items, self.unread = self.unread[-5:], []
+        self.update_bar()
+        self.show_bubble([{"text": "● " + t} for t in items])
+
+    def show_bubble(self, messages: List[Dict[str, Any]], wait: bool = False) -> None:
+        """Balão da resposta, colado na barra (em cima ou embaixo, onde couber)."""
+        if self.bar is None:
+            return
+        if self.bubble is not None:
+            self.bubble.destroy()
+        tk = self.tk
+        self.bubble, inner = self.popup(self.CARD, border=self.PRI)
+        bubble = self.bubble
+        for m in messages[-4:]:
+            tk.Label(inner, text=tk_safe(m.get("text") or "")[:700], bg=self.CARD, fg=self.MUTED if wait else self.INK,
+                     wraplength=self.px(360), justify="left", anchor="w", font=("Segoe UI", 10)).pack(
+                anchor="w", fill="x", padx=self.px(12), pady=(self.px(8), 0))
+            buttons = m.get("buttons") or []
+            if buttons:
+                row = tk.Frame(inner, bg=self.CARD)
+                row.pack(anchor="w", padx=self.px(12), pady=(self.px(4), 0))
+                for b in buttons:
+                    btn = tk.Button(row, text=tk_safe(b.get("label", "?")), relief="flat", bg=self.PRI, fg="#0d1020",
+                                    cursor="hand2", font=("Segoe UI", 9), borderwidth=0, padx=self.px(8))
+                    btn.configure(command=lambda data=b.get("data", ""), label=b.get("label", ""), w=btn:
+                                  self.press(data, label, w))
+                    btn.pack(side="left", padx=(0, self.px(4)))
+        foot = tk.Frame(inner, bg=self.CARD)
+        foot.pack(fill="x", padx=self.px(12), pady=self.px(8))
+        more = tk.Label(foot, text="Abrir a conversa", bg=self.CARD, fg=self.PRI, font=("Segoe UI", 9, "underline"),
+                        cursor="hand2")
+        more.pack(side="left")
+        more.bind("<Button-1>", lambda e: self.show_window())
+        close = tk.Label(foot, text="✕", bg=self.CARD, fg=self.MUTED, font=("Segoe UI", 10), cursor="hand2")
+        close.pack(side="right")
+        close.bind("<Button-1>", lambda e: self.close_bubble(bubble))
+        self.position_bubble()
+        if not wait:
+            self.root.after(30000, lambda: self.close_bubble(bubble))
+
+    def close_bubble(self, bubble: Any) -> None:
+        try:
+            bubble.destroy()
+        except Exception:
+            pass
+        if self.bubble is bubble:
+            self.bubble = None
+            self.layout_toasts()
+
+    def position_bubble(self) -> None:
+        if self.bubble is None or self.bar is None:
+            return
+        self.bubble.update_idletasks()
+        bh, bw = self.bubble.winfo_reqheight(), self.bubble.winfo_reqwidth()
+        x, y = self.bar_xy
+        y = y - bh - self.px(6) if y - bh - self.px(6) > 0 else y + self.bar.winfo_reqheight() + self.px(6)
+        self.place(self.bubble, x + self.bar.winfo_reqwidth() - bw, y)
+        self.layout_toasts()
 
     def run(self) -> None:
         self.root.mainloop()
+
+
+def round_corners(widget: Any) -> None:
+    """Cantos arredondados no Windows 11 (no 10 não faz nada)."""
+    if not IS_WINDOWS:
+        return
+    import ctypes
+    try:
+        hwnd = ctypes.windll.user32.GetParent(widget.winfo_id()) or widget.winfo_id()
+        pref = ctypes.c_int(2)                                   # DWMWCP_ROUND
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+    except Exception:
+        pass
 
 
 # ================================================================== autoteste (usado no build do GitHub, no Windows)
@@ -799,8 +1224,10 @@ class FakeApi:
 
 
 def autotest(out_path: str) -> int:
-    """Captura a tela, codifica, compara e abre as janelas de verdade (sem servidor). Escreve o resultado em JSON."""
-    result: Dict[str, Any] = {"ok": False, "platform": sys.platform}
+    """Teste de verdade no Windows do GitHub: captura a tela, abre a janela, os avisos, a barra compacta, o balão e a
+    ajuda ao vivo; confere que o texto CABE em cada janela (escala do Windows) e salva fotos para conferência."""
+    result: Dict[str, Any] = {"ok": False, "platform": sys.platform, "escala": os.environ.get("BITPC_ESCALA_TESTE", "1")}
+    prefix = os.path.splitext(os.path.abspath(out_path))[0]
     try:
         dpi_aware()
         img, region = capture(None)
@@ -810,21 +1237,77 @@ def autotest(out_path: str) -> int:
                       same=difference(sig, sig), link=parse_link("veja: https://x.azurecontainerapps.io/pc/bit#123456"),
                       protect_roundtrip=unprotect(protect("segredo")) == "segredo", foreground=bool(foreground() or not IS_WINDOWS))
         cfg_path = os.path.join(config_dir(), "autoteste.json")
+        if os.path.exists(cfg_path):
+            os.remove(cfg_path)
         app = App(api_factory=FakeApi, config_path=cfg_path, test_mode=True)
+        result["icones_windows"] = app.has_icons
         app.link_entry.insert(0, "https://x.azurecontainerapps.io/pc/bit#123456")
         app.pair()
+        problems: List[str] = []
 
-        def steps() -> None:
+        def fits(win: Any, name: str) -> None:
+            win.update_idletasks()
+            if win.winfo_height() + 2 < win.winfo_reqheight() or win.winfo_width() + 2 < win.winfo_reqwidth():
+                problems.append(f"{name}: {win.winfo_width()}x{win.winfo_height()} < {win.winfo_reqwidth()}x{win.winfo_reqheight()}")
+
+        def texts(widget: Any) -> List[str]:
+            out = []
+            try:
+                out.append(str(widget.cget("text")))
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                out.extend(texts(child))
+            return out
+
+        def shot(name: str) -> None:
+            try:
+                im, _ = capture(None)
+                im.save(f"{prefix}-{name}.png")
+            except Exception as err:
+                problems.append(f"foto {name}: {err}")
+
+        def step1() -> None:
             app.pump()
-            app.add_message("teste", "bit", [{"label": "✅ Aprovar", "data": "ok:1"}])
-            app.start_live("teste")
+            fits(app.root, "janela")
+            app.add_message("📅 Reunião com o time às 15h 👉 sala 2", "bit", [{"label": "✅ Aprovar", "data": "ok:1"}])
+            app.notice("⏰ Lembrete: enviar o relatório mensal para a diretoria antes das 18h 📊 (planilha na pasta Vendas)")
+            app.notice("🤖 Resumo da manhã: 3 reuniões, 5 e-mails importantes e chuva às 17h ☔")
+            for t in app.toasts:
+                fits(t, "aviso")
+            app.root.update()
+            shot("janela")
+            app.show_companion()
+            app.bar_open_ask(True)
+            app.bar_entry.insert(0, "Qual o próximo compromisso?")
+            app.ask(app.bar_take_text())
+            app.root.after(1200, step2)
+
+        def step2() -> None:
+            app.pump()
+            app.start_live("montar uma tabela dinâmica")
             app.show_step(FakeApi("", "").call("POST", "ao-vivo"), region)
-            app.notice("Lembrete de teste")
-            result["janelas"] = sum(1 for w in (app.overlay, app.guide, app.badge) if w is not None)
+            app.root.update()
+            for win, name in ((app.bar, "barra"), (app.bubble, "balao"), (app.badge, "aviso vermelho")):
+                if win is None:
+                    problems.append(f"{name}: não abriu")
+                else:
+                    fits(win, name)
+            bad = [t for w in [app.root] + list(app.root.winfo_children()) for t in texts(w) if any(ord(c) > 0xFFFF for c in t)]
+            if bad:
+                problems.append(f"emoji que o Tk não desenha: {bad[:3]}")
+            result["janelas"] = sum(1 for w in (app.overlay, app.bar, app.badge, app.bubble) if w is not None)
+            app.root.after(400, step3)
+
+        def step3() -> None:
+            shot("compacto")
             app.stop_live(save=False)
-            result["ok"] = result["janelas"] == 3 and result["protect_roundtrip"] and result["link"] is not None
+            app.show_window()
+            result["problemas"] = problems
+            result["ok"] = (result["janelas"] == 4 and not problems and result["protect_roundtrip"]
+                            and result["link"] is not None)
             app.root.after(300, app.root.destroy)
-        app.root.after(800, steps)
+        app.root.after(900, step1)
         app.run()
         try:
             os.remove(cfg_path)
