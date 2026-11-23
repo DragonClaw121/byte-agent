@@ -1,4 +1,5 @@
 """v13.4: Byte em contêiner (Azure Container Apps): dados persistentes e supervisor."""
+import json
 import io
 import sqlite3
 import sys
@@ -377,3 +378,46 @@ def test_matrix_gets_the_panel_links_of_agents_running_apart(tmp_path):
         assert sup.child_env["bit"]["BYTE_UI_TOKEN"] == tokens["bit"]
     finally:
         sup.router.stop()
+
+
+def test_update_result_goes_back_to_the_agent_that_asked(tmp_path, monkeypatch):
+    """v13.41: o Bit pede /atualizar -> o supervisor grava o resultado -> o BIT responde no bot dele."""
+    from byte_agent import engine, headless
+    home, store = tmp_path / "home", tmp_path / "store"
+    make_home(home).close()
+    store.mkdir()
+    env = {"BYTE_DADOS_PERSISTENTES": str(store), "BYTE_GITHUB_REPO": "DragonClaw121/byte-agent"}
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(engine, "ACTIVE_AGENT", {"id": "bit", "nome": "Bit"})
+    db = engine.UnifiedDatabase(tmp_path / "bit.db", engine.VectorEngine())
+    svc = type("S", (), {"db": db, "extra_actions": {}})()
+    headless.install_update_action(svc)
+    out = svc.extra_actions["request_update"]({})
+    assert "respondo aqui" in out["text"] and json.loads((store / nuvem.UPDATE_FLAG).read_text())["agent"] == "bit"
+    monkeypatch.setattr(nuvem, "commands", lambda env: {"principal": [sys.executable, "-c", "import time; time.sleep(60)"]})
+
+    class Stub:
+        last_error = None
+        def check_and_install(self):
+            return None
+    sup = nuvem.Supervisor(home, store, tmp_path, {}, interval_s=3600, updater=Stub(), update_interval_s=0,
+                           restart=lambda: None)
+    monkeypatch.setattr(sup, "_pause", lambda seconds: time.sleep(min(seconds, 0.2)))
+    threading.Timer(2.0, sup.stopping.set).start()
+    sup.run()
+    assert nuvem.read_update_result(store)["status"] == "sem_novidade"
+    for _ in range(40):
+        msgs = [m["message"] for m in db.pop_undelivered_proactive_messages("telegram")]
+        if msgs:
+            break
+        time.sleep(0.2)
+    assert msgs == [f"✅ Já estou na versão mais nova (v{engine.BYTE_VERSION})."]
+    # depois de reiniciar numa versão nova: o Bit avisa porque foi ele que pediu; o Kronus (não pediu) fica quieto
+    (store / nuvem.UPDATE_RESULT).write_text(json.dumps({"agent": "bit", "status": "atualizando", "done_at": time.time()}))
+    db.set_setting("versao_anunciada", "13.0")
+    assert headless.announce_version(svc) is True
+    monkeypatch.setattr(engine, "ACTIVE_AGENT", {"id": "kronus", "nome": "Kronus"})
+    db2 = engine.UnifiedDatabase(tmp_path / "kronus.db", engine.VectorEngine())
+    db2.set_setting("versao_anunciada", "13.0")
+    assert headless.announce_version(type("S", (), {"db": db2})()) is False

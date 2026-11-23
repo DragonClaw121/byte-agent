@@ -111,8 +111,7 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         google_agenda.install(service, data_dir)            # v13.39: Google Agenda e Google Drive
         from . import app_comandos
         app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
-        from . import nuvem as _nuvem
-        service.extra_actions["request_update"] = lambda payload: _nuvem.request_update(dict(os.environ))
+        install_update_action(service)                      # v13.41: o resultado volta para o bot de quem pediu
     return service
 
 
@@ -188,15 +187,60 @@ def run_avatar_check(env: Any, data_dir: Path, say: str, list_hotkeys: bool) -> 
     return 0
 
 
+def agent_id() -> str:
+    return str((engine.ACTIVE_AGENT or {}).get("id") or "matrix").lower()
+
+
 def announce_version(service: Any) -> bool:
-    """v13.17: ligou numa versão diferente da última anunciada -> avisa no painel e no Telegram (a 1ª vez só registra)."""
+    """v13.17: ligou numa versão diferente da última anunciada -> avisa no painel e no Telegram (a 1ª vez só registra).
+    v13.41: quem avisa é a Matrix (atualização automática) E o agente que pediu o /atualizar, no bot dele."""
     db = service.db
     last = db.get_setting("versao_anunciada")
     db.set_setting("versao_anunciada", engine.BYTE_VERSION)
-    if last and last != engine.BYTE_VERSION:
+    if not last or last == engine.BYTE_VERSION:
+        return False
+    me = agent_id()
+    store = os.environ.get("BYTE_DADOS_PERSISTENTES", "").strip()
+    asked = {}
+    if store:
+        from . import nuvem as _nuvem
+        asked = _nuvem.read_update_result(Path(store))
+    requested_here = asked.get("agent") == me and time.time() - float(asked.get("done_at") or 0) < 3600
+    if me == "matrix" or requested_here:
         db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{engine.BYTE_VERSION}.", brain_used="ATUALIZAÇÃO")
         return True
     return False
+
+
+def install_update_action(service: Any) -> None:
+    """/atualizar (Telegram, app e painel): pede ao supervisor e responde NESTE agente quando o resultado sair."""
+    import threading
+    from . import nuvem as _nuvem
+
+    def act(payload: Dict[str, Any]) -> Dict[str, Any]:
+        me = agent_id()
+        res = _nuvem.request_update(dict(os.environ), me)
+        store = Path(os.environ.get("BYTE_DADOS_PERSISTENTES", ""))
+
+        def wait() -> None:
+            for _ in range(150):                                  # até 5 min (o supervisor confere a cada 2 s)
+                time.sleep(2)
+                out = _nuvem.read_update_result(store)
+                if out.get("agent") != me or float(out.get("at") or 0) != float(res["at"]):
+                    continue
+                if out["status"] == "sem_novidade":
+                    service.db.enqueue_proactive_message("update", f"✅ Já estou na versão mais nova (v{engine.BYTE_VERSION}).",
+                                                         brain_used="ATUALIZAÇÃO")
+                elif out["status"] == "erro":
+                    service.db.enqueue_proactive_message("update", f"⚠️ Não consegui atualizar agora: {out.get('error')}",
+                                                         brain_used="ATUALIZAÇÃO")
+                else:
+                    service.db.enqueue_proactive_message("update", f"⬇️ Versão nova encontrada ({str(out.get('sha'))[:7]}): "
+                                                         "instalada, reiniciando. Aviso quando voltar.", brain_used="ATUALIZAÇÃO")
+                return
+        threading.Thread(target=wait, daemon=True, name="ByteAtualizacao").start()
+        return {"text": res["text"]}
+    service.extra_actions["request_update"] = act
 
 
 def parse_chat_ids(raw: str) -> List[int]:
@@ -433,8 +477,7 @@ class Runtime:
                 raise SystemExit("BYTE_UI_TOKEN precisa ter 24+ caracteres [A-Za-z0-9_-].")
             self.server.token = self.args.ui_token
         self.service.api_enabled = bool(channels["api_token"])     # v13.16: /parear só onde há app/API
-        if self.manifest is None:
-            announce_version(self.service)
+        announce_version(self.service)                            # v13.41: todos (só avisa quem deve)
         port = self.port = self.server.start()
         print(f"[BYTE v{engine.BYTE_VERSION}] Painel: http://{self.args.host}:{port}/ui?token={self.server.token}", flush=True)
         self._announce()

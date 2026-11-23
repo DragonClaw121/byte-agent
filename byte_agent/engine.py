@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.40"
+BYTE_VERSION = "13.41"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7497,6 +7497,8 @@ WEB_UI_V90_RAW_TEMPLATE = r"""<!DOCTYPE html>
         <select id="b90-agent-menu" class="b90-select" style="width:auto; font-size:0.7rem; padding:2px 6px;" onchange="window.b90AgentArm()"></select>
         <button type="button" id="b90-agent-go" class="b90-btn-sec" style="display:none; font-size:0.68rem; padding:2px 8px;" onclick="window.b90SwitchAgent()">Confirmar troca</button>
       </span>
+      <button type="button" id="b90-update-btn" class="b90-btn-sec" style="font-size:0.68rem; padding:2px 8px;"
+              title="Confere o GitHub e instala a versão nova (só na nuvem)" onclick="window.b90RequestUpdate()">🔄 Atualizar</button>
       <span id="b90-profile-msg" class="b90-profile-msg"></span>
     </div>
     <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
@@ -9585,6 +9587,13 @@ pygame.time.Clock().tick(60)</textarea>
   window.b90AgentArm = function() {
     const current = (b90State.agent && b90State.agent.id) || '';
     document.getElementById('b90-agent-go').style.display = document.getElementById('b90-agent-menu').value === current ? 'none' : '';
+  };
+  window.b90RequestUpdate = async function() {               // v13.41: atualizar pelo painel, como /atualizar
+    const btn = document.getElementById('b90-update-btn'), msg = document.getElementById('b90-profile-msg');
+    btn.disabled = true; msg.innerText = 'Conferindo o GitHub...';
+    const res = await b90Call('request_update', {}, true);
+    btn.disabled = false;
+    msg.innerText = res.error ? `⚠️ ${res.error}` : (res.text || 'Pedido enviado.') + ' O resultado chega nos avisos do painel e no Telegram.';
   };
   window.b90SwitchAgent = async function() {
     const target = document.getElementById('b90-agent-menu').value;
