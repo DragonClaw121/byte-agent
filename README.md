@@ -216,3 +216,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Reuniões (v13.36–13.37):** transcrição ao vivo pelo app ou pelo notebook (Teams/Zoom/Meet) e ata com tarefas — [docs/app-android.md](docs/app-android.md)
 - **Microsoft (v13.38):** agenda do Outlook unificada, criar/mover/cancelar com aprovação, OneDrive automático e transcrições do Teams — [docs/microsoft.md](docs/microsoft.md)
 - **Google (v13.39):** Google Agenda na agenda unificada (com Meet) e Drive automático — [docs/google.md](docs/google.md)
+- **Pessoas (v13.42):** convide outras pessoas pelo mesmo bot (link `t.me/...`) ou por um painel pessoal (`/u/<agente>`); cada uma com conversa, memória, tarefas e lembretes próprios e limite diário — [docs/pessoas.md](docs/pessoas.md)

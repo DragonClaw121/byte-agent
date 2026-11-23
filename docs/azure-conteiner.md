@@ -292,6 +292,22 @@ Cada agente que roda à parte tem o próprio painel. Para abrir:
 
 Os links levam a chave de acesso do painel: não compartilhe.
 
+## Pessoas e domínio próprio (v13.42)
+Outras pessoas podem usar os agentes, cada uma com o próprio espaço (conversa, memória, tarefas e lembretes
+separados). Veja [pessoas.md](pessoas.md). O painel pessoal de cada uma fica em `<endereço>/u/<agente>`
+(`/u/matrix`, `/u/kronus`, `/u/bit`, `/u/byte`), e o roteador do contêiner leva cada endereço ao agente certo.
+
+**Domínio próprio:** o endereço padrão da Azure (`https://byte.<letras>.azurecontainerapps.io`) é longo e tem cara de
+link técnico. Com um domínio seu, o link fica `https://assistente.seudominio.com.br/u/kronus`:
+1. No portal da Azure: **byte → Rede → Domínios personalizados → Adicionar → Certificado gerenciado** (o certificado é
+   grátis). Digite o domínio, por exemplo `assistente.seudominio.com.br`.
+2. No site onde você comprou o domínio (Registro.br, GoDaddy...), crie os dois registros DNS que a Azure mostrar: um
+   CNAME e um TXT de verificação. Depois, clique em **Validar** e em **Adicionar**.
+3. No Cloud Shell, faça os agentes usarem o domínio novo nos links que geram:
+   ```bash
+   az containerapp update -g byte-rg -n byte --set-env-vars BYTE_ENDERECO=https://assistente.seudominio.com.br
+   ```
+
 ## Reuniões no painel (v13.40)
 Na aba **Agenda** do painel, a seção **📝 Reuniões** tem:
 - **🔴 Gravar:** a mesma gravação da página `/reuniao`, com áudio do Teams/Zoom/Meet e microfone e texto ao vivo.

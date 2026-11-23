@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.41"
+BYTE_VERSION = "13.42"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -1875,6 +1875,7 @@ SYSTEM_PROMPT_TOOLS_NATIVE_BLOCK = (
 
 
 class TrueLLMAutonomousRouter:
+    system_prompt: Optional[str] = None      # v13.42: prompt próprio do espaço de outra pessoa (multiusuário)
     # v10.1: HUMAN_MODEL_ALIASES foi removido. Nenhum nome digitado pelo usuário é trocado por outra
     # família/variante; a tag segue para o Ollama exatamente como foi pedida.
 
@@ -4310,7 +4311,7 @@ class TrueLLMAutonomousRouter:
             if effective_max_tokens <= 0:
                 effective_max_tokens = 2048
 
-        sys_prompt = SYSTEM_PROMPT_V90 + identity_guard() + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
+        sys_prompt = (self.system_prompt or SYSTEM_PROMPT_V90) + identity_guard() + f"\nNÍVEL DE ESFORÇO ATUAL: {effort_decision['depth_directive']}"
         if self.custom_user_directive:
             sys_prompt += f"\nDIRETRIZ PRIORITÁRIA DO USUÁRIO: {self.custom_user_directive}"
         if extra_directive:
@@ -6288,6 +6289,7 @@ class ByteEcosystemService:
         self.voice_kit: Optional[Any] = None                       # v12.3: transcrição e fala (byte_agent.voice), criado sob demanda
         self.disabled_tools: set = set()                           # v12.0: ferramentas de habilidades desligadas no manifesto
         self.agent_manifest: Optional[Dict[str, Any]] = None
+        self.system_prompt: Optional[str] = None                   # v13.42: espaço de outra pessoa (multiusuário)
         self.closed = False
         # v12.1 — executores de ações externas que exigem aprovação (Asana, Notion, Teams...): tipo -> função(dados)
         self.action_executors: Dict[str, Any] = {}
@@ -6767,7 +6769,7 @@ class ByteEcosystemService:
             tools = [t for t in self.agent_tools_schema() if t["function"]["name"] in mission_names]
             loop = llm.run_native_tool_loop(
                 model,
-                [{"role": "system", "content": SYSTEM_PROMPT_V100.replace(SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, SYSTEM_PROMPT_TOOLS_NATIVE_BLOCK) + rules},
+                [{"role": "system", "content": (self.system_prompt or SYSTEM_PROMPT_V100).replace(SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, SYSTEM_PROMPT_TOOLS_NATIVE_BLOCK) + rules},
                  {"role": "user", "content": instruction}],
                 tools, lambda tool_name, tool_args: self.run_agent_tool(tool_name, tool_args, turn),
                 max_tokens=700, temp_override=0.3, think=False)
@@ -6783,7 +6785,7 @@ class ByteEcosystemService:
         )
         text, _, reason = llm._call_ollama_chat_stream(
             model,
-            [{"role": "system", "content": SYSTEM_PROMPT_V100.replace(SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, "") + rules},
+            [{"role": "system", "content": (self.system_prompt or SYSTEM_PROMPT_V100).replace(SYSTEM_PROMPT_TOOLS_TEXT_BLOCK, "") + rules},
              {"role": "user", "content": f"{context}\n\nInstrução agendada: {instruction}"}],
             ttft_timeout_s=30.0, max_tokens=700, temp_override=0.3, think=False)
         text = TOOL_CALL_REGEX.sub("", text).strip()
@@ -7708,6 +7710,20 @@ pygame.time.Clock().tick(60)</textarea>
   <div id="b90-tab-ctx" class="b90-tab-content">
     <div class="b90-grid">
       <div class="b90-card">
+        <h3>👥 Pessoas (cada uma com o próprio espaço)</h3>
+        <div id="b90-people-box" style="margin-bottom:12px; font-size:0.82rem;">
+          <div style="color:var(--muted); font-size:0.74rem; margin-bottom:6px;">Quem você convidar usa este agente pelo mesmo bot do
+            Telegram ou por um painel pessoal, com conversa, memória, tarefas e lembretes só dela. Ninguém vê os seus dados (e-mails,
+            contas, aprovações) nem os de outra pessoa.</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
+            <input id="b90-people-name" class="b90-input" style="flex:1; min-width:180px;" placeholder="Nome de quem você quer convidar"
+              onkeydown="if(event.key==='Enter')window.b90PeopleInvite()" />
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-people-admin"> admin (convida e remove membros)</label>
+            <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90PeopleInvite()">✉️ Convidar</button>
+          </div>
+          <div id="b90-people-list"></div>
+          <pre id="b90-people-out" class="b90-pre" style="display:none; max-height:200px; margin-top:6px; user-select:all;"></pre>
+        </div>
         <h3>📝 Reuniões (Teams, Zoom, Meet neste computador)</h3>
         <div id="b90-meet-box" style="margin-bottom:12px; font-size:0.82rem;">
           <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
@@ -8667,6 +8683,40 @@ pygame.time.Clock().tick(60)</textarea>
       <button class="b90-btn-sec" style="margin:0;" onclick="window.b90MeetShow(${m.id})">Ver</button></span></div>`).join('')
       || '<span style="color:var(--muted);">Nenhuma reunião ainda.</span>';
   }
+  function b90RenderPeople(st) {
+    const box = document.getElementById('b90-people-list'), r = st.pessoas;
+    if (!box) return;
+    if (!r) { document.getElementById('b90-people-box').innerHTML = '<span style="color:var(--muted);">Multiusuário indisponível neste agente.</span>'; return; }
+    box.innerHTML = (r.pessoas || []).map(p => {
+      const how = [p.telegram ? 'Telegram ✅' : (p.convite ? 'convite pendente ⏳' : ''), p.painel ? 'painel ✅' : ''].filter(Boolean).join(' · ') || 'sem acesso ativo';
+      return `<div class="b90-row-item"><span>${p.n}. <b>${b90EscapeHtml(p.nome)}</b> <span style="color:var(--muted);">(${p.papel} · ${how} ·
+        hoje ${p.uso}/${p.limite})</span></span><span style="display:flex; gap:4px; flex-wrap:wrap;">
+        <button class="b90-btn-sec" style="margin:0;" title="Gera um link novo (o anterior deixa de valer)" onclick="window.b90PeopleCmd('/pessoas', 'painel ${p.n}')">🖥️ Painel</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleCmd('/pessoas', 'convite ${p.n}')">✉️ Convite</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleLimit(${p.n}, ${p.limite})">📊 Limite</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleRemove(${p.n})">🚫 Remover</button></span></div>`;
+    }).join('') || '<span style="color:var(--muted);">Ninguém além de você usa este agente.</span>';
+  }
+  window.b90PeopleCmd = async function(cmd, arg) {
+    const out = document.getElementById('b90-people-out');
+    const res = await b90Call('people_command', { cmd, arg }, true);
+    out.textContent = res.error ? '⚠️ ' + res.error : (res.text || ''); out.style.display = 'block';
+    if (res.pessoas) { b90State.pessoas = res.pessoas; b90RenderPeople(b90State); }   // o redesenho a cada 4 s usa b90State
+  };
+  window.b90PeopleInvite = async function() {
+    const el = document.getElementById('b90-people-name'), name = el.value.trim();
+    if (!name) { el.focus(); return; }
+    await window.b90PeopleCmd('/convidar', name + (document.getElementById('b90-people-admin').checked ? ' admin' : ''));
+    el.value = '';
+  };
+  window.b90PeopleLimit = async function(n, current) {
+    const v = prompt('Mensagens por dia para esta pessoa:', String(current));
+    if (v) await window.b90PeopleCmd('/limite', n + ' ' + v.trim());
+  };
+  window.b90PeopleRemove = async function(n) {
+    if (!confirm('Tirar o acesso desta pessoa? (os dados dela ficam guardados)')) return;
+    await window.b90PeopleCmd('/remover', String(n));
+  };
   const B90_DIAS = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
   function b90RenderBriefings(st) {
     const box = document.getElementById('b90-brief-box');
@@ -8751,6 +8801,7 @@ pygame.time.Clock().tick(60)</textarea>
     b90RenderPermissions(st);
     b90RenderBriefings(st);
     b90RenderMeetings(st);
+    b90RenderPeople(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');

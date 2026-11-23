@@ -230,9 +230,11 @@ class PanelRouter:
 
     MAX_BODY = 32 * 1024 * 1024
 
-    def __init__(self, host: str, port: int, routes: Dict[str, int], default_port: int):
+    def __init__(self, host: str, port: int, routes: Dict[str, int], default_port: int,
+                 paths: Optional[Dict[str, int]] = None):
         self.routes = routes                         # token -> porta local
         self.default_port = default_port
+        self.paths = dict(paths or {})               # v13.42: "/u/<agente>" (painel pessoal de convidados) -> porta
         router = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -290,8 +292,13 @@ class PanelRouter:
         self.server.daemon_threads = True
 
     def target(self, raw_path: str, headers: "http.client.HTTPMessage") -> Tuple[int, bool]:
-        """(porta, é_painel). Só o token do painel decide; comparação em tempo constante."""
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(raw_path).query)
+        """(porta, é_painel). Só o token do painel decide; comparação em tempo constante. /u/<agente> vai para o agente
+        (sem ser tratado como painel do dono: lá dentro, o código pessoal do convidado é quem dá acesso)."""
+        split = urllib.parse.urlsplit(raw_path)
+        for prefix, port in self.paths.items():
+            if split.path == prefix or split.path.startswith(prefix + "/"):
+                return port, False
+        query = urllib.parse.parse_qs(split.query)
         candidates = [headers.get("X-Byte-Token") or ""] + query.get("token", [])[:1]
         for cand in candidates:
             if not cand:
@@ -453,6 +460,9 @@ def restart_supervisor() -> None:
 
 
 def public_address(env: Dict[str, str]) -> str:
+    custom = env.get("BYTE_ENDERECO", "").strip().rstrip("/")      # v13.42: domínio próprio (ex.: https://assistente.suaempresa.com.br)
+    if custom:
+        return custom if custom.startswith("http") else "https://" + custom
     name, suffix = env.get("CONTAINER_APP_NAME", ""), env.get("CONTAINER_APP_ENV_DNS_SUFFIX", "")
     return f"https://{name}.{suffix}" if name and suffix else "https://SEU-ENDERECO.azurecontainerapps.io"
 
@@ -568,8 +578,14 @@ class Supervisor:
         base = public_address(self.env)
         self.child_env["principal"]["BYTE_PAINEIS"] = json.dumps(
             {a: f"{base}/ui?token={tokens[a]}" for a in procs if a in SEPARATE_AGENTS})
+        paths = {"/u/matrix": 8765}                  # v13.42: painéis pessoais dos convidados de cada agente
+        self.child_env["principal"]["BYTE_LINK_PESSOAS"] = f"{base}/u/matrix"
+        for agent in procs:
+            if agent in SEPARATE_AGENTS:
+                paths[f"/u/{agent}"] = SEPARATE_AGENTS[agent]
+                self.child_env.setdefault(agent, {})["BYTE_LINK_PESSOAS"] = f"{base}/u/{agent}"
         try:
-            self.router = PanelRouter("0.0.0.0", public_port(self.env), routes, KRONUS_INTERNAL_PORT)
+            self.router = PanelRouter("0.0.0.0", public_port(self.env), routes, KRONUS_INTERNAL_PORT, paths)
         except OSError as err:
             log(f"Aviso: o roteador dos painéis não abriu ({err}); os painéis ficam só locais.")
             return

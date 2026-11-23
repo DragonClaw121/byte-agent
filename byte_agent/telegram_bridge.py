@@ -59,6 +59,8 @@ HELP_TEXT = (
     "  Planilhas e documentos novos: é só pedir (\"monte uma planilha de orçamento\", \"escreva uma proposta para...\")\n"
     "  (envie uma planilha .csv ou .xlsx como documento para disponibilizá-la)\n"
     "/live — estado da live | /live off — pausa as respostas na Twitch | /live on — retoma\n"
+    "👥 /pessoas — quem mais usa este agente (cada um com espaço próprio) | /convidar <nome> [admin] — link de convite\n"
+    "  /pessoas painel <n> — link do painel da pessoa | /limite <n> <msgs/dia> | /remover <n> [apagar]\n"
     "/limpar — limpa a janela de contexto da conversa\n"
     "/iniciativas on|off — liga/desliga mensagens espontâneas\n"
     "🎙️ Nota de voz: o agente transcreve e responde (e responde em áudio, se a voz estiver configurada)\n"
@@ -308,6 +310,9 @@ class TelegramBridge:
             try:
                 self.poll_once()
                 self.push_proactive()
+                people = getattr(self.service, "people", None)
+                if people is not None and not self._service_closed():
+                    people.push_all(self)                    # v13.42: avisos de cada convidado no chat dele
                 self.last_error = None
                 backoff = 2.0
             except Exception as err:      # rede instável não pode derrubar a ponte
@@ -365,7 +370,11 @@ class TelegramBridge:
         if chat_id is None:
             return
         if chat_id not in self.allowed:
+            people = getattr(self.service, "people", None)
+            if people is not None and people.route_update(self, chat_id, upd):    # v13.42: convidado com espaço próprio
+                return
             self.send(chat_id, f"⛔ Este bot é privado. Seu chat_id é {chat_id}. "
+                               "Para usar, peça um link de convite a quem cuida deste agente. "
                                "Se você é o dono, coloque esse número em BYTE_TELEGRAM_CHAT_IDS e reinicie a Byte.")
             return
         if "callback_query" in upd:
@@ -901,6 +910,10 @@ class TelegramBridge:
             self.send(chat_id, f"📨 [{msg.get('ref')}] para {msg.get('account_address')}\nDe: {msg.get('from')}\nAssunto: {msg.get('subject')}\n"
                                f"Data: {msg.get('date')}" + (f" · {msg['attachments']} anexo(s)" if msg.get("attachments") else "")
                                + f"\n\n{msg.get('body') or '(sem texto)'}\n\nPara responder, diga: \"responda o {msg.get('ref')} dizendo que...\"")
+        elif cmd in {"/pessoas", "/convidar", "/remover", "/limite"}:
+            people = getattr(self.service, "people", None)        # v13.42: multiusuário
+            self.send(chat_id, people.admin_command(None, cmd, arg) if people is not None
+                      else "Multiusuário indisponível neste agente.")
         elif cmd == "/limpar":
             self._dispatch("clear_context")
             self.send(chat_id, "Janela de contexto limpa.")

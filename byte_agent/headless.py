@@ -112,6 +112,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         from . import app_comandos
         app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
         install_update_action(service)                      # v13.41: o resultado volta para o bot de quem pediu
+        from . import usuarios
+        usuarios.install(service, data_dir)                 # v13.42: multiusuário (cada convidado com espaço próprio)
     return service
 
 

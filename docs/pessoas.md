@@ -1,0 +1,92 @@
+# Pessoas: cada uma com o próprio espaço (v13.42)
+
+Você pode deixar outras pessoas usarem os agentes (família, amigos, a equipe de uma empresa). Cada pessoa tem um
+**espaço próprio**:
+
+| Fica separado por pessoa | Continua só seu (do dono) |
+|---|---|
+| conversa e histórico | suas caixas de e-mail |
+| memória ("lembra que eu...") | suas contas Microsoft e Google |
+| tarefas, lembretes e rotinas diárias | suas aprovações |
+| objetivos (tarefas longas) | executar código, trocar modelo, atualizar |
+| reuniões e atas, arquivos gerados | `/saude`, `/permissoes` e o painel completo |
+| resumo da manhã e da semana | os dados de qualquer outra pessoa |
+
+O agente chama a pessoa pelo nome e não conhece os seus dados. Tecnicamente, cada espaço é um banco separado em
+`<dados do agente>/pessoas/<n>/`. Ele entra na cópia de segurança da nuvem a cada 5 minutos, como o resto.
+
+Cada agente tem a própria lista. Quem você convidar pelo Kronus usa o Kronus, e quem você convidar pelo Bit usa o Bit.
+
+## Convidar alguém
+
+**Pelo Telegram (ou pela aba Comandos do app):**
+
+```
+/convidar Ana
+```
+
+O agente responde com um link assim: `https://t.me/<seu_bot>?start=...`. Mande esse link para a pessoa. Ela toca nele,
+aperta **Iniciar** e já entra no espaço dela. O convite vale **7 dias** e só **uma vez**.
+
+**Pelo painel:** aba **Agenda** → **👥 Pessoas**. Digite o nome e clique em **✉️ Convidar**. Em cada pessoa, o painel
+também tem os botões **🖥️ Painel** (link do painel pessoal), **✉️ Convite** (convite novo), **📊 Limite** e
+**🚫 Remover**.
+
+## Painel pessoal (sem Telegram)
+
+Cada pessoa pode usar um painel no navegador (celular ou computador), com conversa e todos os comandos dela em botões:
+
+```
+https://<endereço>/u/kronus#<código pessoal>
+```
+
+O link é curto e o endereço é sempre o mesmo. Só o código depois do `#` muda de pessoa para pessoa. Esse código não é
+enviado em nenhum pedido ao servidor: a página o guarda no aparelho e tira da barra de endereço.
+
+- **A pessoa pede o próprio link:** manda `/painel` no Telegram.
+- **Você gera o link:** use `/pessoas painel <n>` ou o botão **🖥️ Painel**. Serve para quem não usa Telegram.
+- **Link novo:** pedir de novo desliga o link anterior. Se um link vazar, gere outro.
+
+Para um endereço ainda mais simples (`https://assistente.suaempresa.com.br/u/bit`), veja
+"Domínio próprio" em [azure-conteiner.md](azure-conteiner.md).
+
+## Papéis
+
+- **membro** (padrão): usa o próprio espaço.
+- **admin**: além disso, convida e remove **membros**, com `/convidar`, `/remover`, `/limite` e `/pessoas`. Não cria
+  outros admins e não vê os dados de ninguém. Serve para delegar a gestão da equipe numa empresa.
+
+```
+/convidar Carla admin
+```
+
+## Limite diário (para proteger a sua cota)
+
+As mensagens dos convidados usam a **sua** Azure (modelo) e o **seu** Groq (transcrição). Por isso, cada pessoa tem
+um limite de mensagens por dia:
+
+- **Padrão:** 150 mensagens por dia. Para mudar o padrão, defina a variável `BYTE_LIMITE_PESSOA_DIA` no contêiner.
+- **Por pessoa:** `/limite <n> <mensagens>`, por exemplo `/limite 2 300`.
+- **Renovação:** o limite renova à meia-noite. `/ajuda`, `/eu`, `/painel` e `/limpar` não contam.
+- **Quem chega ao limite:** a pessoa recebe "⏳ Você usou as N mensagens de hoje".
+- **Como acompanhar:** a pessoa vê o próprio uso com `/eu`; você vê o de todos com `/pessoas`.
+
+## Remover
+
+- **`/remover <n>`** tira o acesso (Telegram e painel) na hora. Os dados ficam guardados.
+- **`/remover <n> apagar`** tira o acesso e apaga tudo da pessoa.
+
+## Comandos
+
+| Quem | Comandos |
+|---|---|
+| Dono | `/pessoas` · `/convidar <nome> [admin]` · `/pessoas painel <n>` · `/pessoas convite <n>` · `/limite <n> <msgs>` · `/remover <n> [apagar]` |
+| Convidado | `/ajuda` · `/agenda` · `/tarefa` · `/feito` · `/lembrete` · `/lembretes` · `/cancelar` · `/rotina` · `/memorias` · `/lembrar` · `/objetivo` · `/objetivos` · `/resumo` · `/semana` · `/clima` · `/onde` · `/buscar` · `/pesquisar` · `/reunioes` · `/ata` · `/painel` · `/eu` · `/limpar`, além de notas de voz e áudios de reunião com a legenda "ata". No Bit, também `/arquivos`, `/analise`, `/apresentacao` e `/modelos` |
+
+## O que ainda não existe (próximos passos)
+
+- O convidado ainda **não conecta** o próprio e-mail, Outlook ou Google.
+- O app Android continua só do dono. Os convidados usam o Telegram ou o painel pessoal.
+- Cada espaço é um agente completo rodando junto do seu. Isso funciona bem para dezenas de pessoas. Para centenas de
+  usuários (uma empresa grande), o próximo passo é carregar o espaço só quando a pessoa usa e separar a cobrança por
+  pessoa.

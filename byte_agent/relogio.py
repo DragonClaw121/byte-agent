@@ -280,11 +280,12 @@ def format_family(items: List[Dict[str, Any]], now: Optional[float] = None) -> s
     return "\n".join(lines)
 
 
-def install(service: Any) -> Scheduler:
+def install(service: Any, share: bool = True) -> Scheduler:
+    """share=False no espaço de um convidado (v13.42): ele não publica a saúde no lugar do agente."""
     sched = Scheduler(lambda text: service.db.enqueue_proactive_message("saude", text, brain_used="SAÚDE"))
     service.scheduler = sched
     service.proactive_engine.background_jobs.append(sched.tick)
-    if family_dir() is not None:                         # na nuvem: cada agente conta como está, a Matrix lê todos
+    if share and family_dir() is not None:                         # na nuvem: cada agente conta como está, a Matrix lê todos
         sched.add("saude_compartilhada", 60, lambda: publish_health(service), label="Saúde compartilhada")
 
     def act_health(payload: Dict[str, Any]) -> Dict[str, Any]:
