@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.5"
+VERSION = "1.6"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -385,8 +385,159 @@ def html_to_text(html: str) -> str:
     return "\n".join(out).strip()
 
 
+# ---------------- .oft/.msg sem o Outlook clássico: o corpo costuma vir em RTF comprimido com o HTML "encapsulado"
+RTF_DICT = (b"{\\rtf1\\ansi\\mac\\deff0\\deftab720{\\fonttbl;}{\\f0\\fnil \\froman \\fswiss \\fmodern \\fscript "
+            b"\\fdecor MS Sans SerifSymbolArialTimes New RomanCourier{\\colortbl\\red0\\green0\\blue0\r\n\\par "
+            b"\\pard\\plain\\f0\\fs20\\b\\i\\u\\tab\\tx")
+
+
+def decompress_rtf(data: bytes) -> bytes:
+    """PR_RTF_COMPRESSED (MS-OXRTFCP, "LZFu"/"MELA") -> RTF."""
+    import struct
+    if len(data) < 16:
+        return b""
+    comp_size, raw_size, magic, _crc = struct.unpack("<IIII", data[:16])
+    if magic == 0x414C454D:                                   # "MELA": sem compressão
+        return data[16:16 + raw_size]
+    if magic != 0x75465A4C:                                   # "LZFu"
+        return b""
+    window = bytearray(4096)
+    window[:len(RTF_DICT)] = RTF_DICT
+    pos, out, i, end = len(RTF_DICT), bytearray(), 16, min(len(data), comp_size + 4)
+    while i < end:
+        flags = data[i]
+        i += 1
+        for bit in range(8):
+            if i >= end:
+                break
+            if flags & (1 << bit):
+                if i + 1 >= end:
+                    return bytes(out)
+                ref = (data[i] << 8) | data[i + 1]
+                i += 2
+                offset, length = ref >> 4, (ref & 0xF) + 2
+                if offset == pos:
+                    return bytes(out)
+                for k in range(length):
+                    c = window[(offset + k) % 4096]
+                    out.append(c)
+                    window[pos] = c
+                    pos = (pos + 1) % 4096
+            else:
+                c = data[i]
+                i += 1
+                out.append(c)
+                window[pos] = c
+                pos = (pos + 1) % 4096
+    return bytes(out)
+
+
+RTF_SKIP = {"fonttbl", "colortbl", "stylesheet", "info", "pict", "header", "footer", "listtable", "listoverridetable",
+            "rsidtbl", "generator", "xmlnstbl", "mmathPr", "themedata", "colorschememapping", "latentstyles", "datastore"}
+
+
+def rtf_to_html(rtf: str) -> str:
+    """O HTML original de dentro do RTF (\\fromhtml1, MS-OXRTFEX). "" se o RTF não carrega HTML."""
+    if "\\fromhtml" not in rtf[:2000]:
+        return ""
+    cp = re.search(r"\\ansicpg(\d+)", rtf[:2000])
+    codepage = f"cp{cp.group(1)}" if cp else "cp1252"
+    out: List[str] = []
+    pending = bytearray()
+
+    def flush() -> None:
+        if pending:
+            try:
+                out.append(pending.decode(codepage, "replace"))
+            except LookupError:
+                out.append(pending.decode("cp1252", "replace"))
+            pending.clear()
+    # pilha: (suprimir por \htmlrtf, pular grupo, dentro de htmltag, \ucN)
+    stack: List[List[Any]] = []
+    state: List[Any] = [False, False, False, 1]
+    skip_chars = 0
+    i, n = 0, len(rtf)
+    token = re.compile(r"\\([a-zA-Z]+)(-?\d+)? ?|\\'([0-9a-fA-F]{2})|\\(.)|([{}])|([^\\{}\r\n]+)|[\r\n]+", re.S)
+    while i < n:
+        m = token.match(rtf, i)
+        if not m:
+            i += 1
+            continue
+        i = m.end()
+        word, arg, hexbyte, sym, brace, text = m.groups()
+        if brace == "{":
+            stack.append(state[:])
+            if rtf.startswith("\\*", i):                       # destino opcional: só \*\htmltag interessa
+                tag = re.match(r"\\\*\\([a-zA-Z]+)", rtf[i:i + 40])
+                if tag and tag.group(1) == "htmltag":
+                    state[2] = True
+                elif tag and tag.group(1) in ("mhtmltag",):
+                    state[1] = True
+                else:
+                    state[1] = True
+            else:
+                nxt = re.match(r"\\([a-zA-Z]+)", rtf[i:i + 40])
+                if nxt and nxt.group(1) in RTF_SKIP:
+                    state[1] = True
+            continue
+        if brace == "}":
+            flush()
+            state = stack.pop() if stack else [False, False, False, 1]
+            continue
+        if state[1]:
+            continue
+        if word:
+            if word == "htmlrtf":
+                flush()
+                state[0] = arg != "0"
+            elif word == "uc":
+                state[3] = int(arg or 1)
+            elif state[0]:
+                continue
+            elif word == "u":
+                flush()
+                code = int(arg or 0)
+                out.append(chr(code + 65536 if code < 0 else code))
+                skip_chars = state[3]
+            elif word == "par":
+                flush()
+                out.append("\r\n")
+            elif word == "tab":
+                flush()
+                out.append("\t")
+            elif word == "line":
+                flush()
+                out.append("<br>")
+            elif word == "htmltag" or word == "fromhtml":
+                pass
+            continue
+        if state[0]:
+            continue
+        if hexbyte:
+            if skip_chars:
+                skip_chars -= 1
+                continue
+            pending.append(int(hexbyte, 16))
+            continue
+        flush()
+        if sym:
+            if skip_chars:
+                skip_chars -= 1
+                continue
+            out.append({"~": "\xa0", "_": "-"}.get(sym, sym if sym in "\\{}" else ""))
+        elif text:
+            if skip_chars:
+                cut = min(skip_chars, len(text))
+                text, skip_chars = text[cut:], skip_chars - cut
+            out.append(text)
+    flush()
+    html = "".join(out)
+    return html if "<" in html else ""
+
+
 def read_outlook_template(path: str) -> Optional[Dict[str, str]]:
-    """Um modelo .oft do Outlook (mesmo formato do .msg): assunto e texto."""
+    """Um .oft/.msg lido direto do arquivo (sem o Outlook clássico): assunto, texto, HTML (do PR_HTML ou de dentro do RTF
+    comprimido) e as imagens internas (anexos cid:)."""
     try:
         import olefile                                        # pip install olefile (o instalador já instala)
     except ImportError:
@@ -396,14 +547,14 @@ def read_outlook_template(path: str) -> Optional[Dict[str, str]]:
     except Exception:
         return None
     try:
-        def text(prop: str) -> str:
+        def text(prop: str, prefix: str = "") -> str:
             for suffix, enc in (("001F", "utf-16-le"), ("001E", "cp1252")):
-                name = f"__substg1.0_{prop}{suffix}"
+                name = f"{prefix}__substg1.0_{prop}{suffix}"
                 if ole.exists(name):
                     return ole.openstream(name).read().decode(enc, "replace").rstrip("\x00").strip()
             return ""
         subject, body, html = text("0037"), text("1000"), ""
-        if ole.exists("__substg1.0_10130102"):                # o HTML (quando o arquivo o guarda; sem as imagens)
+        if ole.exists("__substg1.0_10130102"):                # PR_HTML
             raw = ole.openstream("__substg1.0_10130102").read()
             charset = re.search(rb"(?i)charset=[\"']?([\w-]+)", raw[:3000])
             try:
@@ -411,14 +562,37 @@ def read_outlook_template(path: str) -> Optional[Dict[str, str]]:
             except (LookupError, UnicodeDecodeError):
                 html = raw.decode("cp1252", "replace")
             html = html.rstrip("\x00")
-            body = body or html_to_text(html)
+        if "<" not in html and ole.exists("__substg1.0_10090102"):    # PR_RTF_COMPRESSED com o HTML dentro
+            try:
+                rtf = decompress_rtf(ole.openstream("__substg1.0_10090102").read()).decode("latin-1")
+                html = rtf_to_html(rtf)
+            except Exception:
+                html = ""
+        images = []
+        for entry in ole.listdir(streams=False, storages=True):
+            folder = entry[0] if entry else ""
+            if not folder.startswith("__attach_version1.0_#") or len(entry) != 1:
+                continue
+            cid = text("3712", folder + "/")
+            data_name = f"{folder}/__substg1.0_37010102"
+            if cid and ole.exists(data_name):
+                images.append({"cid": cid, "nome": text("3707", folder + "/") or text("3704", folder + "/"),
+                               "mime": text("370E", folder + "/"),
+                               "dados": base64.b64encode(ole.openstream(data_name).read()).decode()})
+        body = body or html_to_text(html)
     finally:
         ole.close()
     if len(body.strip()) < 10:
         return None
     name = os.path.splitext(os.path.basename(path))[0]
+    if "<" in html:
+        html = cid_to_data(html, [dict(img, mime=img["mime"] if str(img["mime"]).startswith("image/") else "") for img in images])
     return {"nome": name[:80], "assunto": subject[:200], "corpo": body.replace("\r\n", "\n")[:8000], "uso": "",
             "html": html if "<" in html else ""}
+
+
+OLD_SERVER_MSG = ("⚠ O servidor do Bit ainda está na versão antiga e guardou só o texto. Ele se atualiza sozinho em "
+                  "alguns minutos (ou mande /atualizar para o Bit); depois, importe ou cole de novo.")
 
 
 # ---------------- imagens do e-mail (logo, banner): embutidas no modelo, viram anexos "cid:" ao abrir no Outlook
@@ -1720,9 +1894,17 @@ class App:
             if "assinatura" in res and not sig.get("1.0", "end").strip():
                 sig.insert("1.0", res.get("assinatura") or "")
             if res.get("importados") is not None:
-                with_fmt = sum(1 for t in state["items"] if t.get("tem_html") and t.get("origem") == "outlook")
-                status.configure(text=f"✔ {res['importados']} modelo(s) importado(s)"
-                                      + (f" — {with_fmt} com o formato do Outlook (◆)." if with_fmt else "."))
+                sent = state.pop("sent", None) or {}
+                if sent.get("html") and not res.get("formato"):
+                    status.configure(text=OLD_SERVER_MSG)
+                    return
+                msg = f"✔ {res['importados']} modelo(s) importado(s)"
+                if sent.get("html"):
+                    msg += f", {sent['html']} com o formato (◆)"
+                if sent.get("so_texto"):
+                    msg += (". ⚠ Só o texto de: " + ", ".join(sent["so_texto"][:4]) + " — abra no Outlook, clique no "
+                            "corpo, Ctrl+A, Ctrl+C e use \"Colar do Outlook\"")
+                status.configure(text=msg + ".")
 
         def set_format(has_html: bool, fresh: bool = False) -> None:
             if has_html:
@@ -1759,7 +1941,7 @@ class App:
         def call(payload: Dict[str, Any], msg: str) -> None:
             def done(res: Dict[str, Any]) -> None:
                 show(res)
-                status.configure(text=msg)
+                status.configure(text=OLD_SERVER_MSG if payload.get("html") and not res.get("formato") else msg)
             self.run_bg(lambda: self.api.call("POST", "modelos", payload), done,
                         lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
@@ -1790,8 +1972,16 @@ class App:
             text.delete("1.0", "end")
             text.insert("1.0", html_to_text(state["html"]))
             set_format(True, fresh=True)
-            status.configure(text="✔ Colei com o formato. Se o texto do modelo muda a cada e-mail, troque no Outlook os "
-                                  "nomes e números por {{nome}}, {{pedido}}... antes de copiar.")
+            lost = len(re.findall(r"""(?i)\bsrc=["']?(?:blob:|cid:|file:)""", state["html"]))
+            status.configure(text="✔ Colei com o formato. Campos como [Nome] ou {{nome}} são trocados a cada e-mail."
+                             + (f" ⚠ {lost} imagem(ns) não vieram pela cópia: para elas, use \"Importar arquivo…\" com o "
+                                ".oft (Arquivo → Salvar como no Outlook)." if lost else ""))
+
+        def paste_key(_e: Any = None) -> Optional[str]:
+            if IS_WINDOWS and clipboard_get_html():          # Ctrl+V com formato no campo do texto = Colar do Outlook
+                paste_outlook()
+                return "break"
+            return None
 
         def import_file() -> None:
             from tkinter import filedialog
@@ -1805,6 +1995,8 @@ class App:
                 found = [t for t in (read_template_file(p) for p in paths) if t]
                 if not found:
                     raise ApiError("Não consegui ler esses arquivos como e-mail (.oft, .msg, .eml ou .htm).")
+                state["sent"] = {"html": sum(1 for t in found if t.get("html")),
+                                 "so_texto": [t["nome"] for t in found if not t.get("html")]}
                 return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found}, timeout=120)
             self.run_bg(work, show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
@@ -1822,6 +2014,8 @@ class App:
                     raise ApiError("Não achei modelos (.oft) nem assinaturas do Outlook neste PC. No Outlook novo, os "
                                    "modelos ficam na nuvem: abra cada um, copie e cole aqui.")
                 sig_info = signatures[0] if signatures else {}
+                state["sent"] = {"html": sum(1 for t in found if t.get("html")),
+                                 "so_texto": [t["nome"] for t in found if not t.get("html")]}
                 return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found,
                                                          "assinatura": sig_info.get("texto", ""),
                                                          "assinatura_html": sig_info.get("html", "")}, timeout=180)
@@ -1836,6 +2030,7 @@ class App:
         self.button(actions, "Importar do Outlook", import_outlook, primary=True).pack(side="left")
         self.button(actions, "Importar arquivo…", import_file).pack(side="left", padx=(self.px(6), 0))
         self.button(text_head, "Colar do Outlook (com formato)", paste_outlook).pack(anchor="w", pady=(self.px(2), self.px(4)))
+        text.bind("<<Paste>>", paste_key)
         buttons = tk.Frame(right, bg=self.BG)
         buttons.pack(side="bottom", fill="x", pady=(self.px(6), 0))
         self.button(buttons, "Salvar modelo", save, primary=True).pack(side="left")
@@ -2380,7 +2575,7 @@ class FakeApi:
                       "usos": 0, "tem_html": True, "origem": "outlook"}]
             if (body or {}).get("acao") == "salvar":
                 self.saved = body
-            return {"modelos": items, "assinatura": "Gabriel · Comercial"}
+            return {"modelos": items, "assinatura": "Gabriel · Comercial", "formato": True}
         return {"avisos": []}
 
     def download(self, sub: str, timeout: float = 120.0) -> bytes:

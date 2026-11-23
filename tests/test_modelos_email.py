@@ -170,3 +170,12 @@ def test_clean_html_drops_code():
                                    '<img src=x onerror=alert(1)><iframe src="https://x"></iframe>')
     assert "script" not in out and "onclick" not in out and "onerror" not in out and "javascript" not in out
     assert "iframe" not in out and "<p>oi</p>" in out
+
+
+def test_bracket_fields_like_the_outlook_templates(bit):
+    html = "<table><tr><td>Olá, <b>[Nome]</b>, tudo bem?</td></tr><tr><td>licença do <b>[SOFTWARE]</b>. [SEU NOME]</td></tr></table>"
+    tpl = bit.email_templates.save("Customer Success", "", "pós-venda de licença", "L.spot | [SOFTWARE]", html=html)
+    assert tpl["campos"] == ["SOFTWARE", "Nome"]
+    out, how = bit.email_templates.render_html(bit.email_templates.get(tpl["n"]), "", "", {"nome": "Ana", "SOFTWARE": "Notion"})
+    assert how == "campos" and "<b>Ana</b>" in out and "<b>Notion</b>" in out and "[SEU NOME]" in out
+    assert modelos_email.fill_fields("Oi [Nome] [Cargo]", {"Nome": "Ana"}, html=True) == "Oi Ana [Cargo]"

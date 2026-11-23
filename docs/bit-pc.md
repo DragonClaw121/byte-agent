@@ -86,12 +86,16 @@ Modelos feitos em HTML no Outlook (tabelas, cores, fontes, logo, banner) agora s
 pronto sai igual ao modelo.
 - **Colar do Outlook (com formato):** no Outlook, abra o modelo, clique no corpo, `Ctrl+A` e `Ctrl+C`; no Bit, em
   **☰ Meus modelos**, clique em **Novo**, depois em **Colar do Outlook (com formato)**, dê um nome e salve. O ◆ na lista
-  marca os modelos com formato. (Colar no campo de texto com `Ctrl+V` continua trazendo só o texto.)
+  marca os modelos com formato. Desde a v1.6, `Ctrl+V` no campo do texto faz o mesmo.
 - **Importar do Outlook:** os `.oft` da pasta de modelos são abertos pelo próprio Outlook clássico, que entrega o HTML
-  completo e as imagens internas. Sem o Outlook clássico, o Bit lê o arquivo direto (às vezes vem só o texto).
+  completo e as imagens internas. Sem o Outlook clássico (só o Outlook novo), o Bit lê o arquivo direto: o HTML que fica
+  dentro do RTF comprimido do `.oft` e as imagens anexadas (v1.6). Se algum vier só com o texto, a janela diz qual.
   A assinatura também vem com o formato e a imagem (o arquivo `.htm` da pasta Signatures).
 - **Importar arquivo…:** escolha `.oft`, `.msg`, `.eml` ou `.htm`/`.html` (por exemplo, um e-mail salvo com
   **Arquivo → Salvar como**).
+- **Campos:** `{{nome}}` ou, como no Outlook, `[Nome]`, `[SOFTWARE]` (entre colchetes, começando por maiúscula).
+- **Se o app avisar "servidor na versão antiga"**, o formato foi descartado: a nuvem procura versões novas a cada 6 h.
+  Mande `/atualizar` para o Bit e importe de novo.
 - **Use `{{nome}}`, `{{pedido}}`… no modelo do Outlook**, antes de copiar: o Bit troca só esses pontos e o visual fica
   idêntico. Sem campos, a IA troca os textos e o Bit confere se a estrutura (tabelas e imagens) continuou inteira; se
   não continuou, ou se o modelo for muito grande, o e-mail sai só em texto e a janela avisa.

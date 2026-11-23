@@ -45,11 +45,16 @@ def words(text: Any) -> set:
     return {w for w in re.split(r"[^\w]+", fold(text)) if len(w) >= 3 and w not in STOP}
 
 
+# campos do modelo: {{nome}} ou, como muita gente escreve no Outlook, [Nome] / [SOFTWARE] (começando por maiúscula)
+FIELD_RE = re.compile(r"\{\{\s*([\w .-]{1,40})\s*\}\}|\[([A-ZÀ-Ý][\wÀ-ÿ .-]{0,30})\]")
+NOT_FIELDS = {"SEU NOME", "PREENCHER"}
+
+
 def fields_of(text: str) -> List[str]:
     out: List[str] = []
-    for f in re.findall(r"\{\{\s*([\w .-]{1,40})\s*\}\}", str(text or "")):
-        f = f.strip()
-        if f not in out:
+    for m in FIELD_RE.finditer(str(text or "")):
+        f = (m.group(1) or m.group(2)).strip()
+        if f and f not in out and f.upper() not in NOT_FIELDS:
             out.append(f)
     return out
 
@@ -101,13 +106,18 @@ def html_text(html: str) -> str:
 def fill_fields(text: str, values: Dict[str, Any], html: bool = False) -> str:
     import html as html_lib
 
+    folded = {fold(k): v for k, v in (values or {}).items()}
+
     def repl(m: "re.Match[str]") -> str:
-        key = m.group(1).strip()
-        if key not in values or values[key] in (None, ""):
-            return m.group(0) if not html else f"[PREENCHER: {html_lib.escape(key)}]"
-        value = str(values[key])
+        key = (m.group(1) or m.group(2)).strip()
+        if key.upper() in NOT_FIELDS:
+            return m.group(0)
+        value = values.get(key) if key in (values or {}) else folded.get(fold(key))
+        if value in (None, ""):
+            return f"[PREENCHER: {html_lib.escape(key)}]" if html and m.group(1) else m.group(0)
+        value = str(value)
         return html_lib.escape(value).replace("\n", "<br>") if html else value
-    return re.sub(r"\{\{\s*([\w .-]{1,40})\s*\}\}", repl, str(text or ""))
+    return FIELD_RE.sub(repl, str(text or ""))
 
 
 def tag_count(html: str) -> int:
@@ -274,7 +284,7 @@ class EmailTemplates:
             if lines:
                 if len(lines[0]) <= 60 and lines[0] not in greet:
                     greet.append(lines[0])
-                tail = [ln for ln in lines[-4:] if len(ln) <= 40 and not ln.startswith("{{")]
+                tail = [ln for ln in lines[-4:] if len(ln) <= 40 and not ln.startswith(("{{", "["))]
                 if tail and tail[0] not in close:
                     close.append(tail[0])
         out = []

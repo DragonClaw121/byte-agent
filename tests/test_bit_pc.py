@@ -89,3 +89,18 @@ def test_split_images_and_cid():
     restored = bit_pc.cid_to_data('<img src="cid:image001.png@01DA">', [{"cid": "image001.png@01DA", "nome": "image001.png",
                                                                           "dados": PNG_B64}])
     assert restored == f'<img src="data:image/png;base64,{PNG_B64}">'
+
+
+def test_oft_without_classic_outlook_rtf_with_html_inside():
+    spec_example = bytes.fromhex("2d0000002b0000004c5a4675f1c5c7a703000a007263706731323542320af32068656c09002062770"
+                                 "5b06c647d0a800fa0")
+    assert bit_pc.decompress_rtf(spec_example) == b"{\\rtf1\\ansi\\ansicpg1252\\pard hello world}\r\n"
+    rtf = ("{\\rtf1\\ansi\\ansicpg1252\\fromhtml1 \\deff0{\\fonttbl {\\f0\\fswiss Arial;}}\r\n"
+           "{\\*\\htmltag19 <html>}{\\*\\htmltag241 <style>td \\{color:red\\}</style>}{\\*\\htmltag50 <body>}\\htmlrtf {\\htmlrtf0\r\n"
+           "{\\*\\htmltag64 <table style=\"border:1px solid #0a5\">}{\\*\\htmltag84 <td>}Ol\\'e1, <b>[Nome]\\htmlrtf\\par\\htmlrtf0 "
+           "\\u8212?fim{\\*\\htmltag92 </td>}{\\*\\htmltag84 <img src=\"cid:image001.png@01DA\">}"
+           "{\\*\\htmltag72 </table>}\\htmlrtf }\\htmlrtf0 {\\*\\htmltag58 </body>}{\\*\\htmltag27 </html>}}")
+    html = bit_pc.rtf_to_html(rtf)
+    assert html == ('<html><style>td {color:red}</style><body><table style="border:1px solid #0a5"><td>Olá, <b>[Nome]'
+                    '—fim</td><img src="cid:image001.png@01DA"></table></body></html>')
+    assert bit_pc.rtf_to_html("{\\rtf1\\ansi hello}") == ""

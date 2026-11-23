@@ -518,13 +518,14 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
                             continue
                     if body.get("assinatura") or body.get("assinatura_html"):
                         templates.set_signature(str(body.get("assinatura") or ""), str(body.get("assinatura_html") or "") or None)
-                    h._send_json(200, {"importados": saved, "modelos": templates.list(), "assinatura": templates.signature()})
+                    h._send_json(200, {"importados": saved, "modelos": templates.list(), "assinatura": templates.signature(),
+                                       "formato": True})
                     return
                 else:
                     h._send_json(400, {"error": "Ação desconhecida."})
                     return
             h._send_json(200, {"modelos": templates.list(), "assinatura": templates.signature(),
-                               "assinatura_html": bool(templates.signature_html())})
+                               "assinatura_html": bool(templates.signature_html()), "formato": True})   # v13.52: guarda HTML
         elif sub == "preparar" and method == "POST":
             body = read_body(h)
             if body is None:
