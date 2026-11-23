@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.38"
+BYTE_VERSION = "13.39"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -10108,6 +10108,10 @@ class ByteOmniServer:
                         return True
                     self._send_html(VOICE_PAGE_HTML)
                     return True
+                for prefix, route in (getattr(outer.service, "public_routes", None) or {}).items():
+                    if path.startswith(prefix):              # v13.39: rotas públicas de módulos (ex.: volta do login do Google)
+                        route(self, method, path, parsed.query)
+                        return True
                 if not path.startswith("/api/v1/"):
                     return False
                 if not outer.api_token:

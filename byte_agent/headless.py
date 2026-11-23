@@ -107,6 +107,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         reunioes.install(service, data_dir)                 # v13.36: reuniões com transcrição ao vivo e ata
         from . import microsoft
         microsoft.install(service, data_dir)                # v13.38: agenda do Outlook, OneDrive e transcrições do Teams
+        from . import google_agenda
+        google_agenda.install(service, data_dir)            # v13.39: Google Agenda e Google Drive
         from . import app_comandos
         app_comandos.install(service)                       # v13.30: o app como canal principal (conversa e comandos)
         from . import nuvem as _nuvem

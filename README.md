@@ -215,3 +215,4 @@ depois o roteador, rodando `pytest` a cada extração.
 - **Base sólida (R0, v13.31–13.34):** aprovações no banco por 24 h, um processo por agente, memória por significado (Azure), relógio central com `/saude` e aviso quando algo falha — [docs/azure-conteiner.md](docs/azure-conteiner.md)
 - **Reuniões (v13.36–13.37):** transcrição ao vivo pelo app ou pelo notebook (Teams/Zoom/Meet) e ata com tarefas — [docs/app-android.md](docs/app-android.md)
 - **Microsoft (v13.38):** agenda do Outlook unificada, criar/mover/cancelar com aprovação, OneDrive automático e transcrições do Teams — [docs/microsoft.md](docs/microsoft.md)
+- **Google (v13.39):** Google Agenda na agenda unificada (com Meet) e Drive automático — [docs/google.md](docs/google.md)

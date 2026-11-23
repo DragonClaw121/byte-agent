@@ -48,6 +48,8 @@ CATALOG: List[tuple] = [
     ("Trabalho", "🖼️ Apresentação", "/apresentacao", "Tema da apresentação", "Resultados do trimestre", "obrigatorio:trabalho"),
     ("Contas", "🟦 Microsoft (agenda, OneDrive, Teams)", "/microsoft", "", "", ""),
     ("Contas", "🔑 Conectar a Microsoft", "/microsoft entrar", "", "", ""),
+    ("Contas", "🟩 Google (agenda e Drive)", "/google", "", "", ""),
+    ("Contas", "🔑 Conectar o Google", "/google entrar", "", "", ""),
     ("Agente", "🔐 Permissões", "/permissoes", "", "", ""),
     ("Agente", "🤖 Atividade", "/atividade", "", "", ""),
     ("Agente", "⚡ Gatilhos", "/gatilhos", "", "", ""),
