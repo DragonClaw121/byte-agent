@@ -96,3 +96,77 @@ def test_triage_drafts_follow_the_style(bit, monkeypatch):
 def test_parse_command():
     f = modelos_email.parse_command("Boas-vindas | cliente novo\nAssunto: Bem-vindo, {{nome}}\nOlá!\nTudo bem?")
     assert f == {"nome": "Boas-vindas", "uso": "cliente novo", "assunto": "Bem-vindo, {{nome}}", "corpo": "Olá!\nTudo bem?"}
+
+
+# ---------------- v13.52: modelos com o FORMATO do Outlook (HTML)
+PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+OUTLOOK_HTML = ("<html><head><meta charset='utf-8'><!--[if gte mso 9]><xml><o:OfficeDocumentSettings/></xml><![endif]-->"
+                "</head><body><table style='border:2px solid #0a5;mso-table-lspace:0pt'><tr><td style='color:#c00'>"
+                "Olá, {{nome}}!<o:p></o:p></td></tr><tr><td>Sua proposta do {{pedido}} está pronta.</td></tr></table>"
+                f"<img src='data:image/png;base64,{PNG}'></body></html>")
+
+
+def test_clean_html_keeps_structure_and_images():
+    out = modelos_email.clean_html(OUTLOOK_HTML)
+    assert "<table" in out and "color:#c00" in out and "data:image/png;base64" in out
+    assert "mso-" not in out and "<o:p>" not in out and "[if gte mso" not in out
+    assert modelos_email.html_text(out).startswith("Olá, {{nome}}!")
+    light, imgs = modelos_email.hide_images(out)
+    assert PNG not in light and len(imgs) == 1 and modelos_email.show_images(light, imgs) == out
+
+
+def test_html_template_is_kept_and_filled(bit):
+    t = bit.email_templates
+    tpl = t.save("Proposta pronta", "", "proposta enviada", "Proposta {{pedido}}", "outlook", html=OUTLOOK_HTML)
+    assert tpl["tem_html"] and tpl["corpo"].startswith("Olá, {{nome}}!") and set(tpl["campos"]) >= {"nome", "pedido"}
+    assert t.list()[0]["tem_html"] and "html" not in t.list()[0]
+    t.save("Proposta pronta", "Olá, {{nome}}! Texto revisado no painel.", "proposta enviada")     # sem html: mantém
+    assert t.get(tpl["n"])["tem_html"]
+    t.set_signature("Gabriel Amorim", "<p style='color:#036'><b>Gabriel Amorim</b></p>")
+    html, how = t.render_html(t.get(tpl["n"]), "Proposta 55", "...", {"nome": "Ana <Souza>", "pedido": "55"})
+    assert how == "campos" and "Olá, Ana &lt;Souza&gt;!" in html and "<table" in html and PNG in html
+    assert html.index("Gabriel Amorim") > html.index("</table>") and "color:#036" in html
+    html, _ = t.render_html(t.get(tpl["n"]), "x", "y", {"nome": "Ana"})
+    assert "[PREENCHER: pedido]" in html
+    t.save("Proposta pronta", "x" * 20, html="")                                                      # html="": remove
+    assert not t.get(tpl["n"])["tem_html"]
+
+
+def test_html_without_fields_goes_through_the_llm_without_the_images(bit):
+    t = bit.email_templates
+    plain = OUTLOOK_HTML.replace("{{nome}}", "Maria").replace("{{pedido}}", "pedido 10")
+    tpl = t.get(t.save("Boas-vindas", "", "cliente novo", html=plain)["n"])
+    seen = []
+
+    def llm(system, user):
+        seen.append(user)
+        return user.split("<modelo_html>\n")[1].split("\n</modelo_html>")[0].replace("Maria", "João")
+    html, how = t.render_html(tpl, "Bem-vindo", "Olá, João!", {}, llm=llm)
+    assert how == "texto" and "Olá, João!" in html and PNG in html and PNG not in seen[0]
+    html, how = t.render_html(tpl, "Bem-vindo", "Olá, João!", {}, llm=lambda s, u: "Olá, João! (sem html)")
+    assert (html, how) == ("", "estrutura")
+
+
+def test_pc_prepare_returns_the_formatted_email(bit, monkeypatch):
+    bit.email_templates.save("Proposta pronta", "", "proposta enviada", "Proposta {{pedido}}", html=OUTLOOK_HTML)
+
+    def fake_vision(service, system, text, image_url, json_format=False, max_tokens=500):
+        if max_tokens == 10:
+            return "1"
+        assert "campos" in system
+        return json.dumps({"titulo": "Proposta", "assunto": "", "campos": {"nome": "Ana", "pedido": "77"},
+                           "corpo": "Olá, Ana!\n\nSua proposta do 77 está pronta."})
+    monkeypatch.setattr(pc, "vision", fake_vision)
+    res = bit.pc_hub.prepare("", "email", "avisar a Ana que a proposta 77 está pronta")
+    assert res["modelo"] == "Proposta pronta" and res["formato"] == "campos" and res["assunto"] == "Proposta 77"
+    assert "Olá, Ana!" in res["corpo_html"] and "<table" in res["corpo_html"]
+    sig = bit.dispatch_request("email_signature", {"assinatura": "Gabriel", "assinatura_html": "<b>Gabriel</b>"})
+    assert sig["assinatura"] == "Gabriel" and bit.email_templates.signature_html() == "<b>Gabriel</b>"
+    assert bit.dispatch_request("email_templates_list", {})["assinatura_html"] is True
+
+
+def test_clean_html_drops_code():
+    out = modelos_email.clean_html('<p onclick="x()">oi</p><script>alert(1)</script><a href="javascript:alert(1)">l</a>'
+                                   '<img src=x onerror=alert(1)><iframe src="https://x"></iframe>')
+    assert "script" not in out and "onclick" not in out and "onerror" not in out and "javascript" not in out
+    assert "iframe" not in out and "<p>oi</p>" in out

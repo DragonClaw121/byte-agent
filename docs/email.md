@@ -96,3 +96,8 @@ e-mail de abordagem do plano de cliente.
 - **Como o Bit usa:** escolhe o modelo pela situação (nome e "quando usar"), mantém o texto e o tom, preenche os
   `{{campos}}` e marca `[PREENCHER: ...]` no que não souber. Sem modelo adequado, escreve no seu estilo e com a sua
   assinatura.
+- **Formato do Outlook (v13.52):** os modelos podem guardar o HTML (tabelas, cores, imagens). No painel, copie o e-mail
+  no Outlook e cole no campo do texto: o formato vem junto, mas as imagens não passam pelo navegador. No Bit no PC, use
+  **Colar do Outlook (com formato)**, **Importar do Outlook** ou **Importar arquivo…** (`.oft`, `.msg`, `.eml`,
+  `.htm`), que trazem também as imagens. O e-mail preparado pelo Bit no PC sai no mesmo formato. Ver
+  [bit-pc.md](bit-pc.md).

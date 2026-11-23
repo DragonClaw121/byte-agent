@@ -81,6 +81,28 @@ No Windows, os ícones são os do próprio sistema (Segoe MDL2). A tabela mostra
   tom, preenche o que muda e assina. A janela mostra "Baseado no seu modelo …". Sem modelo adequado, ele escreve no seu
   estilo (saudações e despedidas dos seus modelos).
 
+### Modelos com o FORMATO do Outlook (v1.5 do app, v13.52)
+Modelos feitos em HTML no Outlook (tabelas, cores, fontes, logo, banner) agora são guardados com o formato, e o e-mail
+pronto sai igual ao modelo.
+- **Colar do Outlook (com formato):** no Outlook, abra o modelo, clique no corpo, `Ctrl+A` e `Ctrl+C`; no Bit, em
+  **☰ Meus modelos**, clique em **Novo**, depois em **Colar do Outlook (com formato)**, dê um nome e salve. O ◆ na lista
+  marca os modelos com formato. (Colar no campo de texto com `Ctrl+V` continua trazendo só o texto.)
+- **Importar do Outlook:** os `.oft` da pasta de modelos são abertos pelo próprio Outlook clássico, que entrega o HTML
+  completo e as imagens internas. Sem o Outlook clássico, o Bit lê o arquivo direto (às vezes vem só o texto).
+  A assinatura também vem com o formato e a imagem (o arquivo `.htm` da pasta Signatures).
+- **Importar arquivo…:** escolha `.oft`, `.msg`, `.eml` ou `.htm`/`.html` (por exemplo, um e-mail salvo com
+  **Arquivo → Salvar como**).
+- **Use `{{nome}}`, `{{pedido}}`… no modelo do Outlook**, antes de copiar: o Bit troca só esses pontos e o visual fica
+  idêntico. Sem campos, a IA troca os textos e o Bit confere se a estrutura (tabelas e imagens) continuou inteira; se
+  não continuou, ou se o modelo for muito grande, o e-mail sai só em texto e a janela avisa.
+- **No e-mail pronto:**
+  - **Copiar formatado:** no Outlook, clique no corpo do e-mail e `Ctrl+V`;
+  - **Abrir no Outlook:** abre um e-mail novo já formatado, com destinatário e assunto, para você revisar e enviar.
+    Sem o Outlook clássico, abre um rascunho `.eml`;
+  - **Ver:** mostra no navegador como vai ficar;
+  - **Só o texto:** copia o que está na caixa. As edições feitas na caixa valem para essa opção.
+- O Bit **nunca envia sozinho**: o envio é sempre seu, pelo Outlook. Scripts e códigos dentro do HTML são removidos.
+
 ### O Bit não aparece mais nas fotos da tela (v1.4)
 - **Captura direta:** o app fotografa a janela em uso diretamente pelo Windows (Outlook, Excel, navegador...). O que
   estiver por cima, como a barra, o balão e os avisos do Bit, não aparece, e nada pisca na tela.

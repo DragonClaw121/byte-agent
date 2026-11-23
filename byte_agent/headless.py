@@ -199,13 +199,23 @@ def agent_id() -> str:
     return str((engine.ACTIVE_AGENT or {}).get("id") or "matrix").lower()
 
 
-def announce_version(service: Any) -> bool:
-    """v13.17: ligou numa versão diferente da última anunciada -> avisa no painel e no Telegram (a 1ª vez só registra).
-    v13.41: quem avisa é a Matrix (atualização automática) E o agente que pediu o /atualizar, no bot dele."""
+ANNOUNCE_EVERY_S = 12 * 3600
+
+
+def announce_version(service: Any, now: Optional[float] = None) -> bool:
+    """v13.17: ligou numa versão nova -> avisa no painel e no Telegram (a 1ª vez só registra).
+    v13.41: quem avisa é a Matrix (atualização automática) E o agente que pediu o /atualizar, no bot dele.
+    v13.52: sem spam — a atualização automática avisa no máximo 1 vez a cada 12 h, juntando as versões
+    ("v13.46 → v13.51"); o pedido de /atualizar avisa uma única vez (não a cada reinício da hora seguinte)."""
     db = service.db
+    now = time.time() if now is None else now
+    current = engine.BYTE_VERSION
     last = db.get_setting("versao_anunciada")
-    db.set_setting("versao_anunciada", engine.BYTE_VERSION)
-    if not last or last == engine.BYTE_VERSION:
+    if not last:
+        db.set_setting("versao_anunciada", current)
+        db.set_setting("versao_anunciada_em", now)
+        return False
+    if last == current:
         return False
     me = agent_id()
     store = os.environ.get("BYTE_DADOS_PERSISTENTES", "").strip()
@@ -213,10 +223,19 @@ def announce_version(service: Any) -> bool:
     if store:
         from . import nuvem as _nuvem
         asked = _nuvem.read_update_result(Path(store))
-    requested_here = asked.get("agent") == me and time.time() - float(asked.get("done_at") or 0) < 3600
-    if me == "matrix" or requested_here:
-        db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{engine.BYTE_VERSION}.", brain_used="ATUALIZAÇÃO")
+    request_key = f"{asked.get('agent')}:{asked.get('at')}"
+    requested_here = (asked.get("agent") == me and now - float(asked.get("done_at") or 0) < 3600
+                      and db.get_setting("atualizacao_avisada") != request_key)
+    quiet = now - float(db.get_setting("versao_anunciada_em", 0) or 0) < ANNOUNCE_EVERY_S
+    if requested_here or (me == "matrix" and not quiet):
+        db.set_setting("versao_anunciada", current)
+        db.set_setting("versao_anunciada_em", now)
+        if requested_here:
+            db.set_setting("atualizacao_avisada", request_key)
+        db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{current}.", brain_used="ATUALIZAÇÃO")
         return True
+    if me != "matrix":
+        db.set_setting("versao_anunciada", current)          # os outros agentes só registram (quem avisa é a Matrix)
     return False
 
 

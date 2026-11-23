@@ -57,3 +57,35 @@ def test_mail_link_opens_a_new_email_with_subject_and_body():
 def test_tk_safe_removes_what_tk_cannot_draw():
     assert bit_pc.tk_safe("🔔 Lembrete 📅 amanhã 👉 sala 2 ✅") == "● Lembrete ▸ amanhã ➜ sala 2 ✅"
     assert all(ord(c) <= 0xFFFF for c in bit_pc.tk_safe("🦄🚀 teste"))
+
+
+# ---------------- v1.5: modelos com o formato (HTML) e as imagens do Outlook
+PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+
+def test_html_template_files_keep_format_and_images(tmp_path):
+    import base64
+    (tmp_path / "Assinatura_files").mkdir()
+    (tmp_path / "Assinatura_files" / "image001.png").write_bytes(base64.b64decode(PNG_B64))
+    page = tmp_path / "Assinatura.htm"
+    page.write_text('<html><body><table><tr><td style="color:#c00">Olá, {{nome}}</td></tr></table>'
+                    '<img src="Assinatura_files/image001.png"><img src="https://site/logo.png"></body></html>', "utf-8")
+    tpl = bit_pc.read_template_file(str(page))
+    assert "data:image/png;base64," + PNG_B64 in tpl["html"] and "https://site/logo.png" in tpl["html"]
+    assert tpl["corpo"].startswith("Olá, {{nome}}")
+    eml = bit_pc.write_eml("ana@x.com", "Proposta", "Olá, Ana", tpl["html"])
+    raw = Path(eml).read_text("utf-8", "replace")
+    assert "X-Unsent: 1" in raw and "Content-ID: <bitimg1>" in raw and "cid:bitimg1" in raw
+    back = bit_pc.read_template_file(eml)
+    assert back["assunto"] == "Proposta" and "data:image/png;base64," in back["html"] and "<table>" in back["html"]
+
+
+def test_split_images_and_cid():
+    html = "".join(f'<img src="data:image/png;base64,{PNG_B64}">' for _ in range(11))
+    out, imgs = bit_pc.split_images(html)
+    assert len(imgs) == 11 and "cid:bitimg11" in out and "base64" not in out
+    files = bit_pc.images_to_files(html)
+    assert files.count("file:///") == 11 and "bitimg11.png" in files and "bitimg1.png" in files
+    restored = bit_pc.cid_to_data('<img src="cid:image001.png@01DA">', [{"cid": "image001.png@01DA", "nome": "image001.png",
+                                                                          "dados": PNG_B64}])
+    assert restored == f'<img src="data:image/png;base64,{PNG_B64}">'

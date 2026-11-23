@@ -334,9 +334,27 @@ def test_new_version_is_announced_once(tmp_path, monkeypatch):
     assert headless.announce_version(svc) is False                       # 1ª vez: só registra
     assert headless.announce_version(svc) is False                       # mesma versão: nada
     db.set_setting("versao_anunciada", "13.0")
+    db.set_setting("versao_anunciada_em", time.time() - 13 * 3600)          # último aviso há mais de 12 h
     assert headless.announce_version(svc) is True
     msg = db.pop_undelivered_proactive_messages("telegram")[-1]["message"]
     assert msg == f"✅ Atualizei: v13.0 → v{engine.BYTE_VERSION}."
+
+
+def test_many_updates_in_a_day_become_one_message(tmp_path, monkeypatch):
+    """v13.52: várias versões no mesmo dia não viram vários avisos; depois de 12 h sai UM resumo."""
+    from byte_agent import engine, headless
+    db = engine.UnifiedDatabase(tmp_path / "byte.db", engine.VectorEngine())
+    svc = type("S", (), {"db": db})()
+    t0 = 1_000_000.0
+    db.set_setting("versao_anunciada", "13.40")
+    db.set_setting("versao_anunciada_em", t0)
+    for hours in (1, 3, 6):                                                # 3 atualizações automáticas no mesmo dia
+        assert headless.announce_version(svc, now=t0 + hours * 3600) is False
+    assert db.pop_undelivered_proactive_messages("painel") == []
+    assert headless.announce_version(svc, now=t0 + 13 * 3600) is True
+    assert headless.announce_version(svc, now=t0 + 14 * 3600) is False    # mesma versão: nada
+    msgs = [m["message"] for m in db.pop_undelivered_proactive_messages("painel")]
+    assert msgs == [f"✅ Atualizei: v13.40 → v{engine.BYTE_VERSION}."]
 
 
 def test_each_agent_in_its_own_process():
@@ -414,9 +432,12 @@ def test_update_result_goes_back_to_the_agent_that_asked(tmp_path, monkeypatch):
         time.sleep(0.2)
     assert msgs == [f"✅ Já estou na versão mais nova (v{engine.BYTE_VERSION})."]
     # depois de reiniciar numa versão nova: o Bit avisa porque foi ele que pediu; o Kronus (não pediu) fica quieto
-    (store / nuvem.UPDATE_RESULT).write_text(json.dumps({"agent": "bit", "status": "atualizando", "done_at": time.time()}))
+    (store / nuvem.UPDATE_RESULT).write_text(json.dumps({"agent": "bit", "status": "atualizando", "done_at": time.time(),
+                                                         "at": 123.0}))
     db.set_setting("versao_anunciada", "13.0")
     assert headless.announce_version(svc) is True
+    db.set_setting("versao_anunciada", "13.1")                       # outra atualização na mesma hora: não repete
+    assert headless.announce_version(svc) is False
     monkeypatch.setattr(engine, "ACTIVE_AGENT", {"id": "kronus", "nome": "Kronus"})
     db2 = engine.UnifiedDatabase(tmp_path / "kronus.db", engine.VectorEngine())
     db2.set_setting("versao_anunciada", "13.0")

@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS email_templates (
 );
 """
 SETTING_SIGNATURE = "email.assinatura"
+SETTING_SIGNATURE_HTML = "email.assinatura_html"
+MAX_HTML = 1_500_000                       # com as imagens (logo, banner) embutidas em base64
+LLM_HTML_LIMIT = 24_000                    # acima disso, só os {{campos}} são trocados (o HTML não vai para a LLM)
 MAX_TEMPLATES = 200
 STOP = set("""de da do das dos e o a os as um uma para por com sem em no na nos nas ao que se sobre meu minha seu sua email
 e-mail mail responder resposta escrever escreva redigir redija mande enviar envie pra pro favor""".split())
@@ -51,17 +54,86 @@ def fields_of(text: str) -> List[str]:
     return out
 
 
+def clean_html(html: str) -> str:
+    """Tira o "peso" do HTML do Outlook/Word (comentários condicionais, <o:p>, mso-*, metadados), mantendo tabelas,
+    estilos, cores e imagens."""
+    text = str(html or "")
+    text = re.sub(r"(?is)<!--\[if.*?<!\[endif\]-->", "", text)
+    text = re.sub(r"(?s)<!--(?!\[if).*?-->", "", text)
+    text = re.sub(r"(?is)<(script|xml|iframe|object|embed)[^>]*>.*?</\1>|<(script|iframe|object|embed)[^>]*/?>", "", text)
+    text = re.sub(r"""(?i)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", text)        # nada de código no e-mail
+    text = re.sub(r"(?i)(href|src)\s*=\s*([\"']?)\s*javascript:[^\"'\s>]*", r"\1=\2#", text)
+    text = re.sub(r"(?is)</?o:p>|<\?xml[^>]*>|<meta[^>]*>|<link[^>]*>", "", text)
+    text = re.sub(r"(?i)\s*mso-[\w-]+\s*:\s*[^;\"']+;?", "", text)
+    text = re.sub(r">\s+<", "> <", text).strip()
+    if len(text) > MAX_HTML:
+        raise ValueError("O modelo em HTML ficou grande demais (imagens muito pesadas). Diminua as imagens e tente de novo.")
+    return text
+
+
+def hide_images(html: str) -> Tuple[str, List[str]]:
+    """Troca as imagens embutidas (data:...) por marcadores curtos — a LLM não precisa (nem deve) ver o base64."""
+    found: List[str] = []
+
+    def repl(m: "re.Match[str]") -> str:
+        found.append(m.group(0))
+        return f"bit-img:{len(found) - 1}"
+    return re.sub(r"data:image/[\w.+-]+;base64,[A-Za-z0-9+/=\s]+", repl, str(html or "")), found
+
+
+def show_images(html: str, found: List[str]) -> str:
+    return re.sub(r"bit-img:(\d+)", lambda m: found[int(m.group(1))] if int(m.group(1)) < len(found) else m.group(0), html)
+
+
+def html_text(html: str) -> str:
+    import html as html_lib
+    text = re.sub(r"(?is)<(style|script|head|title)[^>]*>.*?</\1>", " ", str(html or ""))
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h\d>", "\n", text)
+    text = html_lib.unescape(re.sub(r"<[^>]+>", "", text)).replace("\xa0", " ")
+    lines = [" ".join(line.split()) for line in text.split("\n")]
+    out: List[str] = []
+    for line in lines:
+        if line or (out and out[-1]):
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def fill_fields(text: str, values: Dict[str, Any], html: bool = False) -> str:
+    import html as html_lib
+
+    def repl(m: "re.Match[str]") -> str:
+        key = m.group(1).strip()
+        if key not in values or values[key] in (None, ""):
+            return m.group(0) if not html else f"[PREENCHER: {html_lib.escape(key)}]"
+        value = str(values[key])
+        return html_lib.escape(value).replace("\n", "<br>") if html else value
+    return re.sub(r"\{\{\s*([\w .-]{1,40})\s*\}\}", repl, str(text or ""))
+
+
+def tag_count(html: str) -> int:
+    return len(re.findall(r"<[a-zA-Z]", str(html or "")))
+
+
 class EmailTemplates:
     def __init__(self, db: Any):
         self.db = db
         with db.connection() as conn:
             conn.executescript(SCHEMA)
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(email_templates)").fetchall()}
+            if "html" not in cols:                       # v13.52: o formato (HTML) do modelo
+                conn.execute("ALTER TABLE email_templates ADD COLUMN html TEXT NOT NULL DEFAULT ''")
 
     # ---------------- cadastro
     def list(self) -> List[Dict[str, Any]]:
         with self.db.connection() as conn:
             rows = conn.execute("SELECT * FROM email_templates ORDER BY usos DESC, nome").fetchall()
-        return [dict(r, campos=fields_of(r["assunto"] + "\n" + r["corpo"])) for r in rows]
+        out = []
+        for r in rows:
+            item = dict(r, campos=fields_of(r["assunto"] + "\n" + r["corpo"] + "\n" + (r["html"] or "")),
+                        tem_html=bool(r["html"]))
+            item.pop("html", None)
+            out.append(item)
+        return out
 
     def get(self, n: Any) -> Dict[str, Any]:
         try:
@@ -72,10 +144,17 @@ class EmailTemplates:
             row = conn.execute("SELECT * FROM email_templates WHERE n = ?", (num,)).fetchone()
         if row is None:
             raise ValueError(f"Não há modelo #{num}.")
-        return dict(row, campos=fields_of(row["assunto"] + "\n" + row["corpo"]))
+        return dict(row, campos=fields_of(row["assunto"] + "\n" + row["corpo"] + "\n" + (row["html"] or "")),
+                    tem_html=bool(row["html"]))
 
-    def save(self, nome: str, corpo: str, uso: str = "", assunto: str = "", origem: str = "manual") -> Dict[str, Any]:
+    def save(self, nome: str, corpo: str, uso: str = "", assunto: str = "", origem: str = "manual",
+             html: Optional[str] = None) -> Dict[str, Any]:
+        """html=None mantém o formato que o modelo já tinha; html="" remove; texto vazio com HTML vira o texto do HTML."""
         nome = " ".join(str(nome or "").split())[:80]
+        if html:
+            html = clean_html(html)
+            if len(str(corpo or "").strip()) < 10:
+                corpo = html_text(html)
         corpo = str(corpo or "").replace("\r\n", "\n").strip()[:8000]
         if not nome:
             raise ValueError("Dê um nome ao modelo (ex.: Follow-up de orçamento).")
@@ -87,9 +166,11 @@ class EmailTemplates:
             exists = conn.execute("SELECT n FROM email_templates WHERE nome = ?", (nome,)).fetchone()
             if exists is None and count >= MAX_TEMPLATES:
                 raise ValueError(f"Limite de {MAX_TEMPLATES} modelos: apague algum antes.")
-            conn.execute("INSERT INTO email_templates (nome, uso, assunto, corpo, origem, criado) VALUES (?, ?, ?, ?, ?, ?) "
+            conn.execute("INSERT INTO email_templates (nome, uso, assunto, corpo, origem, criado, html) VALUES (?, ?, ?, ?, ?, ?, ?) "
                          "ON CONFLICT(nome) DO UPDATE SET uso = excluded.uso, assunto = excluded.assunto, "
-                         "corpo = excluded.corpo, origem = excluded.origem", (nome, uso, assunto, corpo, origem, time.time()))
+                         "corpo = excluded.corpo, origem = excluded.origem"
+                         + ("" if html is None else ", html = excluded.html"),
+                         (nome, uso, assunto, corpo, origem, time.time(), html or ""))
             n = conn.execute("SELECT n FROM email_templates WHERE nome = ?", (nome,)).fetchone()[0]
         self.db.record_audit("email_template_saved", "modelos_email", "success", {"origem": origem})
         return self.get(n)
@@ -107,10 +188,53 @@ class EmailTemplates:
     def signature(self) -> str:
         return str(self.db.get_setting(SETTING_SIGNATURE, "") or "").strip()
 
-    def set_signature(self, text: str) -> str:
+    def set_signature(self, text: str, html: Optional[str] = None) -> str:
         text = str(text or "").replace("\r\n", "\n").strip()[:1500]
+        if html:
+            html = clean_html(html)
+            if len(html) > 400_000:
+                raise ValueError("A assinatura em HTML ficou grande demais (imagem pesada).")
+            text = text or html_text(html)[:1500]
         self.db.set_setting(SETTING_SIGNATURE, text)
+        if html is not None:
+            self.db.set_setting(SETTING_SIGNATURE_HTML, html or "")
         return text
+
+    def signature_html(self) -> str:
+        return str(self.db.get_setting(SETTING_SIGNATURE_HTML, "") or "")
+
+    # ---------------- o formato (HTML) do modelo no e-mail pronto
+    def render_html(self, tpl: Dict[str, Any], subject: str, body: str, fields: Dict[str, Any],
+                    llm: Optional[Callable[[str, str], str]] = None) -> Tuple[str, str]:
+        """(html pronto, como foi feito). Com {{campos}}: troca direto no HTML (o formato fica idêntico). Sem campos e com
+        HTML não muito grande: a LLM troca SÓ os textos e a estrutura é conferida. Senão: '' (fica só o texto)."""
+        html = str(tpl.get("html") or "")
+        if not html:
+            return "", ""
+        if fields_of(html):
+            out = fill_fields(html, fields, html=True)
+            return self.add_signature_html(out), "campos"
+        light, images = hide_images(html)
+        if llm is None or len(light) > LLM_HTML_LIMIT:
+            return "", "grande"
+        raw = llm("Você edita e-mails em HTML. Devolva SOMENTE o HTML do modelo com os TEXTOS trocados para dizer o que o "
+                  "e-mail novo diz. Mantenha TODAS as tags, atributos, estilos, tabelas, cores, imagens e links exatamente "
+                  "como estão; mude só o texto entre as tags (e acrescente parágrafos copiando o estilo de um existente, se "
+                  "precisar). Nada de markdown nem explicações.",
+                  f"<modelo_html>\n{light}\n</modelo_html>\n\nE-MAIL NOVO (texto):\nAssunto: {subject}\n\n{body}")
+        out = re.sub(r"^```(?:html)?\s*|\s*```$", "", str(raw or "").strip())
+        if not out.startswith("<") or tag_count(out) < 0.8 * tag_count(light):
+            return "", "estrutura"
+        return self.add_signature_html(clean_html(show_images(out, images))), "texto"
+
+    def add_signature_html(self, html: str) -> str:
+        sig_text = self.signature()
+        if not sig_text or sig_text.split("\n")[0] in html_text(html):
+            return html
+        sig_html = self.signature_html() or "<p>" + "<br>".join(__import__("html").escape(x) for x in sig_text.split("\n")) + "</p>"
+        if re.search(r"(?i)</body>", html):
+            return re.sub(r"(?i)</body>", sig_html + "</body>", html, count=1)
+        return html + sig_html
 
     # ---------------- escolher e orientar
     def choose(self, situation: str, llm: Optional[Callable[[str, str], str]] = None) -> Optional[Dict[str, Any]]:
@@ -238,13 +362,16 @@ def install(service: Any) -> EmailTemplates:
     service.pre_turn_hooks.append(hook)
     service.extra_actions.update({
         "email_templates_list": lambda p: {"modelos": templates.list(), "assinatura": templates.signature(),
+                                           "assinatura_html": bool(templates.signature_html()),
                                            "text": format_list(templates.list(), templates.signature())},
         "email_template_save": lambda p: {"modelo": templates.save(str(p.get("nome") or ""), str(p.get("corpo") or ""),
                                                                    str(p.get("uso") or ""), str(p.get("assunto") or ""),
-                                                                   str(p.get("origem") or "manual")),
+                                                                   str(p.get("origem") or "manual"),
+                                                                   p.get("html") if "html" in p else None),
                                           "modelos": templates.list()},
         "email_template_delete": lambda p: {"apagado": templates.delete(p.get("n")), "modelos": templates.list()},
-        "email_signature": lambda p: {"assinatura": templates.set_signature(str(p.get("assinatura") or ""))
-                                      if "assinatura" in p else templates.signature()},
+        "email_signature": lambda p: {"assinatura": templates.set_signature(
+            str(p.get("assinatura") or ""), p.get("assinatura_html") if "assinatura_html" in p else None)
+            if "assinatura" in p else templates.signature()},
     })
     return templates

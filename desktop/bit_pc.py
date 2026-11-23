@@ -20,6 +20,7 @@ import io
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -31,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.4"
+VERSION = "1.5"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -401,49 +402,405 @@ def read_outlook_template(path: str) -> Optional[Dict[str, str]]:
                 if ole.exists(name):
                     return ole.openstream(name).read().decode(enc, "replace").rstrip("\x00").strip()
             return ""
-        subject, body = text("0037"), text("1000")
-        if not body and ole.exists("__substg1.0_10130102"):
-            body = html_to_text(ole.openstream("__substg1.0_10130102").read().decode("utf-8", "replace"))
+        subject, body, html = text("0037"), text("1000"), ""
+        if ole.exists("__substg1.0_10130102"):                # o HTML (quando o arquivo o guarda; sem as imagens)
+            raw = ole.openstream("__substg1.0_10130102").read()
+            charset = re.search(rb"(?i)charset=[\"']?([\w-]+)", raw[:3000])
+            try:
+                html = raw.decode(charset.group(1).decode() if charset else "utf-8")
+            except (LookupError, UnicodeDecodeError):
+                html = raw.decode("cp1252", "replace")
+            html = html.rstrip("\x00")
+            body = body or html_to_text(html)
     finally:
         ole.close()
     if len(body.strip()) < 10:
         return None
     name = os.path.splitext(os.path.basename(path))[0]
-    return {"nome": name[:80], "assunto": subject[:200], "corpo": body.replace("\r\n", "\n")[:8000], "uso": ""}
+    return {"nome": name[:80], "assunto": subject[:200], "corpo": body.replace("\r\n", "\n")[:8000], "uso": "",
+            "html": html if "<" in html else ""}
 
 
-def outlook_files() -> Tuple[List[Dict[str, str]], List[Tuple[str, str]]]:
-    """Modelos (.oft) e assinaturas (.txt) que o Outlook clássico guarda no PC."""
+# ---------------- imagens do e-mail (logo, banner): embutidas no modelo, viram anexos "cid:" ao abrir no Outlook
+IMG_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".bmp": "image/bmp"}
+DATA_IMG_RE = re.compile(r"data:(image/[\w.+-]+);base64,([A-Za-z0-9+/=\s]+)")
+
+
+def inline_local_images(html: str, base_dir: str = "") -> str:
+    """Imagens que apontam para arquivos do PC (o Outlook copia assim; a assinatura .htm usa a pasta *_files) viram
+    data: embutido, para o modelo continuar com elas depois."""
+    def repl(m: "re.Match[str]") -> str:
+        src = urllib.parse.unquote(m.group(2))
+        if src.lower().startswith("file:"):
+            path = urllib.request.url2pathname(src[5:].lstrip("/") if IS_WINDOWS else src[5:].replace("//", "", 1))
+        elif re.match(r"^[a-zA-Z]:[\\/]", src) or (base_dir and not re.match(r"^[a-z]+:", src, re.I)):
+            path = src if re.match(r"^[a-zA-Z]:[\\/]", src) else os.path.join(base_dir, src)
+        else:
+            return m.group(0)
+        mime = IMG_TYPES.get(os.path.splitext(path)[1].lower())
+        try:
+            if not mime or os.path.getsize(path) > 1_500_000:
+                return m.group(0)
+            with open(path, "rb") as fh:
+                data = base64.b64encode(fh.read()).decode()
+        except OSError:
+            return m.group(0)
+        return f'{m.group(1)}"data:{mime};base64,{data}"'
+    return re.sub(r"""(?i)(\bsrc=)["']([^"']+)["']""", repl, str(html or ""))
+
+
+def split_images(html: str, prefix: str = "bitimg") -> Tuple[str, List[Dict[str, Any]]]:
+    """data: embutido -> cid:..., com a lista das imagens (para virarem anexos internos do e-mail)."""
+    images: List[Dict[str, Any]] = []
+
+    def repl(m: "re.Match[str]") -> str:
+        mime = m.group(1)
+        ext = {"image/jpeg": ".jpg", "image/gif": ".gif", "image/bmp": ".bmp"}.get(mime, ".png")
+        cid = f"{prefix}{len(images) + 1}"
+        images.append({"cid": cid, "mime": mime, "nome": cid + ext, "dados": base64.b64decode(re.sub(r"\s", "", m.group(2)))})
+        return "cid:" + cid
+    return DATA_IMG_RE.sub(repl, str(html or "")), images
+
+
+def images_to_files(html: str) -> str:
+    """data: embutido -> arquivos temporários (file:///...): é assim que o Outlook aceita imagens ao colar."""
+    import tempfile
+    out, images = split_images(html)
+    if not images:
+        return out
+    folder = os.path.join(tempfile.gettempdir(), "BitPC", f"img-{int(time.time())}")
+    os.makedirs(folder, exist_ok=True)
+    for img in reversed(images):                          # do fim: bitimg10 antes de bitimg1
+        path = os.path.join(folder, img["nome"])
+        with open(path, "wb") as fh:
+            fh.write(img["dados"])
+        out = out.replace("cid:" + img["cid"], "file:///" + path.replace("\\", "/"))
+    return out
+
+
+# ---------------- área de transferência com formato (HTML), como o Outlook copia e cola
+def _clip_api() -> Tuple[Any, Any, int]:
+    import ctypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalAlloc.restype = kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = kernel32.GlobalUnlock.argtypes = kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    return user32, kernel32, user32.RegisterClipboardFormatW("HTML Format")
+
+
+def clipboard_get_html() -> str:
+    """O HTML que o Outlook (ou o navegador) colocou na área de transferência ao copiar; "" se só houver texto."""
+    if not IS_WINDOWS:
+        return ""
+    import ctypes
+    import re
+    user32, kernel32, fmt = _clip_api()
+    for _ in range(5):
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return ""
+    try:
+        handle = user32.GetClipboardData(fmt)
+        if not handle:
+            return ""
+        ptr = kernel32.GlobalLock(handle)
+        data = ctypes.string_at(ptr, kernel32.GlobalSize(handle))
+        kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+    head = data[:400].decode("ascii", "replace")
+    start, end = re.search(r"StartHTML:(-?\d+)", head), re.search(r"EndHTML:(-?\d+)", head)
+    if start and end and int(start.group(1)) >= 0:
+        chunk = data[int(start.group(1)):int(end.group(1))]
+    else:
+        fs, fe = re.search(r"StartFragment:(\d+)", head), re.search(r"EndFragment:(\d+)", head)
+        chunk = data[int(fs.group(1)):int(fe.group(1))] if fs and fe else b""
+    return chunk.split(b"\0", 1)[0].decode("utf-8", "replace").strip()
+
+
+def clipboard_set_html(html: str, text: str) -> bool:
+    """Copia COM formato: colar (Ctrl+V) no Outlook mantém tabelas, cores e imagens. Leva o texto simples junto."""
+    if not IS_WINDOWS:
+        return False
+    import ctypes
+    import re
+    user32, kernel32, fmt = _clip_api()
+    if re.search(r"(?i)<body[^>]*>", html):
+        doc = re.sub(r"(?i)(<body[^>]*>)", r"\1<!--StartFragment-->", html, count=1)
+        doc = re.sub(r"(?i)</body>", "<!--EndFragment--></body>", doc, count=1) if re.search(r"(?i)</body>", doc) \
+            else doc + "<!--EndFragment-->"
+    else:
+        doc = f"<html><body><!--StartFragment-->{html}<!--EndFragment--></body></html>"
+    template = "Version:0.9\r\nStartHTML:{:010d}\r\nEndHTML:{:010d}\r\nStartFragment:{:010d}\r\nEndFragment:{:010d}\r\n"
+    header_len = len(template.format(0, 0, 0, 0).encode("ascii"))
+    body = doc.encode("utf-8")
+    frag_start = header_len + body.index(b"<!--StartFragment-->") + len(b"<!--StartFragment-->")
+    frag_end = header_len + body.index(b"<!--EndFragment-->")
+    payload = template.format(header_len, header_len + len(body), frag_start, frag_end).encode("ascii") + body + b"\0"
+
+    def put(fmt_id: int, raw: bytes) -> None:
+        handle = kernel32.GlobalAlloc(0x0002, len(raw))
+        ptr = kernel32.GlobalLock(handle)
+        ctypes.memmove(ptr, raw, len(raw))
+        kernel32.GlobalUnlock(handle)
+        user32.SetClipboardData(fmt_id, handle)
+    for _ in range(5):
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        return False
+    try:
+        user32.EmptyClipboard()
+        put(fmt, payload)
+        put(13, (text or "").encode("utf-16-le") + b"\0\0")              # CF_UNICODETEXT
+    finally:
+        user32.CloseClipboard()
+    return True
+
+
+# ---------------- o Outlook do próprio PC (clássico), pelo PowerShell: lê .oft/.msg com o HTML e abre e-mail novo
+def _powershell(script: str, data: Any, timeout: float = 90.0) -> Any:
+    import tempfile
+    folder = tempfile.mkdtemp(prefix="bitpc-")
+    src, out, ps1 = (os.path.join(folder, n) for n in ("in.json", "out.json", "run.ps1"))
+    with open(src, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False)
+    with open(ps1, "w", encoding="utf-8-sig") as fh:
+        fh.write(script)
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", ps1,
+                               "-src", src, "-out", out], capture_output=True, timeout=timeout,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if proc.returncode != 0 or not os.path.exists(out):
+            raise RuntimeError((proc.stderr or proc.stdout or b"").decode("utf-8", "replace")[-300:] or "Outlook indisponível")
+        with open(out, encoding="utf-8-sig") as fh:
+            return json.load(fh)
+    finally:
+        for f in (src, out, ps1):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(folder)
+        except OSError:
+            pass
+
+
+OUTLOOK_READ_PS = r"""param($src, $out)
+$ErrorActionPreference = 'Stop'
+$o = New-Object -ComObject Outlook.Application
+$dir = Split-Path $out
+$cidProp = 'http://schemas.microsoft.com/mapi/proptag/0x3712001F'
+$res = @()
+foreach ($p in @(Get-Content -Raw -Encoding UTF8 $src | ConvertFrom-Json)) {
+  try {
+    if ($p.ToLower().EndsWith('.oft')) { $m = $o.CreateItemFromTemplate($p) } else { $m = $o.Session.OpenSharedItem($p) }
+    $html = $m.HTMLBody
+    $imgs = @()
+    foreach ($a in $m.Attachments) {
+      $cid = ''
+      try { $cid = $a.PropertyAccessor.GetProperty($cidProp) } catch { }
+      if ($cid -and $html.Contains('cid:' + $cid)) {
+        $f = Join-Path $dir ([guid]::NewGuid().ToString('N') + [IO.Path]::GetExtension($a.FileName))
+        $a.SaveAsFile($f)
+        $imgs += [pscustomobject]@{cid = $cid; nome = $a.FileName; dados = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f))}
+        Remove-Item $f -Force
+      }
+    }
+    $res += [pscustomobject]@{arquivo = $p; assunto = $m.Subject; html = $html; texto = $m.Body; imagens = @($imgs)}
+    $m.Close(1)
+  } catch { $res += [pscustomobject]@{arquivo = $p; erro = $_.Exception.Message} }
+}
+ConvertTo-Json -InputObject @($res) -Depth 4 -Compress | Set-Content -Encoding UTF8 $out
+"""
+
+OUTLOOK_NEW_PS = r"""param($src, $out)
+$ErrorActionPreference = 'Stop'
+$d = Get-Content -Raw -Encoding UTF8 $src | ConvertFrom-Json
+$o = New-Object -ComObject Outlook.Application
+$m = $o.CreateItem(0)
+if ($d.para) { $m.To = $d.para }
+$m.Subject = $d.assunto
+foreach ($i in @($d.imagens)) {
+  if (-not $i) { continue }
+  $a = $m.Attachments.Add($i.arquivo, 1, 0)
+  $a.PropertyAccessor.SetProperty('http://schemas.microsoft.com/mapi/proptag/0x3712001F', $i.cid)
+  $a.PropertyAccessor.SetProperty('http://schemas.microsoft.com/mapi/proptag/0x7FFE000B', $true)
+}
+$m.HTMLBody = $d.html
+$m.Display()
+'{"ok": true}' | Set-Content -Encoding UTF8 $out
+"""
+
+
+def cid_to_data(html: str, images: List[Dict[str, Any]]) -> str:
+    """As imagens internas (anexos cid:) do .oft/.msg/.eml voltam para dentro do HTML (data:)."""
+    for img in images or []:
+        cid, data = str(img.get("cid") or "").strip("<>"), str(img.get("dados") or "")
+        if not cid or not data:
+            continue
+        mime = img.get("mime") or IMG_TYPES.get(os.path.splitext(str(img.get("nome") or ""))[1].lower(), "image/png")
+        html = re.sub(r"(?i)cid:" + re.escape(cid) + r"(?=[\"'\s)>])", f"data:{mime};base64,{data}", html)
+    return html
+
+
+def outlook_read(paths: List[str]) -> List[Dict[str, str]]:
+    """Abre .oft/.msg pelo Outlook clássico (o HTML completo, com tabelas e imagens). Sem Outlook: exceção."""
+    if not IS_WINDOWS or not paths:
+        return []
+    items = _powershell(OUTLOOK_READ_PS, list(paths))
+    out = []
+    for item in items if isinstance(items, list) else [items]:
+        if not isinstance(item, dict) or item.get("erro") or not (item.get("html") or item.get("texto")):
+            continue
+        imgs = item.get("imagens") or []
+        out.append({"nome": os.path.splitext(os.path.basename(str(item.get("arquivo") or "")))[0][:80],
+                    "assunto": str(item.get("assunto") or "")[:200],
+                    "html": cid_to_data(str(item.get("html") or ""), imgs if isinstance(imgs, list) else [imgs]),
+                    "corpo": str(item.get("texto") or "").replace("\r\n", "\n")[:8000], "uso": ""})
+    return out
+
+
+def write_eml(to: str, subject: str, text: str, html: str) -> str:
+    """Rascunho .eml (abre como e-mail NOVO no Outlook, com o formato) — plano B quando não dá para usar o Outlook."""
+    import tempfile
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    if to.strip():
+        msg["To"] = to.strip()
+    msg["Subject"] = subject
+    msg["X-Unsent"] = "1"
+    msg.set_content(text or " ")
+    html, images = split_images(html)
+    msg.add_alternative(html, subtype="html")
+    if images:
+        part = msg.get_payload()[1]
+        for img in images:
+            maintype, subtype = img["mime"].split("/", 1)
+            part.add_related(img["dados"], maintype=maintype, subtype=subtype, cid=f"<{img['cid']}>", filename=img["nome"])
+    folder = os.path.join(tempfile.gettempdir(), "BitPC")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"email-{int(time.time())}.eml")
+    with open(path, "wb") as fh:
+        fh.write(bytes(msg))
+    return path
+
+
+def open_html_mail(to: str, subject: str, text: str, html: str) -> str:
+    """E-mail novo JÁ FORMATADO: pelo Outlook clássico; senão, um rascunho .eml. Devolve como abriu."""
+    if IS_WINDOWS:
+        import shutil
+        import tempfile
+        folder = tempfile.mkdtemp(prefix="bitpc-img-")
+        try:
+            body, images = split_images(html)
+            files = []
+            for img in images:
+                path = os.path.join(folder, img["nome"])
+                with open(path, "wb") as fh:
+                    fh.write(img["dados"])
+                files.append({"arquivo": path, "cid": img["cid"]})
+            _powershell(OUTLOOK_NEW_PS, {"para": to, "assunto": subject, "html": body, "imagens": files}, timeout=60)
+            return "outlook"
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    open_path(write_eml(to, subject, text, html))
+    return "eml"
+
+
+def read_template_file(path: str) -> Optional[Dict[str, str]]:
+    """Um modelo a partir de arquivo: .oft/.msg (pelo Outlook; reserva: leitura direta), .eml ou .html/.htm."""
+    low = path.lower()
+    name = os.path.splitext(os.path.basename(path))[0][:80]
+    if low.endswith((".oft", ".msg")):
+        try:
+            found = outlook_read([path])
+            if found:
+                return found[0]
+        except Exception:
+            pass
+        return read_outlook_template(path)
+    if low.endswith(".eml"):
+        import email
+        from email import policy
+        with open(path, "rb") as fh:
+            msg = email.message_from_binary_file(fh, policy=policy.default)
+        html_part, text_part = msg.get_body(("html",)), msg.get_body(("plain",))
+        html = html_part.get_content() if html_part else ""
+        text = text_part.get_content() if text_part else html_to_text(html)
+        html = cid_to_data(html, [{"cid": p.get("Content-ID", ""), "mime": p.get_content_type(),
+                                   "dados": base64.b64encode(p.get_content()).decode()}
+                                  for p in msg.walk() if p.get("Content-ID") and p.get_content_maintype() == "image"])
+        return {"nome": name, "assunto": str(msg.get("Subject") or "")[:200], "html": html, "corpo": text[:8000], "uso": ""}
+    if low.endswith((".htm", ".html")):
+        raw = open(path, "rb").read()
+        for enc in ("utf-8", "cp1252"):
+            try:
+                html = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        html = inline_local_images(html, os.path.dirname(path))
+        return {"nome": name, "assunto": "", "html": html, "corpo": html_to_text(html)[:8000], "uso": ""}
+    return None
+
+
+def outlook_files() -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """Modelos (.oft, com o HTML completo pelo Outlook) e assinaturas (HTML e texto) que o Outlook clássico guarda no PC."""
     appdata = os.environ.get("APPDATA") or ""
-    templates: List[Dict[str, str]] = []
-    folders = [os.path.join(appdata, "Microsoft", "Templates"),
-               os.path.join(os.path.expanduser("~"), "Documents", "Custom Office Templates"),
-               os.path.join(os.path.expanduser("~"), "Documents", "Modelos Personalizados do Office")]
-    for folder in folders:
+    paths: List[str] = []
+    for folder in (os.path.join(appdata, "Microsoft", "Templates"),
+                   os.path.join(os.path.expanduser("~"), "Documents", "Custom Office Templates"),
+                   os.path.join(os.path.expanduser("~"), "Documents", "Modelos Personalizados do Office")):
         if os.path.isdir(folder):
-            for name in sorted(os.listdir(folder)):
-                if name.lower().endswith(".oft"):
-                    item = read_outlook_template(os.path.join(folder, name))
-                    if item:
-                        templates.append(item)
-    signatures: List[Tuple[str, str]] = []
+            paths += [os.path.join(folder, n) for n in sorted(os.listdir(folder)) if n.lower().endswith(".oft")]
+    templates: List[Dict[str, str]] = []
+    try:
+        templates = outlook_read(paths)
+    except Exception:
+        templates = []
+    if len(templates) < len(paths):                       # sem Outlook clássico: leitura direta (pode vir só o texto)
+        got = {t["nome"] for t in templates}
+        for path in paths:
+            if os.path.splitext(os.path.basename(path))[0][:80] not in got:
+                item = read_outlook_template(path)
+                if item:
+                    templates.append(item)
+    signatures: List[Dict[str, str]] = []
     sig_dir = os.path.join(appdata, "Microsoft", "Signatures")
     if os.path.isdir(sig_dir):
-        files = [os.path.join(sig_dir, n) for n in os.listdir(sig_dir) if n.lower().endswith((".txt", ".htm"))]
-        for path in sorted(files, key=os.path.getmtime, reverse=True):
+        by_name: Dict[str, Dict[str, Any]] = {}
+        for n in os.listdir(sig_dir):
+            stem, ext = os.path.splitext(n)
+            if ext.lower() not in (".txt", ".htm"):
+                continue
+            path = os.path.join(sig_dir, n)
             raw = open(path, "rb").read()
-            for enc in ("utf-16", "utf-8", "cp1252"):
+            text = ""
+            for enc in (("utf-16",) if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else ()) + ("utf-8", "cp1252"):
                 try:
-                    text = raw.decode(enc) if enc != "utf-16" or raw[:2] in (b"\xff\xfe", b"\xfe\xff") else None
-                except UnicodeDecodeError:
-                    text = None
-                if text:
+                    text = raw.decode(enc)
                     break
-            if text:
-                text = html_to_text(text) if path.lower().endswith(".htm") else text.strip()
-                stem = os.path.splitext(os.path.basename(path))[0]
-                if text and stem not in [n for n, _ in signatures]:
-                    signatures.append((stem, text[:1500]))
+                except UnicodeDecodeError:
+                    continue
+            entry = by_name.setdefault(stem, {"nome": stem, "texto": "", "html": "", "mtime": 0.0})
+            entry["mtime"] = max(entry["mtime"], os.path.getmtime(path))
+            if ext.lower() == ".htm":
+                entry["html"] = inline_local_images(text, sig_dir)
+                entry["texto"] = entry["texto"] or html_to_text(text)
+            else:
+                entry["texto"] = text.strip()
+        signatures = sorted(by_name.values(), key=lambda e: -e["mtime"])
     return templates, signatures
 
 
@@ -1246,8 +1603,37 @@ class App:
             open_mail(fields["para"].get() if "para" in fields else "", fields["assunto"].get() if "assunto" in fields else "",
                       text_of())
             status.configure(text="✔ Abri um e-mail novo. Se o texto não aparecer inteiro, cole (Ctrl+V): já está copiado.")
-        self.button(buttons, "Copiar o texto", lambda: copy(text_of(), "Texto"), primary=True).pack(side="left")
-        if res.get("tipo") == "email":
+        html = str(res.get("corpo_html") or "")
+
+        def copy_formatted() -> None:
+            if clipboard_set_html(images_to_files(html), text_of()):
+                status.configure(text="✔ Copiado COM o formato do modelo: no Outlook, clique no corpo do e-mail e Ctrl+V.")
+            else:
+                copy(text_of(), "Texto")
+
+        def outlook() -> None:
+            status.configure(text="Abrindo um e-mail novo no Outlook, já formatado…")
+            to = fields["para"].get() if "para" in fields else ""
+            subject = fields["assunto"].get() if "assunto" in fields else ""
+            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html), lambda how: status.configure(
+                text="✔ Abri no Outlook, com o formato do modelo. Revise e envie de lá." if how == "outlook" else
+                "✔ Abri um rascunho já formatado (.eml). Se abrir como e-mail recebido, use \"Copiar formatado\"."))
+
+        def preview() -> None:
+            import tempfile
+            path = os.path.join(tempfile.gettempdir(), "BitPC", f"previa-{int(time.time())}.html")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(html if re.search(r"(?i)<meta[^>]+charset", html) else '<meta charset="utf-8">' + html)
+            open_path(path)
+        if html:
+            self.button(buttons, "Copiar formatado", copy_formatted, primary=True).pack(side="left")
+            self.button(buttons, "Abrir no Outlook", outlook).pack(side="left", padx=self.px(6))
+            self.button(buttons, "Ver", preview).pack(side="left")
+            self.button(buttons, "Só o texto", lambda: copy(text_of(), "Texto")).pack(side="left", padx=self.px(6))
+        else:
+            self.button(buttons, "Copiar o texto", lambda: copy(text_of(), "Texto"), primary=True).pack(side="left")
+        if res.get("tipo") == "email" and not html:
             self.button(buttons, "Copiar o assunto", lambda: copy(fields["assunto"].get(), "Assunto")).pack(
                 side="left", padx=self.px(6))
             self.button(buttons, "Abrir no e-mail", mail).pack(side="left")
@@ -1261,12 +1647,18 @@ class App:
                     "assunto": fields["assunto"].get() if "assunto" in fields else ""}
             self.run_bg(lambda: self.api.call("POST", "modelos", body),
                         lambda r: status.configure(text=f"✔ Salvo como o modelo \"{name}\". Troque nomes e números por {{{{campos}}}} se quiser."))
-        if res.get("tipo") == "email":
+        if res.get("tipo") == "email" and not html:
             self.button(buttons, "Salvar como modelo", save_as_template).pack(side="left", padx=self.px(6))
         self.button(buttons, "Fechar", win.destroy).pack(side="right")
-        hint = (f"Baseado no seu modelo \"{res['modelo']}\". " if res.get("modelo") else "") + \
-            "Revise e ajuste o texto à vontade antes de copiar."
-        status = self.label(frame, hint, 9, self.MUTED)
+        hint = (f"Baseado no seu modelo \"{res['modelo']}\". " if res.get("modelo") else "")
+        if html:
+            hint += ("No formato do modelo (◆). \"Copiar formatado\"/\"Abrir no Outlook\" levam o visual; o que você "
+                     "editar na caixa vale para \"Só o texto\".")
+        elif res.get("formato") in ("grande", "estrutura"):
+            hint += "Desta vez saiu só o texto: abra o modelo no Outlook e cole por cima (Ctrl+V)."
+        else:
+            hint += "Revise e ajuste o texto à vontade antes de copiar."
+        status = self.label(frame, hint, 9, self.MUTED, wraplength=w - self.px(40))
         status.pack(side="bottom", anchor="w", pady=(self.px(6), 0))
         win.lift()
         win.focus_force()
@@ -1285,7 +1677,7 @@ class App:
         win.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
         self.extra_windows = [x for x in getattr(self, "extra_windows", []) if alive(x)] + [win]
         self.root.after(200, self.later, exclude_from_capture, win)
-        state: Dict[str, Any] = {"items": [], "n": None}
+        state: Dict[str, Any] = {"items": [], "n": None, "html": None}      # html: None = mantém o formato salvo
         top = tk.Frame(win, bg=self.BG)
         top.pack(fill="x", padx=self.px(12), pady=(self.px(10), 0))
         self.label(top, "Seus modelos de e-mail", 13, bold=True).pack(side="left")
@@ -1306,7 +1698,10 @@ class App:
             e = tk.Entry(form, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
             e.grid(row=i, column=1, sticky="ew", ipady=self.px(2), pady=(0, self.px(3)))
             entries[key] = e
-        self.label(right, "Texto (use {{nome}}, {{pedido}}... onde muda)", 9, self.MUTED).pack(anchor="w")
+        text_head = tk.Frame(right, bg=self.BG)
+        text_head.pack(fill="x")
+        self.label(text_head, "Texto (use {{nome}}, {{pedido}}... onde muda)", 9, self.MUTED).pack(anchor="w")
+        fmt = self.label(right, "", 9, "#7ddc9a", wraplength=int(w * 0.5))
         text = tk.Text(right, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
                        font=("Segoe UI", 10), height=1, width=1, borderwidth=0, padx=self.px(6), pady=self.px(6))
         sig_box = tk.Frame(win, bg=self.BG)
@@ -1320,18 +1715,31 @@ class App:
             state["items"] = list(res.get("modelos") or [])
             listbox.delete(0, "end")
             for t in state["items"]:
-                listbox.insert("end", tk_safe(f"{t['nome']}" + (f" — {t['uso']}" if t.get("uso") else "")))
+                listbox.insert("end", tk_safe(("◆ " if t.get("tem_html") else "") + f"{t['nome']}"
+                                              + (f" — {t['uso']}" if t.get("uso") else "")))
             if "assinatura" in res and not sig.get("1.0", "end").strip():
                 sig.insert("1.0", res.get("assinatura") or "")
             if res.get("importados") is not None:
-                status.configure(text=f"✔ {res['importados']} modelo(s) importado(s) do Outlook.")
+                with_fmt = sum(1 for t in state["items"] if t.get("tem_html") and t.get("origem") == "outlook")
+                status.configure(text=f"✔ {res['importados']} modelo(s) importado(s)"
+                                      + (f" — {with_fmt} com o formato do Outlook (◆)." if with_fmt else "."))
+
+        def set_format(has_html: bool, fresh: bool = False) -> None:
+            if has_html:
+                fmt.configure(text=("✔ Formato copiado (tabelas, cores e imagens). Dê um nome e salve." if fresh else
+                                    "◆ Com o formato do Outlook: o e-mail sai igual ao modelo. O texto abaixo é a referência "
+                                    "do conteúdo; para mudar o visual, cole de novo do Outlook."))
+                fmt.pack(anchor="w", before=text, pady=(0, self.px(3)))
+            else:
+                fmt.pack_forget()
 
         def pick(_e: Any = None) -> None:
             sel = listbox.curselection()
             if not sel:
                 return
             t = state["items"][sel[0]]
-            state["n"] = t["n"]
+            state["n"], state["html"] = t["n"], None
+            set_format(bool(t.get("tem_html")))
             for key in entries:
                 entries[key].delete(0, "end")
                 entries[key].insert(0, t.get(key) or "")
@@ -1340,7 +1748,8 @@ class App:
         listbox.bind("<<ListboxSelect>>", pick)
 
         def new() -> None:
-            state["n"] = None
+            state["n"], state["html"] = None, None
+            set_format(False)
             listbox.selection_clear(0, "end")
             for e in entries.values():
                 e.delete(0, "end")
@@ -1355,8 +1764,49 @@ class App:
                         lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
         def save() -> None:
-            call({"acao": "salvar", "origem": "pc", "corpo": text.get("1.0", "end").strip(),
-                  **{k: e.get().strip() for k, e in entries.items()}}, "✔ Modelo salvo.")
+            payload = {"acao": "salvar", "origem": "pc", "corpo": text.get("1.0", "end").strip(),
+                       **{k: e.get().strip() for k, e in entries.items()}}
+            if state["html"] is not None:
+                payload["html"] = state["html"]
+            call(payload, "✔ Modelo salvo" + (" com o formato do Outlook." if state["html"] else "."))
+
+        def paste_outlook() -> None:
+            """No Outlook: abra o modelo, Ctrl+A e Ctrl+C no corpo do e-mail; aqui, este botão. Vem com o formato."""
+            html = clipboard_get_html()
+            if not html:
+                try:
+                    plain = win.clipboard_get()
+                except Exception:
+                    plain = ""
+                if not plain.strip():
+                    status.configure(text="⚠ A área de transferência está vazia: no Outlook, abra o modelo, clique no corpo, "
+                                          "Ctrl+A e Ctrl+C.")
+                    return
+                text.delete("1.0", "end")
+                text.insert("1.0", plain.strip())
+                status.configure(text="Colei só o texto (o que foi copiado não tinha formato).")
+                return
+            state["html"] = inline_local_images(html)
+            text.delete("1.0", "end")
+            text.insert("1.0", html_to_text(state["html"]))
+            set_format(True, fresh=True)
+            status.configure(text="✔ Colei com o formato. Se o texto do modelo muda a cada e-mail, troque no Outlook os "
+                                  "nomes e números por {{nome}}, {{pedido}}... antes de copiar.")
+
+        def import_file() -> None:
+            from tkinter import filedialog
+            paths = filedialog.askopenfilenames(parent=win, title="Modelos de e-mail", filetypes=[
+                ("Modelos e e-mails", "*.oft *.msg *.eml *.htm *.html"), ("Todos os arquivos", "*.*")])
+            if not paths:
+                return
+            status.configure(text="Lendo os arquivos (com o formato)…")
+
+            def work() -> Dict[str, Any]:
+                found = [t for t in (read_template_file(p) for p in paths) if t]
+                if not found:
+                    raise ApiError("Não consegui ler esses arquivos como e-mail (.oft, .msg, .eml ou .htm).")
+                return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found}, timeout=120)
+            self.run_bg(work, show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
         def delete() -> None:
             if state["n"] is not None:
@@ -1371,8 +1821,10 @@ class App:
                 if not found and not signatures:
                     raise ApiError("Não achei modelos (.oft) nem assinaturas do Outlook neste PC. No Outlook novo, os "
                                    "modelos ficam na nuvem: abra cada um, copie e cole aqui.")
+                sig_info = signatures[0] if signatures else {}
                 return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found,
-                                                         "assinatura": signatures[0][1] if signatures else ""})
+                                                         "assinatura": sig_info.get("texto", ""),
+                                                         "assinatura_html": sig_info.get("html", "")}, timeout=180)
 
             def done(res: Dict[str, Any]) -> None:
                 sig.delete("1.0", "end")
@@ -1382,6 +1834,8 @@ class App:
         actions = tk.Frame(top, bg=self.BG)
         actions.pack(side="right")
         self.button(actions, "Importar do Outlook", import_outlook, primary=True).pack(side="left")
+        self.button(actions, "Importar arquivo…", import_file).pack(side="left", padx=(self.px(6), 0))
+        self.button(text_head, "Colar do Outlook (com formato)", paste_outlook).pack(anchor="w", pady=(self.px(2), self.px(4)))
         buttons = tk.Frame(right, bg=self.BG)
         buttons.pack(side="bottom", fill="x", pady=(self.px(6), 0))
         self.button(buttons, "Salvar modelo", save, primary=True).pack(side="left")
@@ -1398,6 +1852,8 @@ class App:
         left.pack(side="left", fill="both", expand=False, ipadx=self.px(80))
         right.pack(side="left", fill="both", expand=True, padx=(self.px(10), 0))
         self.templates_window, self.templates_list = win, listbox
+        self.templates_actions = {"colar": paste_outlook, "salvar": save, "novo": new, "estado": state, "texto": text,
+                                  "campos": entries}
         self.run_bg(lambda: self.api.call("GET", "modelos"), show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
     def draw_suggestions(self) -> None:
@@ -1882,7 +2338,14 @@ def round_corners(widget: Any) -> None:
 
 
 # ================================================================== autoteste (usado no build do GitHub, no Windows)
+TEST_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+TEST_HTML = ('<html><body><table style="border:2px solid #0a5"><tr><td style="color:#c00;font-family:Arial">Olá, Ana!</td>'
+             f'</tr><tr><td>Segue o orçamento.</td></tr></table><img src="data:image/png;base64,{TEST_PNG}"></body></html>')
+
+
 class FakeApi:
+    saved: Optional[Dict[str, Any]] = None
+
     def __init__(self, base: str, token: str = ""):
         self.base, self.token = base, token
 
@@ -1905,13 +2368,18 @@ class FakeApi:
                 return {"tipo": "email", "titulo": "Resposta à Ana", "para": "ana@empresa.com", "assunto": "Re: Orçamento",
                         "modelo": "Follow-up de orçamento",
                         "corpo": "Olá, Ana!\n\nSegue o orçamento dos 3 notebooks, com entrega até 12/12. 👍\n\nAbraços,\n[SEU NOME]",
-                        "arquivos": []}
+                        "arquivos": [], **({"corpo_html": TEST_HTML, "formato": "campos"}
+                                           if "formato" in str((body or {}).get("pedido")) else {})}
             return {"tipo": "planilha", "titulo": "Orçamento", "arquivos": ["planilha_orcamento.xlsx"]}
         if sub == "ao-vivo/fim":
             return {"texto": "Encerrado."}
         if sub == "modelos":
             items = [{"n": 1, "nome": "Follow-up de orçamento", "uso": "3 dias depois da proposta", "assunto": "Proposta {{pedido}}",
-                      "corpo": "Olá, {{nome}}!\n\nConseguiu avaliar a proposta?\n\nAbraço,", "usos": 2}]
+                      "corpo": "Olá, {{nome}}!\n\nConseguiu avaliar a proposta?\n\nAbraço,", "usos": 2},
+                     {"n": 2, "nome": "Boas-vindas", "uso": "cliente novo", "assunto": "", "corpo": "Olá! Seja bem-vindo.",
+                      "usos": 0, "tem_html": True, "origem": "outlook"}]
+            if (body or {}).get("acao") == "salvar":
+                self.saved = body
             return {"modelos": items, "assinatura": "Gabriel · Comercial"}
         return {"avisos": []}
 
@@ -1987,6 +2455,7 @@ def autotest(out_path: str) -> int:
             app.show_observation(FakeApi("", "").call("POST", "ao-vivo"), region, "Outlook")
             app.bar_open_prepare(True)
             app.prepare("email", "Responder à Ana")
+            app.prepare("email", "Responder à Ana no formato do modelo")
             app.prepare("planilha", "")
             app.ask("pesquise esse cliente pra mim")
             app.root.after(1500, step2b)
@@ -1995,7 +2464,13 @@ def autotest(out_path: str) -> int:
             app.pump()
             app.root.update()
             result["resultado_email"] = len(app.result_windows)
-            if len(app.result_windows) < 2:
+            formatted = [w for w in app.result_windows if alive(w) and any("Copiar formatado" in t for t in texts(w))]
+            result["email_formatado"] = len(formatted)
+            if not formatted:
+                problems.append("e-mail no formato do modelo: sem o botão \"Copiar formatado\"")
+            else:
+                fits(formatted[0], "e-mail formatado")
+            if len(app.result_windows) < 3:
                 problems.append("pesquisa do cliente: a janela do e-mail de abordagem não abriu")
             result["arquivos_salvos"] = [os.path.basename(p) for p in getattr(app, "saved_paths", [])]
             if not app.result_windows:
@@ -2035,8 +2510,32 @@ def autotest(out_path: str) -> int:
             else:
                 fits(win, "modelos de e-mail")
                 result["modelos_na_lista"] = app.templates_list.size()
-                if result["modelos_na_lista"] != 1:
+                if result["modelos_na_lista"] != 2:
                     problems.append("janela de modelos: a lista não carregou")
+                elif not app.templates_list.get(1).startswith("◆"):
+                    problems.append("janela de modelos: sem a marca de formato")
+            # formato do Outlook: copiar com HTML -> "Colar do Outlook" guarda o HTML -> salvar manda o HTML
+            result["eml_ida_e_volta"] = False
+            eml = read_template_file(write_eml("ana@x.com", "Orçamento", "Olá, Ana!", TEST_HTML))
+            result["eml_ida_e_volta"] = bool(eml and "<table" in eml["html"] and "data:image/png" in eml["html"]
+                                             and eml["assunto"] == "Orçamento")
+            if not result["eml_ida_e_volta"]:
+                problems.append("rascunho .eml: perdeu o formato ou a imagem")
+            if IS_WINDOWS and alive(win):
+                ok_set = clipboard_set_html(images_to_files(TEST_HTML), "Olá, Ana!")
+                got = clipboard_get_html()
+                result["area_transferencia_html"] = bool(ok_set and "<table" in got and "color:#c00" in got)
+                if not result["area_transferencia_html"]:
+                    problems.append(f"área de transferência com formato: não voltou igual ({got[:120]!r})")
+                acts = app.templates_actions
+                acts["novo"]()
+                acts["colar"]()
+                acts["campos"]["nome"].insert(0, "Orçamento formatado")
+                acts["salvar"]()
+                html_kept = str(acts["estado"].get("html") or "")
+                result["colar_do_outlook"] = "<table" in html_kept and "data:image/png" in html_kept
+                if not result["colar_do_outlook"]:
+                    problems.append("Colar do Outlook: o formato (ou a imagem) não ficou no modelo")
             before = [float(w.attributes("-alpha")) for w in app.our_windows()]
             app.hidden_capture(None)                                      # o Bit some na foto e volta igual
             after = [float(w.attributes("-alpha")) for w in app.our_windows()]

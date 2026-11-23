@@ -282,6 +282,9 @@ class PcHub:
             tpl, block = templates.guidance(f"{ask}\n{notes[-1500:]}", llm=self._pick_llm)
             if block:
                 system += "\n\n" + block
+            if tpl is not None and tpl.get("campos"):
+                system += ("\n\nInclua também no JSON \"campos\": {" + ", ".join(f'"{c}": "valor"' for c in tpl["campos"])
+                           + "} com o valor de cada campo do modelo para este e-mail (vazio se não souber).")
         raw = vision(self.service, system, prompt, image_url or None, json_format=True, max_tokens=2500)
         spec = _json(raw)
         out: Dict[str, Any] = {"tipo": kind, "titulo": str(spec.get("titulo") or spec.get("title") or kind).strip()[:120],
@@ -294,6 +297,14 @@ class PcHub:
             if templates is not None:
                 out["corpo"] = templates.finish(out["corpo"], tpl)
             out["modelo"] = tpl["nome"] if tpl else ""
+            if tpl is not None and tpl.get("tem_html"):            # v13.52: o e-mail sai no FORMATO do modelo
+                from .modelos_email import fill_fields
+                fields = spec.get("campos") if isinstance(spec.get("campos"), dict) else {}
+                if not out["assunto"] and tpl.get("assunto"):
+                    out["assunto"] = fill_fields(tpl["assunto"], fields)
+                html, how = templates.render_html(templates.get(tpl["n"]), out["assunto"], out["corpo"], fields,
+                                                  llm=self._html_llm)
+                out["corpo_html"], out["formato"] = html, how
             summary = f"E-mail preparado: {out['assunto']}" + (f" (modelo: {tpl['nome']})" if tpl else "")
         elif kind == "texto":
             out["texto"] = str(spec.get("texto") or "").strip()
@@ -339,6 +350,9 @@ class PcHub:
 
     def _pick_llm(self, system: str, user: str) -> str:
         return vision(self.service, system, user, None, max_tokens=10)
+
+    def _html_llm(self, system: str, user: str) -> str:
+        return vision(self.service, system, user, None, max_tokens=9000)
 
     def finish(self, session: str, keep: bool = False) -> Dict[str, Any]:
         with self._lock:
@@ -482,32 +496,35 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
                 h._send_json(404, {"error": "Modelos de e-mail indisponíveis neste agente."})
                 return
             if method == "POST":
-                body = read_body(h, 512 * 1024) or {}
+                body = read_body(h, 8 * 1024 * 1024) or {}          # importar vários modelos em HTML
                 action = str(body.get("acao") or "")
                 if action == "salvar":
                     templates.save(str(body.get("nome") or ""), str(body.get("corpo") or ""), str(body.get("uso") or ""),
-                                   str(body.get("assunto") or ""), str(body.get("origem") or "pc"))
+                                   str(body.get("assunto") or ""), str(body.get("origem") or "pc"),
+                                   body.get("html") if "html" in body else None)
                 elif action == "apagar":
                     templates.delete(body.get("n"))
                 elif action == "assinatura":
-                    templates.set_signature(str(body.get("assinatura") or ""))
+                    templates.set_signature(str(body.get("assinatura") or ""),
+                                            body.get("assinatura_html") if "assinatura_html" in body else None)
                 elif action == "importar":
                     saved = 0
                     for item in list(body.get("modelos") or [])[:100]:
                         try:
                             templates.save(str(item.get("nome") or ""), str(item.get("corpo") or ""), str(item.get("uso") or ""),
-                                           str(item.get("assunto") or ""), "outlook")
+                                           str(item.get("assunto") or ""), "outlook", str(item.get("html") or "") or None)
                             saved += 1
                         except ValueError:
                             continue
-                    if body.get("assinatura"):
-                        templates.set_signature(str(body["assinatura"]))
+                    if body.get("assinatura") or body.get("assinatura_html"):
+                        templates.set_signature(str(body.get("assinatura") or ""), str(body.get("assinatura_html") or "") or None)
                     h._send_json(200, {"importados": saved, "modelos": templates.list(), "assinatura": templates.signature()})
                     return
                 else:
                     h._send_json(400, {"error": "Ação desconhecida."})
                     return
-            h._send_json(200, {"modelos": templates.list(), "assinatura": templates.signature()})
+            h._send_json(200, {"modelos": templates.list(), "assinatura": templates.signature(),
+                               "assinatura_html": bool(templates.signature_html())})
         elif sub == "preparar" and method == "POST":
             body = read_body(h)
             if body is None:
