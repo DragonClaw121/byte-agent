@@ -282,3 +282,21 @@ até ela voltar.
 Se uma tarefa falhar **3 vezes seguidas**, o agente avisa no Telegram e no app ("⚠️ Gatilhos está falhando: ..."). Ele
 avisa de novo quando ela volta a funcionar. A agenda iCal e o clima ficam guardados por alguns minutos e são
 compartilhados entre os módulos, em vez de serem baixados várias vezes por hora.
+
+## Painéis de cada agente (v13.40)
+Cada agente que roda à parte tem o próprio painel. Para abrir:
+- no painel da **Matrix**, escolha o agente no menu (ele aparece como "painel próprio ↗") e confirme. O painel dele
+  abre numa nova aba;
+- ou mande **`/painel`** no Telegram. Cada agente responde com o link do próprio painel, e a Matrix responde com os de
+  todos.
+
+Os links levam a chave de acesso do painel: não compartilhe.
+
+## Reuniões no painel (v13.40)
+Na aba **Agenda** do painel, a seção **📝 Reuniões** tem:
+- **🔴 Gravar:** a mesma gravação da página `/reuniao`, com áudio do Teams/Zoom/Meet e microfone e texto ao vivo.
+  Funciona no Chrome ou no Edge do computador;
+- **📤 Enviar gravação:** um arquivo de áudio ou vídeo de até 150 MB;
+- a **lista das reuniões**, com a ata e o botão **⬇️ Baixar a ata (.docx)**;
+- o estado da transcrição, o atalho para conectar as transcrições do Teams e o OneDrive ou Drive automático (ligar e
+  desligar).

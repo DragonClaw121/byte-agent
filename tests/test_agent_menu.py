@@ -199,3 +199,18 @@ def test_matrix_has_every_child_tool(tmp_path, fake, monkeypatch):
         assert "work_status" not in rt.service.extra_actions
     finally:
         rt.stop()
+
+
+def test_menu_opens_the_panel_of_agents_running_apart(tmp_path, fake, monkeypatch):
+    """v13.40: no menu da Matrix, o Bit (rodando à parte) vem com o link do painel dele."""
+    import json as _json
+    monkeypatch.setenv("BYTE_PAINEIS", _json.dumps({"bit": "https://byte.exemplo/ui?token=" + "b" * 30}))
+    rt = start(tmp_path, fake, monkeypatch, env={"BYTE_AGENTES_SEPARADOS": "bit",
+                                                 "BYTE_PAINEIS": _json.dumps({"bit": "https://byte.exemplo/ui?token=" + "b" * 30})})
+    try:
+        menu = {a["id"]: a for a in rt.service.dispatch_request("status", {})["agent_menu"]}
+        assert menu["bit"]["panel_url"].startswith("https://byte.exemplo/ui?token=") and "panel_url" not in menu["kronus"]
+        with pytest.raises(ValueError, match="Painel: https://byte.exemplo/ui"):
+            rt.switch_agent("bit")
+    finally:
+        rt.stop()

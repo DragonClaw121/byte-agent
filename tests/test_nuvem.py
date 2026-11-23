@@ -357,3 +357,23 @@ def test_panel_tokens_cover_every_agent(tmp_path):
     tokens = nuvem.panel_tokens(tmp_path)
     assert tokens["principal"] == "p" * 30 and tokens["kronus"] == "k" * 30                 # os antigos continuam valendo
     assert len(tokens["bit"]) >= 24 and len(tokens["byte"]) >= 24 and nuvem.panel_tokens(tmp_path) == tokens
+
+
+def test_matrix_gets_the_panel_links_of_agents_running_apart(tmp_path):
+    """v13.40: a Matrix abre o painel do Bit (antes ele só aparecia nos logs)."""
+    import json as _json
+    env = {"BYTE_MODEL": "x", "BYTE_PAINEL_REMOTO": "1", "BYTE_AGENTES": "kronus,bit", "BYTE_KRONUS_PORT": "0",
+           "CONTAINER_APP_NAME": "byte", "CONTAINER_APP_ENV_DNS_SUFFIX": "x.azurecontainerapps.io"}
+    sup = nuvem.Supervisor(tmp_path / "home", tmp_path / "store", tmp_path, env, interval_s=3600)
+    procs = nuvem.commands(env)
+    for name, extra in nuvem.child_envs(env, procs).items():
+        sup.child_env.setdefault(name, {}).update(extra)
+    sup.open_panels(procs)
+    try:
+        links = _json.loads(sup.child_env["principal"]["BYTE_PAINEIS"])
+        tokens = nuvem.panel_tokens(tmp_path / "store")
+        assert links == {"kronus": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['kronus']}",
+                         "bit": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['bit']}"}
+        assert sup.child_env["bit"]["BYTE_UI_TOKEN"] == tokens["bit"]
+    finally:
+        sup.router.stop()

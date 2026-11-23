@@ -44,6 +44,7 @@ HELP_TEXT = (
     "  (/rotina 08:00 <instrução> continua agendando uma tarefa diária)\n"
     "📝 Reuniões: grave pelo app ou, no notebook (Teams/Zoom/Meet), pela página /reuniao; ou mande o áudio/vídeo com a legenda \"ata\" | /reunioes | /ata <n>\n"
     "/compromissos [hoje|amanha|semana] — agenda unificada (Outlook, iCal, Google) | /microsoft — agenda, OneDrive e Teams | /google — agenda e Drive\n"
+    "/painel — link do painel deste agente (na Matrix, também os do Bit, Kronus e Byte)\n"
     "/saude — está tudo funcionando? (tarefas de fundo, erros, memória, tokens do dia) | /saude todos — todos os agentes\n"
     "/clima [cidade] — tempo agora e próximos dias (sem cidade: onde você está) | /onde — sua localização atual\n"
     "/resumo — resumo do dia agora | /resumo config | /resumo hora 07:30 | /resumo on|off | /resumo cidade <nome> | /resumo noticias <temas>\n"
@@ -195,6 +196,25 @@ class TelegramBridge:
                 self.send_document(chat_id, path)
             except Exception as err:
                 self.send(chat_id, f"Não consegui enviar {name}: {type(err).__name__}. O arquivo está na pasta de entregas.")
+
+    def _panel_links(self) -> str:
+        """v13.40: o link do painel deste agente e, na Matrix, os dos agentes que rodam à parte."""
+        import os
+        from .app_movel import public_base
+        from . import engine
+        base, token = public_base(), os.environ.get("BYTE_UI_TOKEN", "")
+        lines = []
+        if base and token and os.environ.get("BYTE_PAINEL_REMOTO", "0") == "1":
+            lines.append(f"🖥️ Painel {'da' if engine.AGENT_NAME in {'Matrix', 'Byte'} else 'do'} {engine.AGENT_NAME}: {base}/ui?token={token}")
+        try:
+            others = json.loads(os.environ.get("BYTE_PAINEIS") or "{}")
+        except ValueError:
+            others = {}
+        names = {"bit": "Bit", "byte": "Byte", "kronus": "Kronus"}
+        lines += [f"🖥️ Painel {'da' if a == 'byte' else 'do'} {names.get(a, a)}: {url}" for a, url in others.items()]
+        if not lines:
+            return "O painel deste agente não está aberto para a internet (BYTE_PAINEL_REMOTO=1 na nuvem)."
+        return "\n".join(lines) + "\n\nOs links levam a chave de acesso: não compartilhe."
 
     def _email_command(self, chat_id: int, arg: str) -> None:
         words = arg.split()
@@ -809,6 +829,8 @@ class TelegramBridge:
             except RuntimeError as err:
                 text = "⚠️ " + re.sub(r"^\w*Error: ", "", str(err))
             self.send(chat_id, text or "Saúde indisponível.")
+        elif cmd == "/painel":
+            self.send(chat_id, self._panel_links())
         elif cmd == "/microsoft":
             try:
                 res = self._dispatch("microsoft_command", {"arg": arg})

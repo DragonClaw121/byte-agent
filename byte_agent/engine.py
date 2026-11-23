@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.39"
+BYTE_VERSION = "13.40"
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -7169,6 +7169,12 @@ class ByteEcosystemService:
                     try:
                         from byte_agent import agents as _agents
                         res["agent_menu"] = _agents.catalog()
+                        try:                                 # v13.40: quem roda à parte abre o próprio painel
+                            links = json.loads(os.environ.get("BYTE_PAINEIS") or "{}")
+                        except ValueError:
+                            links = {}
+                        res["agent_menu"] = [dict(a, panel_url=links[a["id"]]) if a.get("id") in links else a
+                                             for a in res["agent_menu"]]
                     except Exception:
                         res["agent_menu"] = []
                 for provider_key, provider in self.status_providers.items():
@@ -7700,6 +7706,28 @@ pygame.time.Clock().tick(60)</textarea>
   <div id="b90-tab-ctx" class="b90-tab-content">
     <div class="b90-grid">
       <div class="b90-card">
+        <h3>📝 Reuniões (Teams, Zoom, Meet neste computador)</h3>
+        <div id="b90-meet-box" style="margin-bottom:12px; font-size:0.82rem;">
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
+            <input id="b90-meet-title" class="b90-input" style="flex:1; min-width:200px;" placeholder="Título (opcional), ex.: Reunião de orçamento" />
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-meet-sys" checked> áudio da reunião</label>
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-meet-mic" checked> meu microfone</label>
+            <button id="b90-meet-btn" class="b90-btn-pri" style="margin-top:0;" onclick="window.b90MeetToggle()">🔴 Gravar</button>
+            <span id="b90-meet-clock" style="color:var(--muted); font-family:monospace;"></span>
+          </div>
+          <div style="color:var(--muted); font-size:0.74rem; margin-bottom:6px;">Ao gravar, o navegador pede para compartilhar a tela:
+            <b>app do Teams/Zoom</b> → "Tela inteira" + "Compartilhar áudio do sistema"; <b>reunião no navegador</b> → a aba da reunião +
+            "Compartilhar áudio da aba". Use fone de ouvido e avise os participantes.</div>
+          <div id="b90-meet-state" style="font-size:0.76rem; color:var(--muted);"></div>
+          <pre id="b90-meet-live" class="b90-pre" style="display:none; max-height:180px; margin-top:6px;"></pre>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0;">
+            <label class="b90-btn-sec" style="margin:0; cursor:pointer;">📤 Enviar gravação (áudio/vídeo, até 150 MB)
+              <input type="file" id="b90-meet-file" accept="audio/*,video/*" style="display:none;" onchange="window.b90MeetUpload(this)"></label>
+          </div>
+          <div id="b90-meet-opts" style="font-size:0.76rem; color:var(--muted); margin-bottom:4px;"></div>
+          <div id="b90-meet-list"></div>
+          <pre id="b90-meet-ata" class="b90-pre" style="display:none; max-height:260px; margin-top:6px;"></pre>
+        </div>
         <h3>🧩 Objetivos (a Byte trabalha sozinha, em etapas)</h3>
         <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
           <input id="b90-new-goal" class="b90-input" style="flex:1; min-width:220px;" placeholder="Ex.: pesquise 3 cursos de Python gratuitos e me entregue um comparativo" onkeydown="if(event.key==='Enter')window.b90AddGoal()" />
@@ -8464,8 +8492,179 @@ pygame.time.Clock().tick(60)</textarea>
     const res = await b90Call('permission_set', { category: cat, level }, true);
     if (res.error) { alert(res.error); }
     const st = await b90Call('permission_list', {}, true);
-    if (!st.error) b90RenderPermissions({ permissoes: st });
+    if (!st.error) { b90State.permissoes = st; b90RenderPermissions({ permissoes: st }); }
   };
+  // ---------------- v13.40: reuniões pelo painel (mesmo transcritor do app e da página /reuniao)
+  const B90_MEET = { RATE: 16000, ctx: null, streams: [], proc: null, pcm: null, size: 0, seq: 0, sent: 0, id: 0,
+                     on: false, queue: [], busy: false, started: 0, timer: null };
+  function b90MeetWav(samples) {
+    const R = B90_MEET.RATE, b = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); b.setUint32(4, 36 + samples.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true); b.setUint32(24, R, true);
+    b.setUint32(28, R * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true); w(36, 'data');
+    b.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) b.setInt16(44 + i * 2, samples[i], true);
+    let bin = ''; const u = new Uint8Array(b.buffer);
+    for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function b90MeetCut(from) {
+    const M = B90_MEET, win = M.RATE * 0.3 | 0; let best = 1e9, at = -1;
+    for (let i = from; i + win <= M.size; i += M.RATE / 20) {
+      let s = 0; for (let j = i; j < i + win; j += 4) s += Math.abs(M.pcm[j]);
+      const avg = s / (win / 4); if (avg < best) { best = avg; at = i + (win / 2 | 0); }
+    }
+    return best < 400 ? at : -1;
+  }
+  function b90MeetPush(cut) {
+    const M = B90_MEET;
+    M.queue.push({ seq: M.seq++, t: M.sent / M.RATE, audio_b64: b90MeetWav(M.pcm.slice(0, cut)) });
+    M.sent += cut; M.pcm.copyWithin(0, cut, M.size); M.size -= cut; b90MeetPump();
+  }
+  async function b90MeetPump() {
+    const M = B90_MEET; if (M.busy) return; M.busy = true;
+    const live = document.getElementById('b90-meet-live'), st = document.getElementById('b90-meet-state');
+    while (M.queue.length) {
+      const it = M.queue[0];
+      const res = await b90Call('meeting_chunk', { id: M.id, seq: it.seq, t: it.t, audio_b64: it.audio_b64 }, true);
+      if (res.error) { st.textContent = '⚠️ ' + res.error + ' (tentando de novo)'; await new Promise(r => setTimeout(r, 4000)); continue; }
+      M.queue.shift();
+      if (res.texto) { live.style.display = 'block'; live.textContent += res.texto + '\n'; live.scrollTop = live.scrollHeight; }
+      st.textContent = M.on ? '🔴 Gravando a reunião #' + M.id : 'Enviando o final...';
+    }
+    M.busy = false;
+  }
+  function b90MeetCleanup() {
+    const M = B90_MEET;
+    M.streams.forEach(s => s.getTracks().forEach(t => t.stop())); M.streams = [];
+    if (M.proc) { M.proc.onaudioprocess = null; try { M.proc.disconnect(); } catch (e) {} M.proc = null; }
+    if (M.ctx) { M.ctx.close().catch(() => {}); M.ctx = null; }
+    clearInterval(M.timer);
+  }
+  window.b90MeetToggle = async function() {
+    const M = B90_MEET, btn = document.getElementById('b90-meet-btn'), st = document.getElementById('b90-meet-state');
+    if (M.on) {
+      M.on = false; btn.disabled = true;
+      if (M.size > M.RATE) b90MeetPush(M.size); else M.size = 0;
+      b90MeetCleanup(); st.textContent = 'Enviando o final...';
+      while (M.queue.length || M.busy) await new Promise(r => setTimeout(r, 500));
+      await b90Call('meeting_finish', { id: M.id }, true);
+      st.textContent = '📝 Preparando a ata... (chega aqui, no app e no Telegram)';
+      btn.disabled = false; btn.innerText = '🔴 Gravar';
+      b90MeetWatch(M.id);
+      return;
+    }
+    const wantSys = document.getElementById('b90-meet-sys').checked, wantMic = document.getElementById('b90-meet-mic').checked;
+    if (!wantSys && !wantMic) { st.textContent = 'Escolha pelo menos uma fonte de áudio.'; return; }
+    try {
+      M.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: M.RATE });
+      const mix = M.ctx.createGain();
+      if (wantSys) {
+        const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false },
+                                                                    systemAudio: 'include', selfBrowserSurface: 'exclude' });
+        sys.getVideoTracks().forEach(t => t.stop());
+        if (!sys.getAudioTracks().length) { sys.getTracks().forEach(t => t.stop());
+          throw new Error('O compartilhamento veio sem áudio: grave de novo e ligue "Compartilhar áudio do sistema" (ou da aba).'); }
+        M.streams.push(sys); M.ctx.createMediaStreamSource(sys).connect(mix);
+      }
+      if (wantMic) {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        M.streams.push(mic); M.ctx.createMediaStreamSource(mic).connect(mix);
+      }
+      const res = await b90Call('meeting_start', { title: document.getElementById('b90-meet-title').value.trim() }, true);
+      if (res.error) throw new Error(res.error);
+      M.id = res.id; M.pcm = new Int16Array(M.RATE * 40); M.size = 0; M.seq = 0; M.sent = 0; M.queue = [];
+      M.proc = M.ctx.createScriptProcessor(4096, 1, 1);
+      M.proc.onaudioprocess = ev => {
+        if (!M.on) return;
+        const x = ev.inputBuffer.getChannelData(0);
+        if (M.size + x.length > M.pcm.length) { const big = new Int16Array(M.pcm.length * 2); big.set(M.pcm.subarray(0, M.size)); M.pcm = big; }
+        for (let i = 0; i < x.length; i++) M.pcm[M.size++] = Math.max(-1, Math.min(1, x[i])) * 32767;
+        const secs = M.size / M.RATE;
+        if (secs >= 30) b90MeetPush(M.size); else if (secs >= 20) { const c = b90MeetCut(20 * M.RATE); if (c > 0) b90MeetPush(c); }
+      };
+      const silent = M.ctx.createGain(); silent.gain.value = 0;
+      mix.connect(M.proc); M.proc.connect(silent); silent.connect(M.ctx.destination);
+      M.on = true; M.started = Date.now(); b90RefreshMeetings();
+      document.getElementById('b90-meet-live').textContent = ''; document.getElementById('b90-meet-title').value = '';
+      btn.innerText = '⏹️ Encerrar e gerar ata'; st.textContent = '🔴 Gravando a reunião #' + M.id;
+      M.timer = setInterval(() => { const s = (Date.now() - M.started) / 1000 | 0;
+        document.getElementById('b90-meet-clock').textContent = String(s / 60 | 0).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }, 1000);
+      M.streams.forEach(s => s.getAudioTracks().forEach(t => t.onended = () => { if (M.on) window.b90MeetToggle(); }));
+    } catch (e) {
+      b90MeetCleanup();
+      st.textContent = '⚠️ ' + (e.name === 'NotAllowedError' ? 'Permissão negada (compartilhamento ou microfone).' : e.message);
+    }
+  };
+  async function b90MeetWatch(id) {
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const m = await b90Call('meeting_get', { id }, true);
+      if (m.status === 'pronta' || m.status === 'erro') {
+        document.getElementById('b90-meet-state').textContent = m.status === 'pronta' ? '✅ Ata pronta (também no app e no Telegram).' : '⚠️ ' + (m.error || 'A ata falhou.');
+        window.b90MeetShow(id); b90RefreshMeetings(); return;
+      }
+    }
+  }
+  window.b90MeetShow = async function(id) {
+    const m = await b90Call('meeting_get', { id }, true), box = document.getElementById('b90-meet-ata');
+    box.style.display = 'block';
+    box.textContent = m.error && m.status !== 'pronta' ? ('⚠️ ' + m.error) :
+      (m.ata || ('Ainda ' + (m.status === 'gravando' ? 'gravando' : 'fazendo a ata') + '...\n\n' + (m.transcript || '')));
+    if (m.file) {
+      const a = document.createElement('a');
+      a.className = 'b90-btn-sec'; a.style.cssText = 'display:inline-block; margin-top:6px; text-decoration:none;';
+      a.target = '_blank'; a.rel = 'noopener'; a.textContent = '⬇️ Baixar a ata (.docx)';
+      a.href = '/files/' + encodeURIComponent(m.file) + '?token=' + encodeURIComponent(b90HttpToken || '');
+      box.appendChild(document.createTextNode('\n\n')); box.appendChild(a);
+    }
+  };
+  window.b90MeetUpload = async function(input) {
+    const f = input.files && input.files[0], st = document.getElementById('b90-meet-state');
+    if (!f) return;
+    if (f.size > 150 * 1024 * 1024) { st.textContent = '⚠️ Arquivo acima de 150 MB.'; return; }
+    const PART = 1024 * 1024, total = Math.max(1, Math.ceil(f.size / PART));
+    const upload = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    let res = null;
+    for (let i = 0; i < total; i++) {
+      const buf = new Uint8Array(await f.slice(i * PART, (i + 1) * PART).arrayBuffer());
+      let bin = ''; for (let j = 0; j < buf.length; j += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(j, j + 0x8000));
+      st.textContent = `📤 Enviando ${Math.round((i + 1) / total * 100)}%...`;
+      res = await b90Call('meeting_file_part', { upload, index: i, total, data_b64: btoa(bin), name: f.name, mime: f.type,
+                                                 title: document.getElementById('b90-meet-title').value.trim() }, true);
+      if (res.error) { st.textContent = '⚠️ ' + res.error; input.value = ''; return; }
+    }
+    input.value = '';
+    st.textContent = `📝 Recebi "${res.title}" (#${res.id}). Transcrevendo; a ata aparece na lista quando ficar pronta.`;
+    b90MeetWatch(res.id);
+  };
+  window.b90MeetOpt = async function(cmd) {
+    const action = cmd.startsWith('google') ? 'google_command' : 'microsoft_command';
+    const res = await b90Call(action, { arg: cmd.replace(/^(google|microsoft) /, '') }, true);
+    document.getElementById('b90-meet-state').textContent = res.error ? '⚠️ ' + res.error : (res.text || '');
+    b90RefreshMeetings();
+  };
+  async function b90RefreshMeetings() {
+    const st = await b90Call('status', {}, true);
+    if (!st.error) { b90State.reunioes = st.reunioes; b90RenderMeetings(st); }   // o redesenho a cada 4 s usa b90State
+  }
+  function b90RenderMeetings(st) {
+    const r = st.reunioes, list = document.getElementById('b90-meet-list'), opts = document.getElementById('b90-meet-opts');
+    if (!list) return;
+    if (!r) { list.innerHTML = '<span style="color:var(--muted);">Reuniões indisponíveis neste agente.</span>'; return; }
+    const tok = encodeURIComponent(b90HttpToken || ''), icons = { gravando: '🔴', processando: '⏳', pronta: '📝', erro: '⚠️' };
+    const parts = [r.stt ? '🎙️ Transcrição: ligada' : '⚠️ Transcrição desligada (BYTE_STT_URL, veja docs/voz.md)'];
+    parts.push(r.teams ? '🟦 Transcrições do Teams: automáticas' : '🟦 Teams: <a href="#" onclick="window.b90MeetOpt(\'microsoft entrar teams\');return false;">conectar</a>');
+    if (r.onedrive) parts.push(`☁️ OneDrive automático: ${r.onedrive_auto ? 'ligado' : 'desligado'} <a href="#" onclick="window.b90MeetOpt('microsoft onedrive ${r.onedrive_auto ? 'off' : 'on'}');return false;">${r.onedrive_auto ? 'desligar' : 'ligar'}</a>`);
+    if (r.drive) parts.push(`☁️ Drive automático: ${r.drive_auto ? 'ligado' : 'desligado'} <a href="#" onclick="window.b90MeetOpt('google drive ${r.drive_auto ? 'off' : 'on'}');return false;">${r.drive_auto ? 'desligar' : 'ligar'}</a>`);
+    opts.innerHTML = parts.join(' · ');
+    list.innerHTML = (r.recent || []).map(m => `<div class="b90-row-item"><span>${icons[m.status] || '•'} #${m.id} ${b90EscapeHtml(m.title)}
+      <span style="color:var(--muted);">(${new Date(m.started_at * 1000).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })},
+      ${m.seconds < 60 ? Math.round(m.seconds) + ' s' : Math.round(m.seconds / 60) + ' min'})</span></span><span style="display:flex; gap:4px;">
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90MeetShow(${m.id})">Ver</button></span></div>`).join('')
+      || '<span style="color:var(--muted);">Nenhuma reunião ainda.</span>';
+  }
   const B90_DIAS = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
   function b90RenderBriefings(st) {
     const box = document.getElementById('b90-brief-box');
@@ -8498,6 +8697,7 @@ pygame.time.Clock().tick(60)</textarea>
     const fb = document.getElementById('b90-brief-fb');
     if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
     document.activeElement && document.activeElement.blur && document.activeElement.blur();
+    b90State.resumos = res;
     b90RenderBriefings({ resumos: res });
     document.getElementById('b90-brief-fb').textContent = '✅ Salvo.';
   };
@@ -8517,7 +8717,7 @@ pygame.time.Clock().tick(60)</textarea>
     const res = await b90Call('trigger_toggle', { name, on }, true);
     if (res.error) { alert(res.error); return; }
     const st = await b90Call('trigger_list', {}, true);
-    if (!st.error) b90RenderTriggers({ gatilhos: st });
+    if (!st.error) { b90State.gatilhos = st; b90RenderTriggers({ gatilhos: st }); }
   };
   window.b90AddGoal = async function() {
     const inp = document.getElementById('b90-new-goal'), btn = document.getElementById('b90-goal-btn');
@@ -8530,7 +8730,7 @@ pygame.time.Clock().tick(60)</textarea>
     if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
     inp.value = ''; fb.textContent = res.text || 'Objetivo criado.';
     const st = await b90Call('goal_list', {}, true);
-    if (!st.error) b90RenderGoals({ goals: st });
+    if (!st.error) { b90State.goals = st; b90RenderGoals({ goals: st }); }
   };
   window.b90GoalAction = async function(id, action) {
     if (action === 'goal_cancel' && !confirm('Cancelar o objetivo #' + id + '?')) return;
@@ -8538,7 +8738,7 @@ pygame.time.Clock().tick(60)</textarea>
     const fb = document.getElementById('b90-goal-feedback');
     fb.textContent = res.error ? '⚠️ ' + res.error : (action === 'goal_cancel' ? 'Objetivo cancelado.' : 'Retomado.');
     const st = await b90Call('goal_list', {}, true);
-    if (!st.error) b90RenderGoals({ goals: st });
+    if (!st.error) { b90State.goals = st; b90RenderGoals({ goals: st }); }
   };
 
   function b90RenderState(st) {
@@ -8548,6 +8748,7 @@ pygame.time.Clock().tick(60)</textarea>
     b90RenderTriggers(st);
     b90RenderPermissions(st);
     b90RenderBriefings(st);
+    b90RenderMeetings(st);
     if (st.version) {
       const agentName = st.agent_name || 'Matrix';
       const wakeEl = document.getElementById('b90-voice-wake');
@@ -9376,7 +9577,9 @@ pygame.time.Clock().tick(60)</textarea>
     b90AgentMenuKey = key;
     const sel = document.getElementById('b90-agent-menu');
     const opts = [{ id: '', nome: 'Matrix', tipo: 'padrão' }].concat(st.agent_menu);
-    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.tipo)})</option>`).join('');
+    window.b90AgentLinks = {};
+    opts.forEach(a => { if (a.panel_url) window.b90AgentLinks[a.id] = a.panel_url; });
+    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.panel_url ? 'painel próprio ↗' : a.tipo)})</option>`).join('');
     document.getElementById('b90-agent-go').style.display = 'none';
   }
   window.b90AgentArm = function() {
@@ -9387,6 +9590,14 @@ pygame.time.Clock().tick(60)</textarea>
     const target = document.getElementById('b90-agent-menu').value;
     const btn = document.getElementById('b90-agent-go');
     const msg = document.getElementById('b90-profile-msg');
+    const link = (window.b90AgentLinks || {})[target];
+    if (link) {                                                      // v13.40: roda à parte: abre o painel dele
+      window.open(link, '_blank', 'noopener');
+      msg.innerText = 'Esse agente roda à parte: abri o painel dele numa nova aba.';
+      document.getElementById('b90-agent-menu').value = (b90State.agent && b90State.agent.id) || '';
+      btn.style.display = 'none';
+      return;
+    }
     btn.disabled = true; btn.innerText = 'Trocando...'; msg.innerText = '';
     const inColab = !!(window.google && google.colab && google.colab.kernel);
     const res = await b90Call('switch_agent', { agent: target, want_html: inColab });

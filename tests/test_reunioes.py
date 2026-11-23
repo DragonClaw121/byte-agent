@@ -182,3 +182,24 @@ def test_notebook_page_and_pair_link(tmp_path, monkeypatch):
         rt.stop()
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_panel_actions_record_and_upload_in_parts(svc):
+    """v13.40: o painel do PC grava (trechos em base64) e envia gravações em partes de até 1 MB."""
+    import base64
+    mid = svc.extra_actions["meeting_start"]({"title": "Pelo painel"})["id"]
+    out = svc.extra_actions["meeting_chunk"]({"id": mid, "seq": 0, "t": 0, "audio_b64": base64.b64encode(wav(2)).decode()})
+    assert out["texto"].startswith("[00:00]")
+    svc.extra_actions["meeting_finish"]({"id": mid})
+    data = wav(3)
+    half = len(data) // 2
+    first = svc.extra_actions["meeting_file_part"]({"upload": "abc12345", "index": 0, "total": 2, "name": "r.wav", "mime": "audio/wav",
+                                                    "data_b64": base64.b64encode(data[:half]).decode()})
+    assert first == {"received": 1, "total": 2}
+    done = svc.extra_actions["meeting_file_part"]({"upload": "abc12345", "index": 1, "total": 2, "name": "r.wav", "mime": "audio/wav",
+                                                   "data_b64": base64.b64encode(data[half:]).decode(), "title": "Gravação"})
+    assert done["title"] == "Gravação"
+    st = svc.dispatch_request("status", {})["reunioes"]
+    assert {m["title"] for m in st["recent"]} >= {"Pelo painel", "Gravação"} and "stt" in st
+    with pytest.raises(ValueError):
+        svc.extra_actions["meeting_file_part"]({"upload": "../x", "index": 0, "total": 1, "data_b64": ""})

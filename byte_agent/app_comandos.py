@@ -56,6 +56,7 @@ CATALOG: List[tuple] = [
     ("Agente", "☀️ Ajustar resumos", "/resumo config", "", "", ""),
     ("Agente", "📈 Avaliar comportamento", "/avaliar", "", "", ""),
     ("Agente", "🔄 Atualizar", "/atualizar", "", "", ""),
+    ("Agente", "🖥️ Links dos painéis", "/painel", "", "", ""),
     ("Agente", "🩺 Saúde", "/saude", "", "", ""),
     ("Agente", "👨‍👩‍👧 Saúde de todos", "/saude todos", "", "", ""),
     ("Agente", "📶 Status", "/status", "", "", ""),

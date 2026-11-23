@@ -218,3 +218,16 @@ def test_only_one_bridge_per_bot_token(env):
     assert not second._stop.is_set()                    # bots diferentes não se derrubam
     second.stop()
     other_bot.stop()
+
+
+def test_panel_links_command(monkeypatch):
+    """v13.40: /painel manda o link do painel deste agente e, na Matrix, os dos agentes que rodam à parte."""
+    import json as _json
+    from byte_agent.telegram_bridge import TelegramBridge
+    monkeypatch.setenv("BYTE_PAINEL_REMOTO", "1")
+    monkeypatch.setenv("BYTE_UI_TOKEN", "t" * 30)
+    monkeypatch.setenv("BYTE_ENDERECO_PUBLICO", "https://byte.exemplo")
+    monkeypatch.setenv("BYTE_PAINEIS", _json.dumps({"bit": "https://byte.exemplo/ui?token=" + "b" * 30}))
+    bridge = TelegramBridge.__new__(TelegramBridge)
+    text = bridge._panel_links()
+    assert "https://byte.exemplo/ui?token=" + "t" * 30 in text and "Painel do Bit: https://byte.exemplo/ui?token=" + "b" * 30 in text

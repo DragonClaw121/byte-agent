@@ -490,8 +490,13 @@ class Runtime:
         wanted_id = str(target or "").strip().lower()
         if wanted_id in separate:          # v13.32: esse agente roda no próprio processo, com bot e painel dele
             names = {"bit": "O Bit", "byte": "A Byte", "kronus": "O Kronus"}
+            try:
+                link = json.loads(self.base_env.get("BYTE_PAINEIS") or "{}").get(wanted_id, "")
+            except ValueError:
+                link = ""
             raise ValueError(f"{names.get(wanted_id, wanted_id)} trabalha à parte, o tempo todo, com bot do Telegram e "
-                             "painel próprios: fale com ele por lá (não precisa trocar aqui).")
+                             "painel próprios: fale com ele por lá (não precisa trocar aqui)."
+                             + (f" Painel: {link}" if link else ""))
         with self._lock:
             new_manifest = agents.resolve_agent(target) if str(target or "").strip() else None
             current_id = (self.manifest or {}).get("id", "")

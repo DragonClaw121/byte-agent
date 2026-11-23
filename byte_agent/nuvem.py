@@ -539,6 +539,10 @@ class Supervisor:
             if agent in SEPARATE_AGENTS:
                 routes[tokens[agent]] = SEPARATE_AGENTS[agent]
                 self.child_env.setdefault(agent, {})["BYTE_UI_TOKEN"] = tokens[agent]
+        # v13.40: a Matrix abre o painel de quem roda à parte (menu de agentes e /painel)
+        base = public_address(self.env)
+        self.child_env["principal"]["BYTE_PAINEIS"] = json.dumps(
+            {a: f"{base}/ui?token={tokens[a]}" for a in procs if a in SEPARATE_AGENTS})
         try:
             self.router = PanelRouter("0.0.0.0", public_port(self.env), routes, KRONUS_INTERNAL_PORT)
         except OSError as err:

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -426,7 +425,63 @@ def install(service: Any, data_dir: Path) -> Meetings:
             return {"text": f"⚠️ {m['error']}"}
         return {"text": f"{'Gravando' if m['status'] == 'gravando' else 'Fazendo a ata'}... ({_clock(m['seconds'])} até agora)"}
 
+    # ---------------- painel (v13.40): gravar, enviar arquivo em partes e ver as atas pelo painel do PC
+    import base64 as _b64
+    uploads: Dict[str, Dict[str, Any]] = {}
+
+    def act_start(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return meetings.start(str(payload.get("title") or ""))
+
+    def act_chunk(payload: Dict[str, Any]) -> Dict[str, Any]:
+        audio = _b64.b64decode(str(payload.get("audio_b64") or ""), validate=True)
+        return meetings.add_chunk(int(payload.get("id") or 0), audio, "audio/wav", seq=int(payload.get("seq", -1)),
+                                  offset_s=float(payload["t"]) if payload.get("t") is not None else None)
+
+    def act_finish(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return meetings.finish(int(payload.get("id") or 0))
+
+    def act_get(payload: Dict[str, Any]) -> Dict[str, Any]:
+        m = meetings.get(int(payload.get("id") or 0))
+        if m is None:
+            raise KeyError("Reunião não encontrada.")
+        return {"id": m["id"], "title": m["title"], "status": m["status"], "seconds": m["seconds"], "ata": m["ata_text"],
+                "file": m["file"], "error": m["error"], "transcript": m["transcript"][-20000:]}
+
+    def act_file_part(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Arquivo gravado enviado pelo painel em partes de até 1 MB (o painel aceita pedidos de até 2 MB)."""
+        uid = str(payload.get("upload") or "")
+        if not re.fullmatch(r"[A-Za-z0-9]{8,40}", uid):
+            raise ValueError("Envio inválido.")
+        item = uploads.setdefault(uid, {"parts": {}, "started": time.time()})
+        for old in [k for k, v in uploads.items() if time.time() - v["started"] > 3600]:
+            uploads.pop(old, None)
+        item["parts"][int(payload.get("index") or 0)] = _b64.b64decode(str(payload.get("data_b64") or ""), validate=True)
+        total = int(payload.get("total") or 1)
+        if sum(len(v) for v in item["parts"].values()) > MAX_FILE_BYTES:
+            uploads.pop(uid, None)
+            raise ValueError("Arquivo acima de 150 MB.")
+        if len(item["parts"]) < total:
+            return {"received": len(item["parts"]), "total": total}
+        data = b"".join(item["parts"][i] for i in range(total))
+        uploads.pop(uid, None)
+        return meetings.from_file(data, str(payload.get("name") or "reuniao"), str(payload.get("mime") or ""),
+                                  str(payload.get("title") or ""))
+
+    def panel_status() -> Dict[str, Any]:
+        try:
+            stt = bool(service.get_voice_kit().transcriber.available)
+        except Exception:
+            stt = False
+        ms, g = getattr(service, "microsoft", None), getattr(service, "google", None)
+        return {"stt": stt, "recent": meetings.list(8),
+                "teams": bool(ms and any(a.get("kind") == "teams" for a in ms.accounts())),
+                "onedrive": bool(ms and ms.accounts()), "onedrive_auto": bool(ms and ms.auto_upload_on()),
+                "drive": bool(g and g.ready_accounts()), "drive_auto": bool(g and g.auto_upload_on())}
+
+    service.status_providers["reunioes"] = panel_status
     service.extra_actions.update({
+        "meeting_start": act_start, "meeting_chunk": act_chunk, "meeting_finish": act_finish, "meeting_get": act_get,
+        "meeting_file_part": act_file_part,
         "meeting_list": act_list,
         "meeting_minutes": act_minutes,
         "meeting_file": lambda p: meetings.from_file(p["data"], str(p.get("name") or ""), str(p.get("mime") or ""),
