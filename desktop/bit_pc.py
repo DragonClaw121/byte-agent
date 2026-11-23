@@ -257,6 +257,18 @@ def print_window(hwnd: int) -> Optional[Tuple[Any, Dict[str, int]]]:
     from ctypes import wintypes
     from PIL import Image
     user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    # identificadores do Windows têm 64 bits: sem declarar, o ctypes os cortaria para 32
+    user32.GetDC.restype = gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+    gdi32.CreateCompatibleBitmap.restype = gdi32.SelectObject.restype = ctypes.c_void_p
+    gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    gdi32.CreateCompatibleBitmap.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.DeleteObject.argtypes = gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.PrintWindow.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint]
+    user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.GetDIBits.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+                                ctypes.c_void_p, ctypes.c_uint]
     rect = wintypes.RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
         return None
@@ -1283,7 +1295,7 @@ class App:
         left = tk.Frame(body, bg=self.BG)
         right = tk.Frame(body, bg=self.BG)
         listbox = tk.Listbox(left, bg=self.CARD, fg=self.INK, selectbackground=self.PRI, relief="flat", borderwidth=0,
-                             font=("Segoe UI", 10), activestyle="none", exportselection=False)
+                             font=("Segoe UI", 10), activestyle="none", exportselection=False, height=1)
         listbox.pack(fill="both", expand=True)
         entries: Dict[str, Any] = {}
         for key, label in (("nome", "Nome"), ("uso", "Quando usar"), ("assunto", "Assunto")):
@@ -1297,7 +1309,7 @@ class App:
         sig_box = tk.Frame(win, bg=self.BG)
         self.label(sig_box, "Assinatura (vai no fim de todo e-mail)", 9, self.MUTED).pack(anchor="w")
         sig = tk.Text(sig_box, bg=self.CARD, fg=self.INK, insertbackground=self.INK, wrap="word", relief="flat",
-                      font=("Segoe UI", 10), height=3, width=1, borderwidth=0, padx=self.px(6), pady=self.px(4))
+                      font=("Segoe UI", 10), height=2, width=1, borderwidth=0, padx=self.px(6), pady=self.px(4))
         sig.pack(fill="x")
 
         def show(res: Dict[str, Any]) -> None:
@@ -2027,7 +2039,14 @@ def autotest(out_path: str) -> int:
             if before != after or not result["janelas_escondidas_na_foto"]:
                 problems.append(f"foto sem o Bit: transparência não voltou ({before} -> {after})")
             if IS_WINDOWS:
-                direct_shot = print_window(hwnd_of(app.root))
+                probe = app.tk.Toplevel(app.root)                       # janela comum (as do Bit saem pretas de propósito)
+                probe.geometry("420x260+40+40")
+                app.tk.Label(probe, text="janela de teste", bg="#2266cc", fg="white", font=("Segoe UI", 20)).pack(
+                    fill="both", expand=True)
+                probe.update()
+                time.sleep(0.3)
+                direct_shot = print_window(hwnd_of(probe))
+                probe.destroy()
                 result["printwindow"] = list(direct_shot[0].size) if direct_shot else None
                 if direct_shot is None:
                     problems.append("PrintWindow não fotografou a janela")
