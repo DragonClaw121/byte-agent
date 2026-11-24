@@ -359,7 +359,7 @@ def test_new_version_is_announced_once(tmp_path, monkeypatch):
     db.set_setting("versao_anunciada_em", time.time() - 13 * 3600)          # último aviso há mais de 12 h
     assert headless.announce_version(svc) is True
     msg = db.pop_undelivered_proactive_messages("telegram")[-1]["message"]
-    assert msg == f"✅ Atualizei: v13.0 → v{engine.BYTE_VERSION}."
+    assert msg.startswith(f"✅ Atualizei: v13.0 → v{engine.BYTE_VERSION}.") and "Novidades:" in msg
 
 
 def test_many_updates_in_a_day_become_one_message(tmp_path, monkeypatch):
@@ -376,7 +376,7 @@ def test_many_updates_in_a_day_become_one_message(tmp_path, monkeypatch):
     assert headless.announce_version(svc, now=t0 + 13 * 3600) is True
     assert headless.announce_version(svc, now=t0 + 14 * 3600) is False    # mesma versão: nada
     msgs = [m["message"] for m in db.pop_undelivered_proactive_messages("painel")]
-    assert msgs == [f"✅ Atualizei: v13.40 → v{engine.BYTE_VERSION}."]
+    assert len(msgs) == 1 and msgs[0].startswith(f"✅ Atualizei: v13.40 → v{engine.BYTE_VERSION}.")
 
 
 def test_each_agent_in_its_own_process():

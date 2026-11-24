@@ -204,6 +204,30 @@ def agent_id() -> str:
 ANNOUNCE_EVERY_S = 12 * 3600
 
 
+def _version_tuple(v: Any) -> Tuple[int, ...]:
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except ValueError:
+        return ()
+
+
+def release_notes(old: str, new: str, limit: int = 8) -> str:
+    """v13.61: as novidades entre a versão anunciada e a atual (byte_agent/novidades.json), em poucas linhas."""
+    try:
+        items = json.loads((Path(__file__).resolve().parent / "novidades.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    lo, hi = _version_tuple(old), _version_tuple(new)
+    if not lo or not hi:
+        return ""
+    lines = [f"• {item}" for entry in items if isinstance(entry, dict) and lo < _version_tuple(entry.get("versao")) <= hi
+             for item in entry.get("itens") or []]
+    if not lines:
+        return ""
+    more = len(lines) - limit
+    return "\nNovidades:\n" + "\n".join(lines[-limit:]) + (f"\n(+{more} mais antigas)" if more > 0 else "")
+
+
 def announce_version(service: Any, now: Optional[float] = None) -> bool:
     """v13.17: ligou numa versão nova -> avisa no painel e no Telegram (a 1ª vez só registra).
     v13.41: quem avisa é a Matrix (atualização automática) E o agente que pediu o /atualizar, no bot dele.
@@ -234,7 +258,8 @@ def announce_version(service: Any, now: Optional[float] = None) -> bool:
         db.set_setting("versao_anunciada_em", now)
         if requested_here:
             db.set_setting("atualizacao_avisada", request_key)
-        db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{current}.", brain_used="ATUALIZAÇÃO")
+        db.enqueue_proactive_message("update", f"✅ Atualizei: v{last} → v{current}." + release_notes(last, current),
+                                     brain_used="ATUALIZAÇÃO")
         return True
     if me != "matrix":
         db.set_setting("versao_anunciada", current)          # os outros agentes só registram (quem avisa é a Matrix)

@@ -1,0 +1,72 @@
+[
+ {
+  "versao": "13.52",
+  "itens": [
+   "Modelos de e-mail guardam o formato do Outlook (tabelas, cores, imagens)",
+   "Avisos de atualização sem repetição"
+  ]
+ },
+ {
+  "versao": "13.53",
+  "itens": [
+   "Importação do .oft sem o Outlook clássico (HTML de dentro do arquivo)",
+   "Campos [Nome] e [SOFTWARE] nos modelos"
+  ]
+ },
+ {
+  "versao": "13.54",
+  "itens": [
+   "Login da Microsoft pelo navegador (no lugar do código de dispositivo)",
+   "E-mails pedidos na conversa do PC usam a conversa, o último cliente e o seu modelo"
+  ]
+ },
+ {
+  "versao": "13.55",
+  "itens": [
+   "/google endereco para resolver o erro redirect_uri_mismatch"
+  ]
+ },
+ {
+  "versao": "13.56",
+  "itens": [
+   "Aviso um dia antes de o login de teste do Google vencer (/google teste off desliga)"
+  ]
+ },
+ {
+  "versao": "13.57",
+  "itens": [
+   "A Byte ganhou instância própria (painel e API)",
+   "Cópias diárias dos dados (7 dias + 4 semanas)",
+   "/saude mostra a memória do servidor",
+   "Atualização a cada 1 hora"
+  ]
+ },
+ {
+  "versao": "13.58",
+  "itens": [
+   "Bit no PC entende pedidos de e-mail sem a palavra \"e-mail\"",
+   "/saude mostra as falhas contornadas nas últimas 24 h"
+  ]
+ },
+ {
+  "versao": "13.59",
+  "itens": [
+   "Olhar a tela usa a conversa e guarda os dados lidos",
+   "\"Continue a análise do cliente\" vira pesquisa de cliente",
+   "O Bit não finge mais acesso ao ERP"
+  ]
+ },
+ {
+  "versao": "13.60",
+  "itens": [
+   "Ficha de cada cliente: /clientes, /ficha, /nota_cliente — usada na pesquisa, nos e-mails e na conversa"
+  ]
+ },
+ {
+  "versao": "13.61",
+  "itens": [
+   "Painel web separado do motor (manutenção mais segura)",
+   "Notas de versão nos avisos de atualização"
+  ]
+ }
+]
