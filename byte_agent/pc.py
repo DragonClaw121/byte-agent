@@ -350,6 +350,18 @@ class PcHub:
     def remember_email(self, ask: str, out: Dict[str, Any], adjusted: bool = False) -> str:
         self.last_email = {"t": time.time(), "assunto": out.get("assunto", ""), "corpo": out.get("corpo", ""),
                            "modelo_n": out.get("modelo_n")}
+        book = getattr(self.service, "client_book", None)       # v13.60: o e-mail entra no histórico da ficha
+        if book is not None:
+            card = book.find(" ".join([ask, str(out.get("para") or ""), str(out.get("assunto") or ""),
+                                       str(out.get("corpo") or "")[:800]]))
+            if card is None:
+                from .clientes import last_client
+                last = last_client(self.service.db, 4 * 3600)
+                card = book.find(str(last.get("cliente") or "")) if last else None
+            if card is not None:
+                book.add_event(card["n"], "email", f"{'ajustado' if adjusted else 'preparado'}: {out.get('assunto', '')}"
+                               + (f" (modelo {out['modelo']})" if out.get("modelo") else ""))
+                out["ficha"] = card["n"]
         note = (f"✉️ {'Ajustei' if adjusted else 'Preparei'} o e-mail"
                 + (f" no seu modelo \"{out['modelo']}\"" if out.get("modelo") else "")
                 + (" (com o formato do Outlook)" if out.get("corpo_html") else "") + f". Assunto: {out.get('assunto', '')}")
@@ -369,6 +381,10 @@ class PcHub:
                  if isinstance(i, dict) and now - float(i.get("t") or 0) < self.SEEN_TTL_S]
         items.append({"t": now, "texto": text[:2500]})
         self.service.db.set_setting(self.SEEN, items[-8:])
+        book = getattr(self.service, "client_book", None)       # v13.60: entra no histórico da ficha do cliente
+        card = book.find(text) if book is not None else None
+        if card is not None:
+            book.add_event(card["n"], "tela", text[:400], min_gap_s=600)
 
     def seen(self) -> str:
         """O que o Bit leu na tela nas últimas 12 h (do mais antigo para o mais novo)."""
@@ -399,6 +415,14 @@ class PcHub:
             client = last_client(self.service.db)
         except Exception:
             client = {}
+        book = getattr(self.service, "client_book", None)       # v13.60: a ficha do cliente citado
+        if book is not None:
+            recent_user = " ".join(line for line in lines if line.startswith("Usuário:"))[-1500:]
+            card = book.find(ask) or book.find(recent_user)
+            if card is None and client:
+                card = book.find(str(client.get("cliente") or ""))
+            if card is not None:
+                parts.append(book.context_block(card))
         seen = self.seen()
         if seen:
             parts.append("O QUE VOCÊ LEU NA TELA DO USUÁRIO NAS ÚLTIMAS HORAS (mais recente por último):\n" + seen)

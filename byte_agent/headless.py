@@ -120,6 +120,8 @@ def build_service(data_dir: Path, ollama_url: Optional[str] = None, model: Optio
         pc.install(service)                                 # v13.47: Bit no PC (conversa, olhar a tela, ajuda ao vivo)
         from . import clientes
         clientes.install(service)                           # v13.50: pesquisa de cliente com plano de abordagem
+        from . import fichas
+        fichas.install(service)                             # v13.60: ficha persistente de cada cliente
     return service
 
 

@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.59"
+BYTE_VERSION = "13.60"
 
 
 def _note_failure(where: str, err: BaseException) -> None:

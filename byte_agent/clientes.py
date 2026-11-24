@@ -307,6 +307,10 @@ class ClientResearch:
         except Exception:
             pass
         numbered = "\n\n".join(f"[{s['n']}] {s['title']} — {s['url']}\n{s['text']}" for s in sources) or "(nenhuma)"
+        book = getattr(self.service, "client_book", None)         # v13.60: o que já sabíamos dele (ficha)
+        card = book.find(" ".join(filter(None, [cnpj, name, (reg or {}).get("razao_social", ""),
+                                                (reg or {}).get("nome_fantasia", "")]))) if book is not None else None
+        history = book.context_block(card) if card is not None else ""
         templates, tpl, email_block = getattr(self.service, "email_templates", None), None, ""
         if templates is not None:                              # v13.51: o e-mail de abordagem segue o modelo do usuário
             tpl, email_block = templates.guidance(f"abordagem de cliente {ident.get('foco') or ''} {request}")
@@ -327,6 +331,8 @@ class ClientResearch:
             f"QUEM É O USUÁRIO (a nossa empresa): {json.dumps(profile, ensure_ascii=False) or 'não informado'}\n"
             f"CADASTRO OFICIAL (CNPJ):\n{json.dumps(reg, ensure_ascii=False) if reg else 'não encontrado'}\n"
             f"DADOS INTERNOS (compras etc.):\n{internal_all or 'não informados'}\n"
+            + (f"{history}\n(Isso é o que já sabíamos de antes: use como dado interno [interno] e mostre o que mudou.)\n"
+               if history else "") +
             f"FONTES DA WEB (só as que mencionam o cliente):\n{numbered}",
             json_format=True, max_tokens=3500)
         display = (reg or {}).get("nome_fantasia") or (reg or {}).get("razao_social") or name
@@ -362,6 +368,12 @@ class ClientResearch:
             doc = actions["work_document"]({"titulo": title, "subtitulo": f"Gerado pelo Bit em {time.strftime('%d/%m/%Y %H:%M')}",
                                             "secoes": sections})
             out["arquivos"] = [doc["arquivo"]]
+        if book is not None:
+            try:
+                self._save_card(book, display, out, reg, name, internal_all, sections)
+            except Exception as err:
+                from .falhas import note
+                note("Ficha do cliente (gravar pesquisa)", err)
         self.service.db.record_audit("client_research", "pesquisar_cliente", "success",
                                      {"cadastro": bool(reg), "fontes": len(sources), "interno": bool(internal_all)})
         out["texto"] = self.message(out, web_notes)
@@ -373,6 +385,22 @@ class ClientResearch:
         except Exception:
             pass
         return out
+
+    @staticmethod
+    def _save_card(book: Any, display: str, out: Dict[str, Any], reg: Optional[Dict[str, Any]], name: str,
+                   internal: str, sections: List[Dict[str, Any]]) -> None:
+        def items(title_word: str) -> List[str]:
+            for s in sections:
+                if title_word in fold(s.get("titulo") or ""):
+                    return [str(i) for i in (s.get("itens") or []) + (s.get("paragrafos") or []) if str(i).strip()]
+            return []
+        people = items("pessoas")[:6] + [f"{s['nome']} ({s['qualificacao']})" for s in (reg or {}).get("socios") or []][:5]
+        card = book.upsert(display, cnpj=out["cnpj"], apelidos=[name, (reg or {}).get("razao_social", ""),
+                                                                (reg or {}).get("nome_fantasia", "")],
+                           resumo=out["resumo"], compras=(f"[{time.strftime('%d/%m/%Y')}] " + internal) if internal else "",
+                           contatos=people, proximos=items("proximos")[:6], plano=(out["arquivos"] or [""])[0])
+        book.add_event(card["n"], "pesquisa", f"{out['titulo']}: {out['resumo'][:300]}")
+        out["ficha"] = card["n"]
 
     @staticmethod
     def message(out: Dict[str, Any], web_notes: List[str]) -> str:

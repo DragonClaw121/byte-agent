@@ -45,6 +45,31 @@ encontrado aparece como "não encontrado": nada é inventado.
 
 No Bit do PC, o e-mail de abordagem abre numa janela (copiar ou abrir no Outlook) e o .docx fica em Documentos\Bit.
 
+## Ficha do cliente (v13.60)
+Cada cliente pesquisado ganha uma **ficha que fica guardada** e cresce com o tempo:
+- **O que guarda:**
+  - nomes (razão social, fantasia, como você chama);
+  - CNPJs, inclusive de outras unidades do grupo;
+  - pessoas-chave;
+  - compras e dados internos, acumulados sem repetir;
+  - resumo, próximos passos e o último plano de conta;
+  - o **histórico**: pesquisas, e-mails preparados, telas lidas e notas suas.
+- **Quem escreve:** a pesquisa de cliente, o Bit no PC (cada tela lida que cita o cliente e cada e-mail preparado para
+  ele) e você.
+- **Quem usa:** a próxima pesquisa (o plano novo parte do que já sabíamos e mostra o que mudou), o **Preparar e-mail**
+  e o **Olhar a tela** do PC, e a conversa em qualquer canal. Basta citar o cliente ("quando renova o Figma da EMS?")
+  e a ficha entra na resposta. Um CNPJ de outra filial, com a mesma raiz, cai na mesma ficha.
+
+| Comando | O que faz |
+|---|---|
+| `/clientes` | lista as fichas, das mais recentes para as mais antigas |
+| `/ficha EMS` (ou o número ou o CNPJ) | mostra tudo o que o Bit sabe do cliente |
+| `/nota_cliente EMS | renovação do Figma em março; falar com a Júlia` | anota; se for sobre compra/renovação, entra nas compras |
+| `/apagar_ficha EMS` | apaga a ficha e o histórico |
+
+Também no painel e no app, em **⚡ Comandos → Clientes**. A ficha fica no banco do próprio agente: cada convidado
+tem as suas.
+
 ## Limites
 - **Cadastro:** só para empresas brasileiras (CNPJ). Para empresas de fora, sai só a parte da web.
 - **Busca na web:** a qualidade depende do buscador configurado. Com o Tavily (`TAVILY_API_KEY`) é bem melhor.

@@ -52,6 +52,7 @@ HELP_TEXT = (
     "/permissoes — o que o agente faz sozinho | /permissao <tipo> sugerir|aprovar|automatico | /atividade — o que ele fez\n"
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/cliente <nome ou CNPJ> | <compras que você sabe> — pesquisa do cliente (cadastro, web) e plano de abordagem em .docx\n"
+    "/clientes — fichas dos clientes | /ficha <nome ou nº> — tudo o que sei do cliente | /nota_cliente <nome> | <nota>\n"
     "/modelos_email — seus modelos de e-mail | /modelo_email <nome> | <situação> (texto na linha de baixo) | /assinatura <texto>\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -834,6 +835,25 @@ class TelegramBridge:
             res = self._dispatch("client_research", {"cliente": who.strip(), "dados_internos": internal.strip()})
             self.send(chat_id, str(res.get("texto") or "Pronto."))
             self._send_outputs(chat_id, res.get("arquivos"))
+        elif cmd in {"/clientes", "/ficha", "/nota_cliente", "/apagar_ficha"}:   # v13.60: fichas de clientes
+            if "client_cards" not in getattr(self.service, "extra_actions", {}):
+                self.send(chat_id, "As fichas de clientes não estão disponíveis neste agente.")
+                return
+            try:
+                if cmd == "/clientes" or (cmd == "/ficha" and not arg):
+                    res = self.service.dispatch_request("client_cards", {})
+                elif cmd == "/ficha":
+                    res = self.service.dispatch_request("client_card", {"ref": arg})
+                elif cmd == "/apagar_ficha":
+                    res = self.service.dispatch_request("client_card_delete", {"ref": arg})
+                else:
+                    who, _, note = arg.partition("|")
+                    res = self.service.dispatch_request("client_note", {"cliente": who.strip(), "nota": note.strip()})
+                msg = ("⚠️ " + re.sub(r"^\w*(Error|Exception): ", "", str(res["error"]))) if res.get("error") else \
+                    str(res.get("text") or "Pronto.")
+            except ValueError as err:
+                msg = f"⚠️ {err}"
+            self.send(chat_id, msg)
         elif cmd == "/pesquisar":
             if not arg:
                 self.send(chat_id, "Use: /pesquisar <pergunta>")
