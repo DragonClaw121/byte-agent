@@ -787,6 +787,15 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
             parts = [x for x in sub.split("/")[1:] if x]
             if not parts and method == "POST":
                 body = read_body(h, 4096) or {}
+                if getattr(meetings, "_transcribe", None) is None:      # sem transcrição configurada: avisa já no início
+                    try:
+                        ready = bool(service.get_voice_kit().transcriber.available)
+                    except Exception:
+                        ready = False
+                    if not ready:
+                        h._send_json(503, {"error": "A transcrição de voz não está configurada neste agente "
+                                                    "(BYTE_STT_URL; veja docs/voz.md)."})
+                        return
                 h._send_json(200, meetings.start(str(body.get("titulo") or ""), source="pc"))
                 return
             if not parts or not parts[0].isdigit():

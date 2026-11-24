@@ -333,6 +333,8 @@ def test_meeting_from_the_pc(bit):
     import wave
     svc, _ = bit
     token = pair(svc)
+    status, res = call(svc, "POST", "reuniao", token, {"titulo": "x"})                    # sem transcrição: avisa no início
+    assert status == 503 and "BYTE_STT_URL" in res["error"]
     svc.meetings._transcribe = lambda audio, mime, prompt: "Vamos fechar a proposta até sexta."
     svc.meetings._llm = lambda messages, max_tokens: json.dumps({"resumo": "Proposta.", "decisoes": [], "tarefas": [],
                                                                   "pendencias": [], "proximos_passos": []})
