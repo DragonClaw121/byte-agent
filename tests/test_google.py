@@ -145,3 +145,18 @@ def test_drive_auto_upload_creates_the_folder(svc):
     assert svc.fakeg.folders == [{"name": "Byte", "mimeType": "application/vnd.google-apps.folder"}]
     up = svc.fakeg.uploads[0]
     assert b'"parents": ["PASTA"]' in up and b'"name": "documento_proposta_' in up and b"PK" in up
+
+
+def test_redirect_help_shows_the_exact_uri(tmp_path, monkeypatch):
+    """v13.55: redirect_uri_mismatch — /google endereco mostra exatamente o que o agente manda ao Google."""
+    monkeypatch.setenv("BYTE_GOOGLE_REDIRECT", "  https://byte.exemplo.io/oauth/google \n")
+    monkeypatch.setenv("BYTE_GOOGLE_CLIENT_ID", "123-abc.apps.googleusercontent.com")
+    from types import SimpleNamespace
+    from byte_agent import google_agenda
+    import os
+    read = lambda names: next((os.environ.get(n, "") for n in names if os.environ.get(n)), "")
+    g = google_agenda.Google(SimpleNamespace(db=SimpleNamespace(enqueue_proactive_message=lambda *a, **k: None)), None, read, tmp_path)
+    assert g.redirect_uri() == "https://byte.exemplo.io/oauth/google"
+    text = g.redirect_help()
+    assert "https://byte.exemplo.io/oauth/google\n" in text and "123-abc.apps.googleusercontent.com" in text
+    assert "URIs de redirecionamento autorizados" in text

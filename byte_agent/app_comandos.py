@@ -62,6 +62,7 @@ CATALOG: List[tuple] = [
     ("Contas", "🔑 Conectar a Microsoft", "/microsoft entrar", "", "", ""),
     ("Contas", "🟩 Google (agenda e Drive)", "/google", "", "", ""),
     ("Contas", "🔑 Conectar o Google", "/google entrar", "", "", ""),
+    ("Contas", "🔗 Endereço do login do Google", "/google endereco", "", "", ""),
     ("Pessoas", "👥 Pessoas", "/pessoas", "", "", ""),
     ("Pessoas", "➕ Convidar pessoa", "/convidar", "Nome (e \"admin\" no fim para administrador)", "Ana", "obrigatorio"),
     ("Pessoas", "🖥️ Painel de uma pessoa", "/pessoas painel", "Número da pessoa", "1", "obrigatorio"),

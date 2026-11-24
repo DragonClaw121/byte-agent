@@ -93,7 +93,7 @@ class Google:
         return cid, secret
 
     def redirect_uri(self) -> str:
-        base = self.read_secret(("BYTE_GOOGLE_REDIRECT",)) or (public_base() + "/oauth/google" if public_base() else "")
+        base = str(self.read_secret(("BYTE_GOOGLE_REDIRECT",)) or "").strip() or (public_base() + "/oauth/google" if public_base() else "")
         if not base:
             raise PermissionError("Não sei o endereço público do agente para o Google voltar (BYTE_ENDERECO_PUBLICO).")
         return base
@@ -130,7 +130,26 @@ class Google:
             threading.Thread(target=self.wait_login, args=(state,), daemon=True, name="ByteLoginGoogle").start()
         return {"text": "🔑 Login do Google (agenda e Drive)\nAbra este link, entre com a sua conta e aceite:\n" + url +
                         "\nSe aparecer \"O Google não verificou este app\": Avançado → Acessar (é o seu próprio projeto).\n"
-                        "O link vale 10 minutos. Eu aviso aqui quando terminar.", "url": url, "state": state}
+                        "O link vale 10 minutos. Eu aviso aqui quando terminar.\n"
+                        "Se der \"redirect_uri_mismatch\": /google endereco mostra o que cadastrar no Google Cloud.",
+                "url": url, "state": state}
+
+    def redirect_help(self) -> str:
+        """v13.55: o erro 400 redirect_uri_mismatch = o endereço de volta não está IDÊNTICO no cliente OAuth."""
+        try:
+            uri = self.redirect_uri()
+        except PermissionError as err:
+            return f"⚠️ {err}"
+        cid = self.read_secret(("BYTE_GOOGLE_CLIENT_ID",)) or "(BYTE_GOOGLE_CLIENT_ID não configurado)"
+        return ("🔗 Endereço de volta do login do Google (o agente manda exatamente este):\n"
+                f"{uri}\n\n"
+                "No Google Cloud → Google Auth Platform → Clientes → abra o cliente com o ID\n"
+                f"{cid}\n"
+                "e confira em \"URIs de redirecionamento autorizados\" (NÃO em \"Origens JavaScript\"):\n"
+                "• o endereço colado igualzinho: https, sem barra no fim, sem espaço;\n"
+                "• o cliente é do tipo \"Aplicativo da Web\" e é o mesmo ID acima (se criou outro cliente, rode de novo "
+                "google-conta.sh com o ID e a chave dele).\n"
+                "Depois de salvar, o Google pode levar alguns minutos para aceitar. Então: /google entrar.")
 
     def receive(self, state: str, code: str, error: str = "") -> bool:
         """Chamado pela rota pública /oauth/google (em qualquer processo): deixa o código para quem pediu."""
@@ -403,6 +422,8 @@ def install(service: Any, data_dir: Path) -> Google:
             return {"text": format_status(g.status())}
         if words[0] == "entrar":
             return g.start_login()
+        if words[0] in {"endereco", "endereço", "redirect", "uri"}:
+            return {"text": g.redirect_help()}
         if words[0] == "drive" and len(words) > 1 and words[1] in {"on", "off"}:
             service.db.set_setting("google.drive_auto", words[1] == "on")
             return {"text": f"Drive automático {'ligado' if words[1] == 'on' else 'desligado'}."}
@@ -414,7 +435,8 @@ def install(service: Any, data_dir: Path) -> Google:
         if words[0] == "padrao" and len(words) > 1 and words[1] in {"google", "outlook"}:
             service.db.set_setting("agenda_padrao", words[1])
             return {"text": f"Compromissos novos vão para o {calendarios.NAMES[words[1]]}."}
-        return {"text": "Use: /google · /google entrar · /google drive on|off · /google padrao google|outlook · /google sair"}
+        return {"text": "Use: /google · /google entrar · /google endereco · /google drive on|off · /google padrao google|outlook · "
+                        "/google sair"}
     service.extra_actions["google_command"] = act_command
     service.status_providers["google"] = g.status
     return g

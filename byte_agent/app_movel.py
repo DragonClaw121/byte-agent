@@ -207,7 +207,9 @@ STATIC = {"/icone-192.png": 192, "/icone-512.png": 512, "/apple-touch-icon.png":
 
 def public_base() -> str:
     """Endereço público do app (para o link de pareamento): BYTE_ENDERECO_PUBLICO ou o do Azure Container Apps."""
-    url = os.environ.get("BYTE_ENDERECO_PUBLICO", "").strip().rstrip("/")
+    url = (os.environ.get("BYTE_ENDERECO_PUBLICO", "") or os.environ.get("BYTE_ENDERECO", "")).strip().rstrip("/")
+    if url and not url.startswith("http"):
+        url = "https://" + url
     if url.startswith("https://"):
         return url
     name, suffix = os.environ.get("CONTAINER_APP_NAME", ""), os.environ.get("CONTAINER_APP_ENV_DNS_SUFFIX", "")

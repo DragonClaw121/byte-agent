@@ -36,6 +36,17 @@ Abra o link, entre com a sua conta e aceite. Se aparecer **"O Google não verifi
 **Avançado → Acessar Byte (não seguro)**: o app é o seu próprio projeto. O agente avisa quando terminar. Repita para
 outra conta Google, se quiser.
 
+### Erro 400: redirect_uri_mismatch
+O endereço de volta que o agente manda não está **idêntico** no cliente OAuth. Mande `/google endereco` (ou, no app,
+Comandos → 🔗 Endereço do login do Google): ele mostra o endereço exato e o ID do cliente em uso. No Google Cloud →
+**Google Auth Platform → Clientes**, abra o cliente com esse ID e confira:
+- o endereço está em **URIs de redirecionamento autorizados**, não em "Origens JavaScript autorizadas";
+- igual ao mostrado: `https`, sem barra no fim, sem espaço;
+- o cliente é **Aplicativo da Web** e é o mesmo ID (se você criou outro cliente, rode `google-conta.sh` de novo com o
+  ID e a chave dele).
+
+Salve, espere alguns minutos (o Google demora para aplicar) e mande `/google entrar` de novo.
+
 ## Uso
 - `/compromissos` mostra Google, Outlook e iCal juntos. O resumo da manhã, o aviso de compromisso, o "hora de sair" e
   os horários livres também usam o Google.
