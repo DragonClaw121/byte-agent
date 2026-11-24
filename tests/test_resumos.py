@@ -234,3 +234,17 @@ def test_morning_brief_lists_client_next_steps(service, monkeypatch):
     text = b.morning()["text"]
     assert "🗂️ Clientes — próximos passos:\n• EMS S/A: Enviar proposta (Gabriel) até sexta; Agendar onboarding" in text
     assert "Sem passos" not in text and "Dia livre" not in text
+
+
+def test_morning_brief_lists_renewals(service, monkeypatch):
+    """v13.67: renovações dos próximos 30 dias no resumo da manhã."""
+    from datetime import date as _date
+    from byte_agent import fichas_datas
+    monkeypatch.delenv("BYTE_AGENDA_ICS")
+    card = service.client_book.upsert("EMS S/A")
+    when = _date.fromordinal(_date.today().toordinal() + 10).isoformat()
+    fichas_datas.add_date(service.client_book, card["n"], "renovacao", when, "Figma Enterprise")
+    b = briefings(service, writer=lambda kind, facts: "")
+    b.clock = time.time
+    text = b.morning()["text"]
+    assert "🔁 Renovações próximas:\n• EMS S/A — renovação Figma Enterprise" in text and "(em 10 dias)" in text

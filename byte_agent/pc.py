@@ -132,7 +132,8 @@ PREPARE_KINDS = ("email", "planilha", "apresentacao", "documento", "texto", "cli
 PREPARE_RULES = {
     "email": ("Escreva o e-mail pedido, pronto para enviar, no tom adequado (profissional e cordial), em português do Brasil. "
               "Responda em JSON: {\"titulo\": \"rótulo curto\", \"para\": \"destinatário, se souber\", \"assunto\": \"...\", "
-              "\"corpo\": \"texto completo, com saudação e assinatura em [SEU NOME] se não souber o nome\"}."),
+              "\"corpo\": \"texto completo, com saudação e assinatura em [SEU NOME] se não souber o nome\"}. Texto puro: "
+              "sem markdown (nada de ** ou #)."),
     "texto": ("Escreva o texto pedido (resumo, resposta, mensagem, relatório curto), pronto para usar. "
               "Responda em JSON: {\"titulo\": \"rótulo curto\", \"texto\": \"...\"}."),
     "planilha": ("Monte a planilha pedida. Responda em JSON: {\"titulo\": \"...\", \"colunas\": [{\"nome\": \"...\", "
@@ -482,7 +483,9 @@ class PcHub:
                 system += "\n\n" + block
             if tpl is not None and tpl.get("campos"):
                 system += ("\n\nInclua também no JSON \"campos\": {" + ", ".join(f'"{c}": "valor"' for c in tpl["campos"])
-                           + "} com o valor de cada campo do modelo para este e-mail (vazio se não souber).")
+                           + "} com o valor de cada campo do modelo para este e-mail: CURTO (1 a 6 palavras), exatamente o "
+                             "que o campo pede (ex.: Nome = só o primeiro nome da pessoa), sem markdown, sem aspas e sem "
+                             "frases; vazio se não souber.")
         raw = vision(self.service, system, prompt, image_url or None, json_format=True, max_tokens=2500)
         spec = _json(raw)
         out: Dict[str, Any] = {"tipo": kind, "titulo": str(spec.get("titulo") or spec.get("title") or kind).strip()[:120],

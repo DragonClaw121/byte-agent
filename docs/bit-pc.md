@@ -115,6 +115,12 @@ pronto sai igual ao modelo.
   - **Ver:** mostra no navegador como vai ficar;
   - **Só o texto:** copia o que está na caixa. As edições feitas na caixa valem para essa opção.
 - O Bit **nunca envia sozinho**: o envio é sempre seu, pelo Outlook. Scripts e códigos dentro do HTML são removidos.
+- **Fidelidade ao modelo (v13.67):** o texto do modelo fica palavra por palavra. Só os campos e, se indispensável, uma
+  frase de outra situação mudam. Negrito, cor e marca-texto que o modelo não tem são recusados, e o e-mail sai só em
+  texto se a IA reescrever demais. Campos que o Outlook "picou" em etiquetas (`[<span>Nome</span>]`) voltam a ser campos.
+- **Imagens transparentes (v1.11):** o Outlook novo pintava de branco o fundo transparente das imagens. Antes de copiar
+  ou abrir no Outlook, o Bit aplica na imagem a cor de fundo do bloco onde ela está no modelo, então ela fica igual em
+  qualquer programa de e-mail.
 
 ### Transcrever reunião (v1.8 do app, v13.62)
 Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:

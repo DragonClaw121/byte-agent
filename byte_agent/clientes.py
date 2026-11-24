@@ -326,7 +326,11 @@ class ClientResearch:
             "(compras)', 'Oportunidades', 'Riscos e pontos de atenção', 'Estratégia de acionamento' (canal, quem procurar, "
             "melhor momento, argumento principal, oferta, objeções prováveis e como responder) e 'Próximos passos' "
             "(3 a 5, com prazo); \"email\": {\"assunto\": \"...\", \"corpo\": \"e-mail de abordagem pronto, curto e "
-            "personalizado, assinatura [SEU NOME]\"}}." + (f"\n\nPARA O E-MAIL DE ABORDAGEM:\n{email_block}" if email_block else ""),
+            "personalizado, assinatura [SEU NOME]\"}, \"datas\": [{\"tipo\": \"compra|renovacao|vencimento\", "
+            "\"data\": \"AAAA-MM-DD\", \"descricao\": \"produto/contrato (ex.: Figma Enterprise, 18 licenças)\", "
+            "\"estimada\": true|false}]}. Em \"datas\", só datas que ESTÃO nos dados internos (compras, emissões, "
+            "vencimentos); licença ANUAL comprada numa data = renovação estimada 12 meses depois (estimada: true); "
+            "nada de datas inventadas (lista vazia se não houver)." + (f"\n\nPARA O E-MAIL DE ABORDAGEM:\n{email_block}" if email_block else ""),
             f"PEDIDO DO USUÁRIO: {request}\nFOCO: {ident.get('foco') or 'não informado'}\n"
             f"QUEM É O USUÁRIO (a nossa empresa): {json.dumps(profile, ensure_ascii=False) or 'não informado'}\n"
             f"CADASTRO OFICIAL (CNPJ):\n{json.dumps(reg, ensure_ascii=False) if reg else 'não encontrado'}\n"
@@ -369,6 +373,7 @@ class ClientResearch:
                                             "secoes": sections})
             out["arquivos"] = [doc["arquivo"]]
         if book is not None:
+            out["_datas"] = plan.get("datas") if isinstance(plan.get("datas"), list) else []
             try:
                 self._save_card(book, display, out, reg, name, internal_all, sections)
             except Exception as err:
@@ -376,6 +381,7 @@ class ClientResearch:
                 note("Ficha do cliente (gravar pesquisa)", err)
         self.service.db.record_audit("client_research", "pesquisar_cliente", "success",
                                      {"cadastro": bool(reg), "fontes": len(sources), "interno": bool(internal_all)})
+        out.pop("_datas", None)
         out["texto"] = self.message(out, web_notes)
         try:                                                     # v13.54: "o e-mail para ESSE cliente" logo depois
             self.service.db.set_setting(LAST_CLIENT, {
@@ -401,6 +407,14 @@ class ClientResearch:
                            contatos=people, proximos=items("proximos")[:6], plano=(out["arquivos"] or [""])[0])
         book.add_event(card["n"], "pesquisa", f"{out['titulo']}: {out['resumo'][:300]}")
         out["ficha"] = card["n"]
+        from .fichas_datas import add_date
+        for d in out.get("_datas") or []:                         # v13.67: compras e renovações (estimadas) na ficha
+            if isinstance(d, dict) and re.match(r"^\d{4}-\d{2}-\d{2}$", str(d.get("data") or "")):
+                try:
+                    add_date(book, card["n"], str(d.get("tipo") or "outro"), str(d["data"]), str(d.get("descricao") or ""),
+                             bool(d.get("estimada")))
+                except ValueError:
+                    continue
 
     @staticmethod
     def message(out: Dict[str, Any], web_notes: List[str]) -> str:

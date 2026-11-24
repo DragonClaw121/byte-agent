@@ -100,5 +100,14 @@
   "itens": [
    "Segurança: o código que o agente roda (com aprovação) só recebe o ambiente mínimo, sem nenhuma senha ou chave"
   ]
+ },
+ {
+  "versao": "13.67",
+  "itens": [
+   "Fichas de clientes com datas: renovações (inclusive a estimada de licença anual), compras e último contato",
+   "Alertas de renovação (60/30/15/7/1 dias) e lista semanal de clientes sem contato; /renovacoes, /data_cliente, /alertas_clientes",
+   "E-mails: o texto do seu modelo fica palavra por palavra, sem negritos inventados; campos picados pelo Outlook voltam a funcionar",
+   "Bit no PC 1.11: imagens com fundo transparente não ficam mais com fundo branco no Outlook"
+  ]
  }
 ]

@@ -53,6 +53,7 @@ HELP_TEXT = (
     "/pesquisar <pergunta> — pesquisa profunda na web, com relatório e fontes | /buscar <termos> — busca rápida\n"
     "/cliente <nome ou CNPJ> | <compras que você sabe> — pesquisa do cliente (cadastro, web) e plano de abordagem em .docx\n"
     "/clientes — fichas dos clientes | /ficha <nome ou nº> — tudo o que sei do cliente | /nota_cliente <nome> | <nota>\n"
+    "/data_cliente <cliente> | renovação <produto> | <dd/mm/aaaa> | /renovacoes — as próximas | /alertas_clientes\n"
     "/modelos_email — seus modelos de e-mail | /modelo_email <nome> | <situação> (texto na linha de baixo) | /assinatura <texto>\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -835,7 +836,8 @@ class TelegramBridge:
             res = self._dispatch("client_research", {"cliente": who.strip(), "dados_internos": internal.strip()})
             self.send(chat_id, str(res.get("texto") or "Pronto."))
             self._send_outputs(chat_id, res.get("arquivos"))
-        elif cmd in {"/clientes", "/ficha", "/nota_cliente", "/apagar_ficha"}:   # v13.60: fichas de clientes
+        elif cmd in {"/clientes", "/ficha", "/nota_cliente", "/apagar_ficha", "/data_cliente", "/renovacoes",
+                     "/alertas_clientes"}:                         # v13.60: fichas de clientes; v13.67: datas
             if "client_cards" not in getattr(self.service, "extra_actions", {}):
                 self.send(chat_id, "As fichas de clientes não estão disponíveis neste agente.")
                 return
@@ -846,6 +848,15 @@ class TelegramBridge:
                     res = self.service.dispatch_request("client_card", {"ref": arg})
                 elif cmd == "/apagar_ficha":
                     res = self.service.dispatch_request("client_card_delete", {"ref": arg})
+                elif cmd == "/data_cliente":
+                    parts = [x.strip() for x in arg.split("|")]
+                    if len(parts) == 2:
+                        parts = [parts[0], "", parts[1]]
+                    res = self.service.dispatch_request("client_date", dict(zip(("cliente", "descricao", "data"), parts + ["", "", ""])))
+                elif cmd == "/renovacoes":
+                    res = self.service.dispatch_request("client_renewals", {"dias": int(arg) if arg.strip().isdigit() else 90})
+                elif cmd == "/alertas_clientes":
+                    res = self.service.dispatch_request("client_alerts", {"arg": arg})
                 else:
                     who, _, note = arg.partition("|")
                     res = self.service.dispatch_request("client_note", {"cliente": who.strip(), "nota": note.strip()})

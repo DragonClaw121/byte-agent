@@ -70,6 +70,27 @@ Cada cliente pesquisado ganha uma **ficha que fica guardada** e cresce com o tem
 | `/ficha EMS` (ou o número ou o CNPJ) | mostra tudo o que o Bit sabe do cliente |
 | `/nota_cliente EMS | renovação do Figma em março; falar com a Júlia` | anota; se for sobre compra/renovação, entra nas compras |
 | `/apagar_ficha EMS` | apaga a ficha e o histórico |
+| `/data_cliente EMS | renovação Figma | 10/03/2027` | guarda uma data (renovação, compra, vencimento) |
+| `/renovacoes` | as renovações dos próximos 90 dias |
+| `/alertas_clientes` | quando avisar (renovação e sem contato) |
+
+### Datas, renovações e alertas (v13.67)
+A ficha guarda as **renovações**, **compras** e **vencimentos** de cada cliente e o **último contato**:
+- **Como as datas entram:**
+  - `/data_cliente EMS | renovação Figma Enterprise | 10/03/2027`;
+  - numa nota: `/nota_cliente EMS | renovação do Figma em 10/03/2027` (o Bit reconhece 10/03/2027, 10/03, "10 de
+    março de 2027", "março de 2027", 03/2027);
+  - na conversa: "a renovação do Miro da EMS é 15/05/2027";
+  - pela pesquisa de cliente, com os dados de compra: uma licença **ANUAL** comprada em 28/10/2026 vira uma renovação
+    **estimada** em 28/10/2027. Quando você informar a data certa, ela substitui a estimada.
+- **O último contato** é atualizado por e-mails recebidos dele (triagem), e-mails preparados, reuniões e notas como
+  "liguei", "falei com", "enviei".
+- **Os alertas** chegam no Telegram, no painel, no app e no Bit do PC:
+  - renovação aos **60, 30, 15, 7 e 1 dia(s)** antes, uma vez por marco, com a sugestão de preparar o e-mail de renovação;
+  - **toda segunda**, a lista dos clientes com compras e **sem contato há 45+ dias**.
+  - Para mudar: `/alertas_clientes 60,30,15,7 | 45` (dias antes da renovação | dias sem contato).
+- **`/renovacoes`** lista as renovações e vencimentos dos próximos 90 dias (`/renovacoes 365` para o ano). O **resumo da
+  manhã** mostra as dos próximos 30 dias, e `/clientes` mostra a próxima renovação de cada um (🔁).
 
 Também no painel e no app, em **⚡ Comandos → Clientes**. A ficha fica no banco do próprio agente: cada convidado
 tem as suas.

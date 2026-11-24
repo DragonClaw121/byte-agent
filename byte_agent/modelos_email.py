@@ -72,10 +72,42 @@ def clean_html(html: str) -> str:
     text = re.sub(r"(?i)(href|src)\s*=\s*([\"']?)\s*javascript:[^\"'\s>]*", r"\1=\2#", text)
     text = re.sub(r"(?is)</?o:p>|<\?xml[^>]*>|<meta[^>]*>|<link[^>]*>", "", text)
     text = re.sub(r"(?i)\s*mso-[\w-]+\s*:\s*[^;\"']+;?", "", text)
-    text = re.sub(r">\s+<", "> <", text).strip()
+    text = join_split_fields(re.sub(r">\s+<", "> <", text).strip())
     if len(text) > MAX_HTML:
         raise ValueError("O modelo em HTML ficou grande demais (imagens muito pesadas). Diminua as imagens e tente de novo.")
     return text
+
+
+_SPLIT_FIELD_RE = re.compile(r"(\[|\{\{)((?:[^\[\]{}<>]|<[^>]{0,200}>){1,160}?)(\]|\}\})")
+
+
+def join_split_fields(html: str) -> str:
+    """v13.67: o Outlook às vezes "pica" o campo em etiquetas: [<span lang=PT-BR>Nome</span>] ou {{<b>nome</b>}}. Aqui
+    volta a ser [Nome]/{{nome}} (só quando as etiquetas de dentro abrem e fecham ali mesmo, para não quebrar o HTML)."""
+    def repl(m: "re.Match[str]") -> str:
+        inner = m.group(2)
+        if "<" not in inner:
+            return m.group(0)
+        tags = re.findall(r"<(/?)([a-zA-Z][\w:-]*)[^>]*>", inner)
+        opened = [name.lower() for close, name in tags if not close and name.lower() not in ("br", "img", "wbr")]
+        closed = [name.lower() for close, name in tags if close]
+        name = re.sub(r"<[^>]+>", "", inner).strip()
+        shape = (FIELD_RE.fullmatch(f"[{name}]") if m.group(1) == "[" else FIELD_RE.fullmatch("{{" + name + "}}"))
+        if not shape or sorted(opened) != sorted(closed):
+            return m.group(0)
+        return ("[" + name + "]") if m.group(1) == "[" else ("{{" + name + "}}")
+    return _SPLIT_FIELD_RE.sub(repl, str(html or ""))
+
+
+def strip_markdown(text: str) -> str:
+    """Tira o negrito/itálico do markdown (**x**, __x__) que a IA às vezes põe — no e-mail vira asterisco ou destaque."""
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", str(text or ""), flags=re.S)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.S)
+    text = re.sub(r"(?m)^#{1,6}\s+", "", text)
+    return text.replace("`", "")
+
+
+EMPHASIS_RE = re.compile(r"(?i)<(b|strong|mark|u|em|i)\b|font-weight\s*:\s*(bold|[6-9]00)|background(-color)?\s*:")
 
 
 def hide_images(html: str) -> Tuple[str, List[str]]:
@@ -220,9 +252,10 @@ class EmailTemplates:
                     llm: Optional[Callable[[str, str], str]] = None, rewrite: bool = False) -> Tuple[str, str]:
         """(html pronto, como foi feito). Com {{campos}}: troca direto no HTML (o formato fica idêntico). Sem campos e com
         HTML não muito grande: a LLM troca SÓ os textos e a estrutura é conferida. Senão: '' (fica só o texto)."""
-        html = str(tpl.get("html") or "")
+        html = join_split_fields(str(tpl.get("html") or ""))
         if not html:
             return "", ""
+        fields = {k: " ".join(strip_markdown(str(v)).split())[:120] for k, v in (fields or {}).items()}
         if fields_of(html):
             out = fill_fields(html, fields, html=True)
             if not rewrite or llm is None:
@@ -231,13 +264,20 @@ class EmailTemplates:
         light, images = hide_images(html)
         if llm is None or len(light) > LLM_HTML_LIMIT:
             return "", "grande"
-        raw = llm("Você edita e-mails em HTML. Devolva SOMENTE o HTML do modelo com os TEXTOS trocados para dizer o que o "
-                  "e-mail novo diz. Mantenha TODAS as tags, atributos, estilos, tabelas, cores, imagens e links exatamente "
-                  "como estão; mude só o texto entre as tags (e acrescente parágrafos copiando o estilo de um existente, se "
-                  "precisar). Nada de markdown nem explicações.",
-                  f"<modelo_html>\n{light}\n</modelo_html>\n\nE-MAIL NOVO (texto):\nAssunto: {subject}\n\n{body}")
+        raw = llm("Você edita e-mails em HTML. Devolva SOMENTE o HTML do modelo, idêntico, trocando apenas os trechos de "
+                  "texto que precisam mudar para dizer o que o e-mail novo diz (nomes, produtos, datas, valores, uma frase "
+                  "específica). Todo texto do modelo que continua valendo fica PALAVRA POR PALAVRA. Mantenha TODAS as tags, "
+                  "atributos, estilos, tabelas, cores, imagens e links exatamente como estão. NÃO acrescente negrito, "
+                  "itálico, sublinhado, cores, marca-texto nem destaques que o modelo não tem; não acrescente frases de "
+                  "efeito. Nada de markdown nem explicações.",
+                  f"<modelo_html>\n{light}\n</modelo_html>\n\nE-MAIL NOVO (texto):\nAssunto: {subject}\n\n{strip_markdown(body)}")
         out = re.sub(r"^```(?:html)?\s*|\s*```$", "", str(raw or "").strip())
         if not out.startswith("<") or tag_count(out) < 0.8 * tag_count(light):
+            return "", "estrutura"
+        if len(EMPHASIS_RE.findall(out)) > len(EMPHASIS_RE.findall(light)):    # v13.67: destaques inventados
+            return "", "estrutura"
+        from difflib import SequenceMatcher
+        if SequenceMatcher(None, html_text(light), html_text(out)).ratio() < 0.5:  # reescreveu o modelo inteiro
             return "", "estrutura"
         return self.add_signature_html(clean_html(show_images(out, images))), "texto"
 
@@ -329,9 +369,11 @@ class EmailTemplates:
         parts: List[str] = []
         if tpl is not None:
             parts.append(
-                f"MODELO DO USUÁRIO A SEGUIR (\"{tpl['nome']}\"): use-o como base. Mantenha o texto, a estrutura, as expressões "
-                "e o tom dele; preencha os campos ({{nome}} ou [Nome]) e os trechos que variam com os dados da situação; mude só o que a "
-                "situação exige. Dado que não existir, escreva [PREENCHER: o que falta] (não invente)."
+                f"MODELO DO USUÁRIO A SEGUIR (\"{tpl['nome']}\"): Mantenha o texto dele PALAVRA POR PALAVRA — a estrutura, "
+                "as frases, as expressões e o tom. Troque só os campos ({{nome}} ou [Nome]) e, se for indispensável, uma "
+                "frase que claramente fala de outra situação. Não reescreva, não resuma, não acrescente frases nem "
+                "parágrafos, e não use negrito, itálico ou markdown (**, _, #). Dado que não existir, escreva "
+                "[PREENCHER: o que falta] (não invente)."
                 f"\n<modelo>\nAssunto: {tpl['assunto'] or '(defina)'}\n{tpl['corpo']}\n</modelo>")
         else:
             st = self.style()
@@ -343,7 +385,7 @@ class EmailTemplates:
 
     def finish(self, body: str, tpl: Optional[Dict[str, Any]] = None) -> str:
         """Garante a assinatura no fim e conta o uso do modelo."""
-        body = str(body or "").strip()
+        body = strip_markdown(str(body or "")).strip()
         sig = self.signature()
         if sig:
             body = body.replace("[SEU NOME]", sig.split("\n")[0])

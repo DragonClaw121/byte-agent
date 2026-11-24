@@ -83,12 +83,14 @@ class ClientBook:
         self.db = db
         with db.connection() as conn:
             conn.executescript(SCHEMA)
+        from .fichas_datas import ensure_columns
+        ensure_columns(db)                                       # v13.67: datas (renovação, compra) e último contato
 
     # ---------------- leitura
     @staticmethod
     def _row(r: Any) -> Dict[str, Any]:
         d = dict(r)
-        for k in ("apelidos", "cnpjs", "contatos", "proximos"):
+        for k in ("apelidos", "cnpjs", "contatos", "proximos", "datas"):
             try:
                 d[k] = json.loads(d.get(k) or "[]")
             except ValueError:
@@ -198,6 +200,9 @@ class ClientBook:
             conn.execute("INSERT INTO client_events (card, tipo, texto, t) VALUES (?, ?, ?, ?)",
                          (int(card_n), tipo, " ".join(str(texto).split())[:600], now))
             conn.execute("UPDATE client_cards SET atualizado = ? WHERE n = ?", (now, int(card_n)))
+        from .fichas_datas import CONTACT_EVENTS, CONTACT_WORDS, touch_contact
+        if tipo in CONTACT_EVENTS or (tipo == "nota" and CONTACT_WORDS.search(fold(texto))):
+            touch_contact(self, card_n, now)                     # v13.67: o último contato com o cliente
         return True
 
     def delete(self, ref: Any) -> Dict[str, Any]:
@@ -222,6 +227,10 @@ class ClientBook:
             lines.append("Compras e dados internos:\n" + card["compras"][-1500:])
         if card["proximos"]:
             lines.append("Próximos passos combinados: " + "; ".join(card["proximos"]))
+        from .fichas_datas import card_lines
+        dates = card_lines(card)
+        if dates:
+            lines.append("Datas: " + "; ".join(dates))
         ev = self.events(card["n"], 6)
         if ev:
             lines.append("Histórico recente: " + " | ".join(
@@ -242,6 +251,10 @@ class ClientBook:
             lines += ["", "🧾 Compras e dados internos:", card["compras"][-1800:]]
         if card["proximos"]:
             lines += ["", "➡️ Próximos passos:"] + [f"• {p}" for p in card["proximos"]]
+        from .fichas_datas import card_lines
+        dates = card_lines(card)
+        if dates:
+            lines += ["", "📆 Datas:"] + [f"• {d}" for d in dates]
         if card["plano"]:
             lines += ["", f"📄 Último plano de conta: {card['plano']}"]
         ev = self.events(card["n"], 8)
@@ -256,11 +269,15 @@ def format_list(cards: List[Dict[str, Any]]) -> str:
     if not cards:
         return ("Nenhuma ficha de cliente ainda. Elas nascem sozinhas na pesquisa de cliente (/cliente ou \"pesquise esse "
                 "cliente\" no Bit do PC) ou com /nota_cliente <nome> | <nota>.")
+    from .fichas_datas import days_until, human
     lines = ["🗂️ Fichas de clientes (mais recentes primeiro):"]
     for c in cards[:40]:
         when = time.strftime("%d/%m", time.localtime(float(c["atualizado"])))
-        lines.append(f"{c['n']}. {c['nome']}" + (f" — {c['cnpjs'][0]}" if c["cnpjs"] else "") + f" · {when}")
-    lines.append("\n/ficha <número ou nome> abre · /nota_cliente <nome> | <nota> anota")
+        nxt = next((d for d in c.get("datas") or [] if d["tipo"] in ("renovacao", "vencimento")
+                    and (days_until(d["data"]) or -1) >= 0), None)
+        lines.append(f"{c['n']}. {c['nome']}" + (f" — {c['cnpjs'][0]}" if c["cnpjs"] else "") + f" · {when}"
+                     + (f" · 🔁 {human(nxt['data'])}" if nxt else ""))
+    lines.append("\n/ficha <número ou nome> abre · /nota_cliente <nome> | <nota> anota · /renovacoes as próximas")
     return "\n".join(lines)
 
 
@@ -293,14 +310,94 @@ def install(service: Any) -> ClientBook:
         book.add_event(card["n"], "nota", note)
         if re.search(r"(?i)\b(compr|pedido|licen|renova|valor|r\$)", note):
             card = book.upsert(card["nome"], compras=f"[{time.strftime('%d/%m/%Y')}] {note}")
-        return {"ficha": card, "text": f"📝 Anotado na ficha #{card['n']} — {card['nome']}."}
+        from .fichas_datas import KIND_LABEL, dates_from_note, human
+        added = dates_from_note(book, card["n"], note)            # v13.67: "renovação do Figma em 10/03/2027"
+        extra = "".join(f"\n📆 Guardei: {KIND_LABEL[d['tipo']]}" + (f" de {d['descricao']}" if d["descricao"] else "")
+                        + f" em {human(d['data'])}." for d in added)
+        return {"ficha": book.get(card["n"]), "text": f"📝 Anotado na ficha #{card['n']} — {card['nome']}." + extra}
+
+    def act_date(p: Dict[str, Any]) -> Dict[str, Any]:
+        """/data_cliente EMS | renovação Figma Enterprise | 10/03/2027"""
+        from .fichas_datas import KIND_LABEL, add_date, human, iso, kind_of, parse_dates
+        who, what, when = (str(p.get(k) or "").strip() for k in ("cliente", "descricao", "data"))
+        if not who or not when:
+            raise ValueError("Use: /data_cliente <cliente> | <o que é> | <data> (ex.: /data_cliente EMS | renovação Figma "
+                             "Enterprise | 10/03/2027)")
+        dates = parse_dates(when)
+        if not dates:
+            raise ValueError(f"Não entendi a data \"{when}\" (use dd/mm/aaaa).")
+        tipo = str(p.get("tipo") or "") or kind_of(what)
+        desc = re.sub(r"(?i)^\s*(renova\w*|compra|vencimento)\s*(d[eoa]s?)?\s*", "", what).strip()
+        card = book.upsert(who, cnpj=who if len(cnpj_digits(who)) == 14 else "")
+        card = add_date(book, card["n"], tipo if tipo != "outro" else kind_of(what + " renovação"), iso(dates[0][0]),
+                        desc or what)
+        book.add_event(card["n"], "nota", f"data: {what} {human(iso(dates[0][0]))}")
+        item = next(d for d in card["datas"] if d["data"] == iso(dates[0][0]))
+        return {"ficha": card, "text": f"📆 Guardei na ficha de {card['nome']}: {KIND_LABEL[item['tipo']]}"
+                                       + (f" de {item['descricao']}" if item["descricao"] else "") + f" em {human(item['data'])}."}
+
+    def act_renewals(p: Dict[str, Any]) -> Dict[str, Any]:
+        from .fichas_datas import describe, upcoming
+        days = int(p.get("dias") or 90)
+        items = upcoming(book, days)
+        if not items:
+            return {"itens": [], "text": f"Nenhuma renovação ou vencimento nos próximos {days} dias nas fichas. Guarde "
+                                         "com /data_cliente <cliente> | renovação <produto> | <data>."}
+        lines = [f"🔁 Renovações e vencimentos (próximos {days} dias):"]
+        lines += [f"• {i['cliente']} — {describe(i)}" for i in items[:30]]
+        return {"itens": items, "text": "\n".join(lines)}
+
+    def act_alerts(p: Dict[str, Any]) -> Dict[str, Any]:
+        """/alertas_clientes · /alertas_clientes 60,30,15,7 | 45 (dias antes da renovação | dias sem contato)"""
+        from .fichas_datas import SETTING_ALERTS, config
+        raw = str(p.get("arg") or "").strip()
+        if raw:
+            marks, _, idle = raw.partition("|")
+            cfg = config(service.db)
+            nums = [int(x) for x in re.findall(r"\d+", marks)]
+            if nums:
+                cfg["renovacao_dias"] = sorted({n for n in nums if 0 <= n <= 365}, reverse=True)
+            if re.search(r"\d+", idle):
+                cfg["sem_contato_dias"] = max(7, min(365, int(re.findall(r"\d+", idle)[0])))
+            service.db.set_setting(SETTING_ALERTS, cfg)
+        cfg = config(service.db)
+        return {"config": cfg, "text": "🔔 Alertas de clientes: renovação aos " + ", ".join(map(str, cfg["renovacao_dias"]))
+                + f" dia(s) antes; sem contato a partir de {cfg['sem_contato_dias']} dias (lista às segundas).\n"
+                "Mude com /alertas_clientes 60,30,15,7 | 45"}
 
     def act_delete(p: Dict[str, Any]) -> Dict[str, Any]:
         card = book.delete(p.get("ref") or "")
         return {"text": f"🗑️ Ficha de {card['nome']} apagada (com o histórico)."}
 
     service.extra_actions.update({"client_cards": act_list, "client_card": act_get, "client_note": act_note,
-                                  "client_card_delete": act_delete})
+                                  "client_card_delete": act_delete, "client_date": act_date, "client_renewals": act_renewals,
+                                  "client_alerts": act_alerts})
+    from .fichas_datas import Alerts
+    alerts = Alerts(service)
+    service.client_alerts = alerts
+    scheduler = getattr(service, "scheduler", None)
+    if scheduler is not None:
+        scheduler.add("alertas_clientes", 3 * 3600, alerts.tick, when=lambda: bool(book.list()),
+                      label="Alertas de clientes (renovação, sem contato)")
+
+    def tool_date(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
+        try:
+            res = act_date({"cliente": args.get("cliente"), "descricao": args.get("descricao") or args.get("tipo") or "",
+                            "data": args.get("data"), "tipo": args.get("tipo") if args.get("tipo") in
+                            ("renovacao", "compra", "vencimento", "outro") else ""})
+        except ValueError as err:
+            return f"ERRO: {err}"
+        return res["text"]
+
+    service.extra_tools["ficha_registrar_data"] = {
+        "auto": True, "handler": tool_date,
+        "intent": re.compile(r"\b(renova\w*|vencimento|vence|expira\w*|comprou|compra)\b.*\d"),
+        "description": "Guarda na ficha do cliente uma data de renovação, compra ou vencimento que o usuário informou "
+                       "(ex.: 'a renovação do Figma da EMS é 10/03/2027'). Não invente datas.",
+        "parameters": {"type": "object", "required": ["cliente", "data"], "properties": {
+            "cliente": {"type": "string"}, "data": {"type": "string", "description": "dd/mm/aaaa"},
+            "tipo": {"type": "string", "enum": ["renovacao", "compra", "vencimento", "outro"]},
+            "descricao": {"type": "string", "description": "o produto/contrato (ex.: Figma Enterprise, 18 licenças)"}}}}
 
     def tool(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
         try:

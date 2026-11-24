@@ -1,6 +1,7 @@
 """v13.47: partes do app do PC que não dependem do Windows (o resto é testado no build do GitHub, num Windows real)."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,23 @@ def test_new_outlook_diagnostics_are_logged(tmp_path, monkeypatch):
     log = (tmp_path / "BitPC" / "outlook-novo.log").read_text(encoding="utf-8")
     assert '"motivo": "foco"' in log and "Adicionar um assunto" in log
     assert "msedgewebview2" in bit_pc.NEW_OUTLOOK_PASTE_PS and "GetForegroundWindow" in bit_pc.NEW_OUTLOOK_PASTE_PS
+
+
+def test_transparent_images_get_the_block_background():
+    """v1.11: no Outlook novo a transparência virava branco: a imagem ganha a cor do bloco onde está no modelo."""
+    import base64
+    import io
+    img = Image.new("RGBA", (4, 2), (0, 0, 0, 0))
+    img.putpixel((0, 0), (255, 255, 255, 255))                         # um ponto branco (o "logo")
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    html = (f'<table bgcolor="#ffffff"><tr><td style="padding:4px;background:#1E2A12"><img src="{src}"></td></tr>'
+            f'<tr><td><img src="{src}"></td></tr></table><p><img src="{src}"></p>')
+    assert bit_pc.image_backgrounds(html) == [(30, 42, 18), (255, 255, 255), None]
+    out = bit_pc.flatten_transparency(html)
+    srcs = re.findall(r'src="(data:image/png;base64,[^"]+)"', out)
+    first = Image.open(io.BytesIO(base64.b64decode(srcs[0].split(",", 1)[1])))
+    assert first.mode == "RGB" and first.getpixel((1, 1)) == (30, 42, 18) and first.getpixel((0, 0)) == (255, 255, 255)
+    assert srcs[2] == src                                              # sem fundo conhecido: fica como estava
+    assert bit_pc.parse_color("rgb(1, 2, 3)") == (1, 2, 3) and bit_pc.parse_color("#abc") == (170, 187, 204)

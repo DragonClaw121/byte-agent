@@ -257,6 +257,17 @@ class Briefings:
         runner = getattr(self.service, "goal_runner", None)
         return runner.store.list() if runner else []
 
+    def _client_renewals(self, days: int = 30, limit: int = 5) -> List[str]:
+        book = getattr(self.service, "client_book", None)
+        if book is None:
+            return []
+        try:
+            from .fichas_datas import describe, upcoming
+            items = upcoming(book, days, today=datetime.fromtimestamp(self.clock()).date())
+        except Exception:
+            return []
+        return [f"• {_clean(i['cliente'], 50)} — {describe(i, datetime.fromtimestamp(self.clock()).date())}" for i in items[:limit]]
+
     def _client_steps(self, max_age_days: int = 21, limit: int = 4) -> List[str]:
         """Fichas mexidas nas últimas 3 semanas que têm próximos passos: '• EMS S/A: Enviar proposta (Gabriel) até sexta'."""
         book = getattr(self.service, "client_book", None)
@@ -380,6 +391,10 @@ class Briefings:
                           f"a principal é {_clean(tasks[0]['title'], 80)}.")
             facts.append(f"Tarefas pendentes: {len(tasks)}; a principal: {_clean(tasks[0]['title'], 80)}.")
 
+        renewals = self._client_renewals()                 # v13.67: renovações dos próximos 30 dias
+        if renewals:
+            sections.append("🔁 Renovações próximas:\n" + "\n".join(renewals))
+            facts.append(f"Renovações de clientes nos próximos 30 dias: {len(renewals)}.")
         clients = self._client_steps()                     # v13.63: próximos passos com os clientes (fichas)
         if clients:
             sections.append("🗂️ Clientes — próximos passos:\n" + "\n".join(clients))

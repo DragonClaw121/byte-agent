@@ -192,3 +192,27 @@ def test_choose_by_name_or_my_template_reference(bit):
     picked = []
     got = t.choose("e-mail pra ASBEC no meu modelo", llm=lambda s, u: picked.append(s) or "0")
     assert got is not None and "nunca 0" in picked[0]                                          # pediu modelo: sempre um
+
+
+def test_outlook_split_fields_markdown_and_invented_emphasis(bit):
+    """v13.67: campo picado pelo Outlook volta a ser campo; negrito do markdown sai; destaque inventado é recusado."""
+    me = modelos_email
+    assert me.join_split_fields("Olá, <b>[<span lang=PT-BR>Nome</span>]</b>!") == "Olá, <b>[Nome]</b>!"
+    assert me.join_split_fields("{{<b>pedido</b>}}") == "{{pedido}}"
+    assert me.join_split_fields("[<b>Nome]</b>") == "[<b>Nome]</b>"                       # desequilibrado: não mexe
+    assert me.join_split_fields("<p>[1] fonte</p>") == "<p>[1] fonte</p>"
+    assert me.strip_markdown("Olá, **Júlia**! ## Título\n__ok__") == "Olá, Júlia! ## Título\nok"
+    t = bit.email_templates
+    tpl = t.save("CS", "", "pós-venda", html="<table><tr><td>Olá, [<span lang=PT-BR>Nome</span>]! Como vai o "
+                                             "<b>[SOFTWARE]</b>?</td></tr></table>")
+    assert set(tpl["campos"]) == {"Nome", "SOFTWARE"}
+    html, how = t.render_html(t.get(tpl["n"]), "", "", {"Nome": "**Júlia**", "SOFTWARE": "Notion"})
+    assert how == "campos" and "Olá, Júlia!" in html and "**" not in html
+    plain = t.get(t.save("Sem campos", "", "x", html="<p>Olá, Maria! Tudo certo com a proposta?</p>")["n"])
+    bold = lambda s, u: u.split("<modelo_html>\n")[1].split("\n</modelo_html>")[0].replace("Maria", "<b>João</b>")  # noqa: E731
+    assert t.render_html(plain, "x", "y", {}, llm=bold) == ("", "estrutura")
+    other = lambda s, u: "<p>Prezado cliente, segue em anexo o boleto vencido do mês passado para pagamento.</p>"  # noqa: E731
+    assert t.render_html(plain, "x", "y", {}, llm=other) == ("", "estrutura")
+    _, block = t.guidance("e-mail no modelo CS", request="no modelo CS")
+    assert "PALAVRA POR PALAVRA" in block and "não use negrito" in block
+    assert t.finish("Olá, **Ana**!") .startswith("Olá, Ana!")

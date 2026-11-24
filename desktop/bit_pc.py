@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.10"
+VERSION = "1.11"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -634,6 +634,97 @@ def split_images(html: str, prefix: str = "bitimg") -> Tuple[str, List[Dict[str,
         images.append({"cid": cid, "mime": mime, "nome": cid + ext, "dados": base64.b64decode(re.sub(r"\s", "", m.group(2)))})
         return "cid:" + cid
     return DATA_IMG_RE.sub(repl, str(html or "")), images
+
+
+# ---------------- imagens transparentes (v1.11): o Outlook novo (e vários outros) pinta o transparente de branco
+_NAMED = {"white": (255, 255, 255), "black": (0, 0, 0), "transparent": None}
+
+
+def parse_color(value: str) -> Optional[Tuple[int, int, int]]:
+    v = str(value or "").strip().lower()
+    if v in _NAMED:
+        return _NAMED[v]
+    m = re.search(r"#([0-9a-f]{6}|[0-9a-f]{3})\b", v)
+    if m:
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    m = re.search(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", v)
+    if m:
+        return tuple(min(255, int(x)) for x in m.groups())  # type: ignore[return-value]
+    return None
+
+
+def image_backgrounds(html: str) -> List[Optional[Tuple[int, int, int]]]:
+    """Para cada <img src="data:..."> (na ordem), a cor de fundo do bloco onde ela está (bgcolor/background)."""
+    from html.parser import HTMLParser
+    voids = {"img", "br", "hr", "meta", "link", "input", "col", "area", "base", "source", "wbr"}
+
+    class P(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.stack: List[Tuple[str, Optional[Tuple[int, int, int]]]] = []
+            self.found: List[Optional[Tuple[int, int, int]]] = []
+
+        def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
+            a = {k.lower(): (v or "") for k, v in attrs}
+            color = parse_color(a.get("bgcolor", ""))
+            style = a.get("style", "")
+            m = re.search(r"(?i)background(?:-color)?\s*:\s*([^;]+)", style)
+            if m and parse_color(m.group(1)) is not None:
+                color = parse_color(m.group(1))
+            if tag == "img":
+                if a.get("src", "").startswith("data:image/"):
+                    self.found.append(next((c for _, c in reversed(self.stack) if c is not None), None))
+                return
+            if tag not in voids:
+                self.stack.append((tag, color))
+
+        def handle_endtag(self, tag: str) -> None:
+            for i in range(len(self.stack) - 1, -1, -1):
+                if self.stack[i][0] == tag:
+                    del self.stack[i:]
+                    break
+    p = P()
+    try:
+        p.feed(str(html or ""))
+    except Exception:
+        return []
+    return p.found
+
+
+def flatten_transparency(html: str) -> str:
+    """PNG/GIF com transparência ganham, no lugar do transparente, a cor de fundo do bloco onde estão no modelo. Assim a
+    imagem fica igual em qualquer programa de e-mail (o Outlook novo, ao colar, pinta o transparente de branco)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return html
+    colors = image_backgrounds(html)
+    count = [0]
+
+    def repl(m: "re.Match[str]") -> str:
+        i = count[0]
+        count[0] += 1
+        color = colors[i] if i < len(colors) else None
+        if color is None or m.group(1) not in ("image/png", "image/gif"):
+            return m.group(0)
+        try:
+            im = Image.open(io.BytesIO(base64.b64decode(re.sub(r"\s", "", m.group(2)))))
+            if getattr(im, "n_frames", 1) > 1:                     # GIF animado: fica como está
+                return m.group(0)
+            rgba = im.convert("RGBA")
+            if rgba.getchannel("A").getextrema()[0] == 255:        # sem transparência
+                return m.group(0)
+            flat = Image.new("RGBA", rgba.size, tuple(color) + (255,))
+            flat.alpha_composite(rgba)
+            out = io.BytesIO()
+            flat.convert("RGB").save(out, "PNG", optimize=True)
+            return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+        except Exception:
+            return m.group(0)
+    return DATA_IMG_RE.sub(repl, str(html or ""))
 
 
 def images_to_files(html: str) -> str:
@@ -2163,7 +2254,7 @@ class App:
             open_mail(fields["para"].get() if "para" in fields else "", fields["assunto"].get() if "assunto" in fields else "",
                       text_of())
             status.configure(text="✔ Abri um e-mail novo. Se o texto não aparecer inteiro, cole (Ctrl+V): já está copiado.")
-        html = str(res.get("corpo_html") or "")
+        html = flatten_transparency(str(res.get("corpo_html") or ""))   # v1.11: sem fundo branco nas imagens
 
         def flavor() -> str:
             return outlook_flavor(str(self.cfg.get("outlook") or ""))
