@@ -257,6 +257,17 @@ class Briefings:
         runner = getattr(self.service, "goal_runner", None)
         return runner.store.list() if runner else []
 
+    def _client_steps(self, max_age_days: int = 21, limit: int = 4) -> List[str]:
+        """Fichas mexidas nas últimas 3 semanas que têm próximos passos: '• EMS S/A: Enviar proposta (Gabriel) até sexta'."""
+        book = getattr(self.service, "client_book", None)
+        if book is None:
+            return []
+        try:
+            cards = [c for c in book.list() if c["proximos"] and self.clock() - float(c["atualizado"]) < max_age_days * 86400]
+        except Exception:
+            return []
+        return [f"• {_clean(c['nome'], 50)}: " + "; ".join(_clean(p, 90) for p in c["proximos"][:2]) for c in cards[:limit]]
+
     def _today_reminders(self, day_start: float, day_end: float) -> List[Dict[str, Any]]:
         return [r for r in self.db.list_reminders() if day_start <= float(r["due_epoch"]) < day_end]
 
@@ -368,6 +379,11 @@ class Briefings:
             speech.append(f"{len(tasks)} tarefa{'s' if len(tasks) > 1 else ''} pendente{'s' if len(tasks) > 1 else ''}; "
                           f"a principal é {_clean(tasks[0]['title'], 80)}.")
             facts.append(f"Tarefas pendentes: {len(tasks)}; a principal: {_clean(tasks[0]['title'], 80)}.")
+
+        clients = self._client_steps()                     # v13.63: próximos passos com os clientes (fichas)
+        if clients:
+            sections.append("🗂️ Clientes — próximos passos:\n" + "\n".join(clients))
+            facts.append(f"Clientes com próximos passos: {len(clients)}.")
 
         goals = self._goals()
         if goals:

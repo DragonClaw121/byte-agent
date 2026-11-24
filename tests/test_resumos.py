@@ -1,6 +1,7 @@
 """v13.24 (Fase 2.3): resumo da manhã, fechamento da semana e tarefas concluídas."""
 from datetime import datetime, timedelta
 
+import time
 import pytest
 
 from byte_agent import engine, gatilhos, headless, permissoes, resumos
@@ -221,3 +222,15 @@ def test_news_uses_news_search_and_failures_are_visible(service):
     text = b.morning(with_opening=False)["text"]
     assert "Não consegui buscar as manchetes: nenhum buscador de notícias configurado" in text
     assert "⚠️ Último problema: notícias" in b.command("manha", "config")
+
+
+def test_morning_brief_lists_client_next_steps(service, monkeypatch):
+    """v13.63: os próximos passos das fichas de clientes (mexidas nas últimas 3 semanas) entram no resumo da manhã."""
+    monkeypatch.delenv("BYTE_AGENDA_ICS")
+    service.client_book.upsert("EMS S/A", proximos=["Enviar proposta (Gabriel) até sexta", "Agendar onboarding"])
+    service.client_book.upsert("Sem passos Ltda")
+    b = briefings(service, writer=lambda kind, facts: "")
+    b.clock = time.time
+    text = b.morning()["text"]
+    assert "🗂️ Clientes — próximos passos:\n• EMS S/A: Enviar proposta (Gabriel) até sexta; Agendar onboarding" in text
+    assert "Sem passos" not in text and "Dia livre" not in text

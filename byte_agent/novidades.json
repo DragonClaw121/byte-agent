@@ -82,5 +82,11 @@
    "A triagem usa a ficha para escrever a resposta e mostra \"🗂️ cliente X\"",
    "Bit no PC 1.9: ao abrir uma reunião (Teams, Zoom, Meet, Webex), oferece transcrever"
   ]
+ },
+ {
+  "versao": "13.64",
+  "itens": [
+   "Resumo da manhã mostra os próximos passos com os clientes (das fichas)"
+  ]
  }
 ]
