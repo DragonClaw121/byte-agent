@@ -1,0 +1,2620 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<style data-b90="1">
+  #byte-v90-root {
+    --bg: #090d16; --panel: #131c2e; --border: #263650;
+    --accent: #38bdf8; --ok: #22c55e; --warn: #f59e0b; --danger: #ef4444; --purple: #c084fc;
+    --text: #f1f5f9; --muted: #94a3b8;
+    font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text);
+    padding: 14px; border-radius: 12px; border: 1px solid var(--border); max-width: 1180px; margin: 6px auto;
+  }
+  #byte-v90-root * { box-sizing: border-box; }
+  .b90-profile-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 2px; gap: 2px; opacity: 0.75; vertical-align: middle; }
+  .b90-profile-switch:hover { opacity: 1; }
+  .b90-profile-switch button { background: transparent; border: none; color: var(--muted); font-size: 0.68rem; font-weight: 600; padding: 3px 9px; border-radius: 999px; cursor: pointer; font-family: inherit; }
+  .b90-profile-switch button.active { background: var(--border); color: var(--text); cursor: default; }
+  .b90-profile-switch button:disabled { cursor: wait; }
+  .b90-profile-msg { font-size: 0.7rem; color: var(--danger); margin-left: 6px; }
+  .b90-header { display: flex; justify-content: space-between; align-items: center; background: var(--panel); padding: 10px 16px; border-radius: 10px; border: 1px solid var(--border); margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+  .b90-header h2 { margin: 0; font-size: 1.02rem; color: var(--accent); }
+  .b90-badge { background: #052e16; padding: 5px 11px; border-radius: 999px; font-size: 0.74rem; border: 1px solid var(--ok); color: #4ade80; font-weight: 700; cursor: pointer; }
+  .b90-badge.offline { background: #3b0764; border-color: var(--purple); color: #e9d5ff; }
+  .b90-badge-auto { background: #1e1b4b; padding: 5px 11px; border-radius: 999px; font-size: 0.74rem; border: 1px solid var(--purple); color: #d8b4fe; font-weight: 700; cursor: pointer; }
+  .b90-badge-gpu { background: #0f2a1d; padding: 5px 10px; border-radius: 999px; font-size: 0.73rem; border: 1px solid var(--ok); color: #86efac; font-family: monospace; }
+  .b90-badge-gpu.warn { background: #2a1f05; border-color: var(--warn); color: #fcd34d; }
+  .b90-badge-gpu.danger { background: #2a0a0a; border-color: var(--danger); color: #fca5a5; }
+  .b90-safety { font-size: 0.72rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; cursor: help; }
+  .b90-hw-line { font-size: 0.76rem; font-family: monospace; color: #86efac; background: #05080f; border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; margin-bottom: 8px; white-space: pre-wrap; }
+  .b90-badge-audit { background: #0c192c; padding: 5px 10px; border-radius: 999px; font-size: 0.73rem; border: 1px solid var(--accent); color: var(--accent); font-family: monospace; }
+  .b90-timer { background: #172554; color: #38bdf8; padding: 5px 11px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; border: 1px solid #38bdf8; font-family: monospace; }
+  .b90-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .b90-tab-btn { background: var(--panel); color: var(--muted); border: 1px solid var(--border); padding: 8px 11px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.79rem; }
+  .b90-tab-btn.active { background: var(--accent); color: #090d16; border-color: var(--accent); }
+  .b90-tab-content { display: none; }
+  .b90-tab-content.active { display: block; }
+  .b90-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr); gap: 12px; }
+  .b90-grid-equal { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  /* v13.6: links longos (fontes da busca) não podem empurrar as colunas para fora do painel */
+  .b90-grid > *, .b90-grid-equal > *, [style*="grid-template-columns"] > * { min-width: 0; }
+  .b90-pre, .b90-msg-b, .b90-msg-proactive, .b90-code-card, .b90-code-card pre { overflow-wrap: anywhere; word-break: break-word; }
+  @media (max-width: 820px) { .b90-grid, .b90-grid-equal { grid-template-columns: 1fr; } }
+  .b90-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .b90-card h3 { margin-top: 0; font-size: 0.93rem; color: var(--accent); }
+  .b90-label { display: block; font-size: 0.74rem; color: var(--muted); margin-bottom: 3px; margin-top: 6px; }
+  .b90-input, .b90-select, .b90-textarea { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); background: #060911; color: var(--text); font-family: inherit; font-size: 0.84rem; }
+  .b90-textarea { resize: vertical; min-height: 70px; }
+  .b90-btn-pri { background: var(--accent); color: #090d16; border: none; padding: 8px 13px; border-radius: 6px; font-weight: 700; cursor: pointer; margin-top: 8px; }
+  .b90-btn-ok { background: var(--ok); color: #052e16; border: none; padding: 5px 10px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.75rem; }
+  .b90-btn-purple { background: var(--purple); color: #090d16; border: none; padding: 5px 10px; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.75rem; }
+  .b90-btn-sec { background: #1e293b; color: var(--text); border: 1px solid var(--border); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.75rem; }
+  .b90-btn-del { background: var(--danger); color: white; border: none; padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 0.74rem; font-weight: 700; }
+  #b90-chat-log { height: 325px; overflow-y: auto; background: #05080f; padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 8px; }
+  .b90-msg-u { background: #172554; padding: 7px 10px; border-radius: 7px; margin-bottom: 6px; border-left: 3px solid var(--accent); font-size: 0.84rem; }
+  .b90-msg-b { background: #0b1324; padding: 10px 12px; border-radius: 7px; margin-bottom: 4px; border-left: 3px solid var(--ok); white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
+  .b90-msg-proactive { background: #1e1b4b; padding: 10px 12px; border-radius: 7px; margin-bottom: 4px; border-left: 3px solid var(--purple); white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; }
+  .b90-meta { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 0.72rem; color: var(--warn); margin-bottom: 10px; font-family: monospace; background: #070b14; padding: 5px 8px; border-radius: 6px; border: 1px solid #1e293b; }
+  .b90-code-card { background: #03060c; border: 1px solid #38bdf8; border-radius: 6px; padding: 8px; margin: 8px 0; font-family: monospace; font-size: 0.79rem; color: #e2e8f0; overflow-x: auto; }
+  .b90-row-item { display: flex; justify-content: space-between; align-items: center; background: #060911; padding: 8px 10px; border-radius: 6px; margin-bottom: 6px; border: 1px solid var(--border); gap: 8px; font-size: 0.81rem; }
+  .b90-row-item.active-model { border-color: var(--ok); background: #062116; }
+  .b90-pre { background: #05080f; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 0.76rem; color: #cbd5e1; border: 1px solid var(--border); white-space: pre-wrap; max-height: 250px; overflow-y: auto; margin: 0; }
+  .b90-prog-wrap { width: 100%; background: #05080f; height: 10px; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); margin: 8px 0; }
+  .b90-prog-bar { height: 100%; background: linear-gradient(90deg, #38bdf8, #22c55e); width: 0%; transition: width 0.3s; }
+</style>
+</head>
+<body>
+<div id="byte-v90-root">
+  <div id="b90-dead-banner" style="display:none; background:#3b0d0d; border:1px solid var(--danger); color:#fecaca; padding:10px 14px; border-radius:8px; margin-bottom:10px; font-size:0.86rem;">
+    ⚠️ <b>Este painel perdeu a ligação com a Byte.</b> O ambiente do Colab foi reiniciado (ou a célula ainda está instalando).
+    Este painel é de uma execução anterior e não funciona mais: rode a célula <code>iniciar_byte()</code> de novo e use o painel novo que aparecer.
+  </div>
+  <div class="b90-header">
+    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h2 id="b90-title">⚡ Byte — agente pessoal</h2>
+      <div id="b90-profile-switch" class="b90-profile-switch" style="display:none;" role="group" aria-label="Perfil"
+           title="Trocar de perfil. A Byte reinicia no outro perfil; cada um guarda os próprios dados.">
+        <button type="button" data-profile="pessoal" onclick="window.b90SwitchProfile('pessoal', this)">Matrix</button>
+        <button type="button" data-profile="trabalho" onclick="window.b90SwitchProfile('trabalho', this)">Trabalho</button>
+      </div>
+      <a id="b90-voice-link" href="/voz" target="_blank" rel="noopener" class="b90-btn-sec"
+         style="display:none; font-size:0.7rem; padding:2px 8px; margin:0; text-decoration:none;"
+         title="Abre a página de voz deste agente numa nova aba, já conectada" onclick="return window.b90OpenVoice(event)">🎙️ Página de voz</a>
+      <span id="b90-agent-box" style="display:none; align-items:center; gap:4px;" title="Troca o agente em execução; cada um guarda os próprios dados">
+        <select id="b90-agent-menu" class="b90-select" style="width:auto; font-size:0.7rem; padding:2px 6px;" onchange="window.b90AgentArm()"></select>
+        <button type="button" id="b90-agent-go" class="b90-btn-sec" style="display:none; font-size:0.68rem; padding:2px 8px;" onclick="window.b90SwitchAgent()">Confirmar troca</button>
+      </span>
+      <button type="button" id="b90-update-btn" class="b90-btn-sec" style="font-size:0.68rem; padding:2px 8px;"
+              title="Confere o GitHub e instala a versão nova (só na nuvem)" onclick="window.b90RequestUpdate()">🔄 Atualizar</button>
+      <span id="b90-profile-msg" class="b90-profile-msg"></span>
+    </div>
+    <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+      <div id="b90-live-timer" class="b90-timer">⏱️ UI Ativa (0.0 ms)</div>
+      <div id="b90-gpu-badge" class="b90-badge-gpu" title="GPU detectada por nvidia-smi, VRAM livre/total e veredito do validador para o modelo ativo">🖥️ GPU: detectando...</div>
+      <div id="b90-audit-badge" class="b90-badge-audit">🔒 SHA-256 OK (0)</div>
+      <div id="b90-router-badge" class="b90-badge-auto" onclick="window.b90ToggleEffortRouter()" title="Clique para alternar Auto-Routing por Esforço">🧭 AUTO-ROUTER: ON (Boost: 0.0)</div>
+      <div id="b90-conn-badge" class="b90-badge" onclick="window.b90ToggleConnQuick()">🟢 MODO ONLINE</div>
+      <button class="b90-btn-purple" onclick="window.b90TriggerProactiveNow()">🤖 Iniciativa LLM</button>
+      <button class="b90-btn-del" onclick="window.b90CancelProvision()">🛑 Destravar VRAM</button>
+    </div>
+  </div>
+
+  <div class="b90-tabs">
+    <button class="b90-tab-btn active" id="b90-btn-tab-chat" onclick="window.b90Tab('b90-tab-chat', this)">💬 Chat Metacognitivo & Tool Calling</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-term" onclick="window.b90Tab('b90-tab-term', this)">🎮 Terminal & Player Pygame</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-cmds" onclick="window.b90Tab('b90-tab-cmds', this); window.b90LoadCommands()">⚡ Comandos</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-ctx" onclick="window.b90Tab('b90-tab-ctx', this)">🗓️ Agenda Assíncrona & Memórias</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-arena" onclick="window.b90Tab('b90-tab-arena', this)">🏆 Busca Universal de LLMs & Arena</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-conn" onclick="window.b90Tab('b90-tab-conn', this)">🌐 Conexão, Setup & VRAM</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-email" onclick="window.b90Tab('b90-tab-email', this); window.b90LoadTemplates()">✉️ Gmail & Outlook</button>
+    <button class="b90-tab-btn" id="b90-btn-tab-work" style="display:none;" onclick="window.b90Tab('b90-tab-work', this)">📊 Trabalho</button>
+  </div>
+
+  <!-- v13.48: TODOS os comandos do Telegram deste agente, em botões (a Matrix tem todos os módulos) -->
+  <div id="b90-tab-cmds" class="b90-tab-content">
+    <div class="b90-grid-equal">
+      <div class="b90-card">
+        <h3>⚡ Comandos</h3>
+        <div style="color:var(--muted); font-size:0.76rem; margin-bottom:6px;">Os mesmos do Telegram, sem precisar abrir o
+          Telegram. Os que pedem um texto (🖊️) preenchem a caixa abaixo: complete e tecle Enter.</div>
+        <div style="display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap;">
+          <input id="b90-cmd-input" class="b90-input" style="flex:1; min-width:220px;" placeholder="/comando ou o texto do comando"
+            onkeydown="if(event.key==='Enter')window.b90RunCommand()" />
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90RunCommand()">Executar</button>
+          <input id="b90-cmd-filter" class="b90-input" style="width:180px;" placeholder="🔎 filtrar botões" oninput="window.b90DrawCommands()" />
+        </div>
+        <div id="b90-cmd-list" style="max-height:520px; overflow:auto;"></div>
+      </div>
+      <div class="b90-card">
+        <div id="b90-pc-box">
+        <h3>💻 Bit no PC (Windows)</h3>
+        <div style="font-size:0.8rem; margin-bottom:6px;">1. Instale no PC (veja as opções abaixo). 2. Gere o link de conexão e
+          cole no app. O link vale 10 minutos.</div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90RunCommand('/pc')">🔗 Gerar link de conexão</button>
+          <button class="b90-btn-sec" style="margin:0;" onclick="window.b90RunCommand('/dispositivos')">📋 Aparelhos conectados</button>
+        </div>
+        <div style="font-size:0.74rem; color:var(--muted);">Instalar: abra o <b>PowerShell</b> no PC e cole
+          <code id="b90-pc-install" style="user-select:all;">irm https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/desktop/instalar.ps1 | iex</code>
+          <button class="b90-btn-sec" style="margin:0 0 0 4px; padding:1px 8px;" onclick="navigator.clipboard.writeText(document.getElementById('b90-pc-install').textContent)">copiar</button>
+          (instala o Python oficial, sem precisar de administrador, e cria o atalho "Bit no PC").</div>
+        </div>
+        <h3 style="margin-top:14px;">Resultado</h3>
+        <div id="b90-cmd-out" style="max-height:460px; overflow:auto; font-size:0.82rem;">
+          <span id="b90-cmd-empty" style="color:var(--muted);">As respostas aparecem aqui (com os botões de aprovação, quando houver).</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 7 (v11.0): TRABALHO — análise de dados, apresentações e triagem de e-mails -->
+  <div id="b90-tab-work" class="b90-tab-content">
+    <div class="b90-grid-equal">
+      <div class="b90-card">
+        <h3>Análise de dados</h3>
+        <span class="b90-label">Planilha (CSV ou XLSX) da pasta de arquivos</span>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <select id="b90-work-file" class="b90-select" style="flex:1; min-width:180px;"></select>
+          <input type="file" id="b90-work-upload" accept=".csv,.xlsx,.tsv,.txt" style="display:none;" onchange="window.b90WorkUpload(this)" />
+          <button class="b90-btn-sec" onclick="document.getElementById('b90-work-upload').click()">Enviar planilha</button>
+        </div>
+        <span class="b90-label">Pergunta ou foco da análise (opcional)</span>
+        <input id="b90-work-question" class="b90-input" placeholder="Ex.: onde está a concentração de receita e quais clientes estão inativos?" />
+        <button id="b90-work-analyze-btn" class="b90-btn-pri" onclick="window.b90WorkAnalyze()">Analisar e gerar relatório e apresentação</button>
+        <div style="font-size:0.74rem; color:var(--muted); margin-top:6px;">Os números são calculados por código. A IA só redige a interpretação, e o texto dela é conferido contra os números calculados.</div>
+        <h3 style="margin-top:16px;">Apresentação por tema</h3>
+        <div style="display:flex; gap:6px;">
+          <input id="b90-work-topic" class="b90-input" placeholder="Ex.: plano de onboarding de novos clientes" onkeydown="if(event.key==='Enter')window.b90WorkDeck()" />
+          <button id="b90-work-deck-btn" class="b90-btn-pri" style="margin-top:0; white-space:nowrap;" onclick="window.b90WorkDeck()">Gerar</button>
+        </div>
+      </div>
+      <div class="b90-card">
+        <h3>Caixa de entrada</h3>
+        <div id="b90-work-mail-note" style="font-size:0.8rem; color:var(--muted); margin-bottom:8px;"></div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; cursor:pointer;">
+          <input type="checkbox" id="b90-work-unread" checked style="width:auto;" /> Somente mensagens não lidas
+        </label>
+        <button id="b90-work-triage-btn" class="b90-btn-pri" onclick="window.b90WorkTriage()">Triar e-mails e preparar respostas</button>
+        <div style="font-size:0.74rem; color:var(--muted); margin-top:6px;">A Byte lê, resume e prepara rascunhos. Nenhum e-mail é enviado sem a sua aprovação em cada rascunho.</div>
+        <h3 style="margin-top:16px;">Entregas geradas</h3>
+        <div id="b90-work-outputs-dir" style="font-size:0.72rem; color:var(--muted); font-family:monospace; margin-bottom:6px;"></div>
+        <div id="b90-work-outputs" style="max-height:230px; overflow-y:auto;"></div>
+      </div>
+    </div>
+    <div class="b90-card" style="margin-top:12px;">
+      <h3>Pesquisa na web</h3>
+      <div style="display:flex; gap:6px;">
+        <input id="b90-web-question" class="b90-input" placeholder="Ex.: principais tendências de mercado no setor de varejo em 2026" onkeydown="if(event.key==='Enter')window.b90WebResearch()" />
+        <button id="b90-web-btn" class="b90-btn-pri" style="margin-top:0; white-space:nowrap;" onclick="window.b90WebResearch()">Pesquisar</button>
+      </div>
+      <div id="b90-web-note" style="font-size:0.74rem; color:var(--muted); margin-top:6px;">A Byte faz várias buscas, lê as melhores fontes e entrega um relatório com cada afirmação ligada à fonte.</div>
+    </div>
+    <div class="b90-card" style="margin-top:12px;">
+      <h3>Resultado</h3>
+      <div id="b90-work-out" class="b90-msg-b">Escolha uma planilha e clique em analisar, ou faça a triagem dos e-mails.</div>
+    </div>
+  </div>
+
+  <!-- ABA 1: CHAT METACOGNITIVO COM TOOL CALLING, PONTE 1-CLIQUE E FEEDBACK -->
+  <div id="b90-tab-chat" class="b90-tab-content active">
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>Conversa Metacognitiva (Tool Calling Ativo + Botão 1-Clique p/ Rodar Códigos)</h3>
+        <div id="b90-chat-log"></div>
+
+        <div style="display:grid; grid-template-columns: 1fr 1.1fr 1.2fr 0.9fr 0.8fr 1.3fr; gap:6px; margin-bottom:8px; align-items:end;">
+          <div>
+            <span class="b90-label">Complexidade (define o modelo)</span>
+            <select id="b90-chat-complexity" class="b90-select">
+              <option value="auto" selected>🧭 Automático</option>
+              <option value="baixo">🟢 Baixo</option>
+              <option value="medio">🔵 Médio</option>
+              <option value="alto">🔴 Alto</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Modo Especialista</span>
+            <select id="b90-chat-mode" class="b90-select">
+              <option value="geral">Conversa Livre</option>
+              <option value="computacao_engenharia">Engenharia & Código</option>
+              <option value="email_draft">Redatora E-mails</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Orçamento de Tokens</span>
+            <select id="b90-token-preset" class="b90-select" onchange="document.getElementById('b90-chat-tokens').value=this.value">
+              <option value="0" selected>🧭 Automático por Esforço</option>
+              <option value="512">Curto (512 tok)</option>
+              <option value="1536">Médio (1536 tok)</option>
+              <option value="3072">Longo (3072 tok)</option>
+              <option value="4096">Muito Longo (4096 tok)</option>
+              <option value="-1">♾️ Ilimitado (-1 / Sem Corte)</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Máx. Tokens (`num_predict`)</span>
+            <input id="b90-chat-tokens" type="number" step="128" value="0" class="b90-input" />
+          </div>
+          <div>
+            <span class="b90-label">Contexto (`num_ctx`)</span>
+            <input id="b90-chat-ctx" type="number" step="1024" value="8192" class="b90-input" />
+          </div>
+          <div>
+            <span class="b90-label">Diretriz Prioritária de Prompt</span>
+            <input id="b90-chat-dir" class="b90-input" placeholder="Ex: Explique detalhadamente..." />
+          </div>
+        </div>
+
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <input id="b90-chat-in" class="b90-input" style="flex:1; min-width:240px;" placeholder="Peça para ela avaliar a própria arquitetura, rodar um código Python/Bash ou agendar algo..." onkeydown="if(event.key==='Enter')window.b90SendChat()" />
+          <button id="b90-send-btn" class="b90-btn-pri" style="margin-top:0; white-space:nowrap;" onclick="window.b90SendChat()">Enviar</button>
+          <button id="b90-mic-btn" class="b90-btn-sec" style="margin-top:0; white-space:nowrap;" title="Comando de voz: toque, fale e solte a frase" onclick="window.b90Mic()">🎙️ Falar</button>
+        </div>
+        <div style="display:flex; gap:14px; flex-wrap:wrap; font-size:0.74rem; color:var(--muted); margin-top:6px;">
+          <label style="display:flex; align-items:center; gap:4px;" title="Microfone aberto: só reage quando você chama o agente pelo nome"><input type="checkbox" id="b90-voice-hands" onchange="window.b90HandsFree()"> Mãos livres <span id="b90-voice-wake"></span></label>
+          <label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" id="b90-voice-speak" checked> Ler as respostas em voz alta</label>
+          <span id="b90-voice-msg"></span>
+          <button class="b90-btn-sec" style="white-space:nowrap;" onclick="window.b90ContinueLast()">➕ Continuar</button>
+          <button class="b90-btn-purple" style="white-space:nowrap;" onclick="window.b90TriggerProactiveNow()">🤖 Iniciativa LLM</button>
+        </div>
+      </div>
+
+      <div class="b90-card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h3>🧠 Janela de Contexto (12 Turnos + Resumo Episódico)</h3>
+          <button class="b90-btn-del" onclick="window.b90ClearContext()">Limpar Contexto</button>
+        </div>
+        <pre id="b90-context-window-box" class="b90-pre">Janela de contexto pronta.</pre>
+        <h3 style="margin-top:10px;">🧭 Telemetria & Calibração do Auto-Router</h3>
+        <pre id="b90-telemetry-box" class="b90-pre" style="max-height:135px;">Telemetria pronta.</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 2: TERMINAL E PLAYER ANIMADO PYGAME -->
+  <div id="b90-tab-term" class="b90-tab-content">
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>🎮 Terminal Python (Multi-Frame Pygame) & Bash com Filtro de Segurança</h3>
+        <div style="display:grid; grid-template-columns: 1.5fr 1fr 1fr; gap:8px;">
+          <div>
+            <span class="b90-label">Ambiente</span>
+            <select id="b90-term-mode" class="b90-select">
+              <option value="python">🧭 Python (detecta Pygame pela AST)</option>
+              <option value="python_test">⚡ Testes & Scripts (worker rápido, namespace persistente)</option>
+              <option value="pygame_sim">🎮 Pygame Multi-Frame</option>
+              <option value="shell">💻 Shell / Bash Linux (sem isolamento)</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Frames por Execução</span>
+            <input id="b90-term-frames" type="number" min="1" max="40" value="24" class="b90-input" />
+          </div>
+          <div>
+            <span class="b90-label">Timeout Loop (s)</span>
+            <input id="b90-term-timeout" type="number" step="1" value="6" class="b90-input" />
+          </div>
+        </div>
+        <span class="b90-label">Código do Jogo ou Script</span>
+        <textarea id="b90-term-code" class="b90-textarea" style="font-family:monospace; min-height:165px; color:#38bdf8;">if pássaro_x < 640:
+    pássaro_x += 22
+else:
+    pássaro_x = 30
+
+pygame.display.flip()
+pygame.time.Clock().tick(60)</textarea>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="b90-term-btn" class="b90-btn-pri" onclick="window.b90RunTerm()">▶️ Rodar Jogo / Código (Gerar Animação)</button>
+          <button class="b90-btn-sec" style="margin-top:8px;" onclick="window.b90RunTerm()">⏩ Continuar +Frames</button>
+          <button class="b90-btn-sec" style="margin-top:8px;" onclick="window.b90ResetTerm()">♻️ Limpar namespace</button>
+        </div>
+      </div>
+      <div class="b90-card">
+        <h3>🕹️ Player Interativo de Frames Pygame & Saída</h3>
+        <div id="b90-game-player" style="display:none; background:#05080f; padding:10px; border-radius:8px; border:1px solid var(--accent); margin-bottom:10px;">
+          <img id="b90-game-canvas" style="width:100%; border-radius:6px; border:1px solid var(--border); display:block;" />
+          <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+            <button id="b90-play-btn" class="b90-btn-sec" onclick="window.b90TogglePlayGame()">⏸️ Pausar</button>
+            <input id="b90-frame-slider" type="range" min="0" max="0" value="0" style="flex:1;" oninput="window.b90SeekFrame(this.value)" />
+            <span id="b90-frame-counter" style="font-family:monospace; font-size:0.78rem; color:var(--accent);">Frame 1/1</span>
+            <select id="b90-fps-select" class="b90-select" style="width:auto; padding:4px 8px;" onchange="window.b90ChangeFPS(this.value)">
+              <option value="8">8 FPS</option>
+              <option value="15" selected>15 FPS</option>
+              <option value="24">24 FPS</option>
+            </select>
+          </div>
+        </div>
+        <pre id="b90-term-out" class="b90-pre">Clique em "Rodar Jogo / Código" ou envie um bloco direto do Chat com 1 clique!</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 3: AGENDA ASSÍNCRONA & MEMÓRIAS EPISÓDICAS -->
+  <div id="b90-tab-ctx" class="b90-tab-content">
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>👥 Pessoas (cada uma com o próprio espaço)</h3>
+        <div id="b90-people-box" style="margin-bottom:12px; font-size:0.82rem;">
+          <div style="color:var(--muted); font-size:0.74rem; margin-bottom:6px;">Quem você convidar usa este agente pelo mesmo bot do
+            Telegram ou por um painel pessoal, com conversa, memória, tarefas e lembretes só dela. Ninguém vê os seus dados (e-mails,
+            contas, aprovações) nem os de outra pessoa.</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
+            <input id="b90-people-name" class="b90-input" style="flex:1; min-width:180px;" placeholder="Nome de quem você quer convidar"
+              onkeydown="if(event.key==='Enter')window.b90PeopleInvite()" />
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-people-admin"> admin (convida e remove membros)</label>
+            <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90PeopleInvite()">✉️ Convidar</button>
+          </div>
+          <div id="b90-people-list"></div>
+          <pre id="b90-people-out" class="b90-pre" style="display:none; max-height:200px; margin-top:6px; user-select:all;"></pre>
+        </div>
+        <h3>📝 Reuniões (Teams, Zoom, Meet neste computador)</h3>
+        <div id="b90-meet-box" style="margin-bottom:12px; font-size:0.82rem;">
+          <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:6px;">
+            <input id="b90-meet-title" class="b90-input" style="flex:1; min-width:200px;" placeholder="Título (opcional), ex.: Reunião de orçamento" />
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-meet-sys" checked> áudio da reunião</label>
+            <label style="white-space:nowrap;"><input type="checkbox" id="b90-meet-mic" checked> meu microfone</label>
+            <button id="b90-meet-btn" class="b90-btn-pri" style="margin-top:0;" onclick="window.b90MeetToggle()">🔴 Gravar</button>
+            <span id="b90-meet-clock" style="color:var(--muted); font-family:monospace;"></span>
+          </div>
+          <div style="color:var(--muted); font-size:0.74rem; margin-bottom:6px;">Ao gravar, o navegador pede para compartilhar a tela:
+            <b>app do Teams/Zoom</b> → "Tela inteira" + "Compartilhar áudio do sistema"; <b>reunião no navegador</b> → a aba da reunião +
+            "Compartilhar áudio da aba". Use fone de ouvido e avise os participantes.</div>
+          <div id="b90-meet-state" style="font-size:0.76rem; color:var(--muted);"></div>
+          <pre id="b90-meet-live" class="b90-pre" style="display:none; max-height:180px; margin-top:6px;"></pre>
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin:6px 0;">
+            <label class="b90-btn-sec" style="margin:0; cursor:pointer;">📤 Enviar gravação (áudio/vídeo, até 150 MB)
+              <input type="file" id="b90-meet-file" accept="audio/*,video/*" style="display:none;" onchange="window.b90MeetUpload(this)"></label>
+          </div>
+          <div id="b90-meet-opts" style="font-size:0.76rem; color:var(--muted); margin-bottom:4px;"></div>
+          <div id="b90-meet-list"></div>
+          <pre id="b90-meet-ata" class="b90-pre" style="display:none; max-height:260px; margin-top:6px;"></pre>
+        </div>
+        <h3>🧩 Objetivos (a Byte trabalha sozinha, em etapas)</h3>
+        <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
+          <input id="b90-new-goal" class="b90-input" style="flex:1; min-width:220px;" placeholder="Ex.: pesquise 3 cursos de Python gratuitos e me entregue um comparativo" onkeydown="if(event.key==='Enter')window.b90AddGoal()" />
+          <button id="b90-goal-btn" class="b90-btn-pri" style="margin-top:0;" onclick="window.b90AddGoal()">+ Objetivo</button>
+        </div>
+        <div id="b90-goal-feedback" style="font-size:0.74rem; color:var(--muted); font-family:monospace; white-space:pre-wrap;"></div>
+        <div id="b90-goals-list" style="margin-bottom:12px;"></div>
+        <h3>⚡ Gatilhos (a Byte avisa quando algo acontece)</h3>
+        <div id="b90-triggers-list" style="margin-bottom:12px; font-size:0.8rem;"></div>
+        <h3>🔐 Permissões (o que a Byte faz sem você)</h3>
+        <div id="b90-perms-list" style="margin-bottom:6px; font-size:0.8rem;"></div>
+        <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90ShowActivity()">Ver atividade recente</button>
+        <pre id="b90-activity-box" class="b90-pre" style="display:none; max-height:180px; margin-top:6px;"></pre>
+        <h3>☀️ Resumos (manhã e fechamento da semana)</h3>
+        <div id="b90-brief-box" style="margin-bottom:6px; font-size:0.8rem;"></div>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90BriefNow('manha')">Ver resumo de hoje</button>
+          <button class="b90-btn-sec" style="margin-top:0;" onclick="window.b90BriefNow('semana')">Ver fechamento da semana</button>
+        </div>
+        <pre id="b90-brief-preview" class="b90-pre" style="display:none; max-height:260px; margin-top:6px;"></pre>
+        <h3>🗓️ Agenda & Tarefas (Extraídas em Background Assíncrono pela LLM)</h3>
+        <div style="display:grid; grid-template-columns: 2fr 1fr auto; gap:6px; margin-bottom:10px;">
+          <input id="b90-new-task" class="b90-input" placeholder="Ex: Reunião de alinhamento sexta às 15h..." />
+          <input id="b90-new-slot" class="b90-input" placeholder="Horário (opcional)..." />
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90AddTask()">+ Agendar</button>
+        </div>
+        <div id="b90-tasks-list"></div>
+        <h3 style="margin-top:12px;">⏰ Lembretes & Tarefas Agendadas</h3>
+        <div style="display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap;">
+          <input id="b90-new-reminder" class="b90-input" style="flex:1; min-width:220px;" placeholder="30m beber água | amanhã 09:00 reunião | 08:00 resuma minha agenda" onkeydown="if(event.key==='Enter')window.b90AddReminder()" />
+          <select id="b90-reminder-repeat" class="b90-select" style="width:auto;">
+            <option value="none">uma vez</option><option value="daily">todo dia</option><option value="weekly">toda semana</option>
+          </select>
+          <label style="display:flex; align-items:center; gap:4px; font-size:0.74rem; color:var(--muted);" title="No horário, a Byte executa a instrução com as ferramentas de leitura e envia o resultado">
+            <input type="checkbox" id="b90-reminder-task" style="width:auto;" /> executar como tarefa
+          </label>
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90AddReminder()">+ Agendar</button>
+        </div>
+        <div id="b90-reminder-feedback" style="font-size:0.74rem; color:var(--muted); font-family:monospace;"></div>
+        <div id="b90-reminders-list"></div>
+      </div>
+      <div class="b90-card">
+        <h3>📌 Memórias Vetoriais & Resumos Episódicos</h3>
+        <div style="display:flex; gap:6px; margin-bottom:10px;">
+          <input id="b90-new-mem" class="b90-input" placeholder="Novo fato ou preferência..." />
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90AddMem()">+ Memória</button>
+          <button id="b90-clear-mem-btn" class="b90-btn-del" style="white-space:nowrap;" onclick="window.b90ClearMemories()" title="Apaga todas as memórias e resumos episódicos e zera o cache vetorial">🧹 Limpar memórias</button>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px; font-size:0.74rem; color:var(--muted);">
+          Iniciativas autônomas: ociosidade mínima
+          <input id="b90-auto-idle" type="number" min="1" value="10" class="b90-input" style="width:64px;" /> min, intervalo mínimo
+          <input id="b90-auto-gap" type="number" min="1" value="30" class="b90-input" style="width:64px;" /> min
+          <button class="b90-btn-sec" onclick="window.b90SaveAutonomyPace()">Salvar ritmo</button>
+          <label style="display:flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" id="b90-auto-enabled" checked style="width:auto;" onchange="window.b90SaveAutonomyPace()" /> ativas</label>
+        </div>
+        <div id="b90-mem-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 4: BUSCA UNIVERSAL DE LLMs & ARENA -->
+  <div id="b90-tab-arena" class="b90-tab-content">
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>🔍 Busca Universal de LLMs (catálogo + ollama.com ao vivo + qualquer tag digitada)</h3>
+        <div id="b90-hw-line" class="b90-hw-line">🖥️ Hardware: detectando GPU/VRAM/RAM...</div>
+        <div style="display:grid; grid-template-columns: 1.6fr 1fr 0.8fr auto; gap:6px; align-items:end;">
+          <div>
+            <span class="b90-label">Digite qualquer modelo ou tag exata (ex: nemotron-3.5-lightning, qwen2.5-coder:14b, deepseek-r1:14b)</span>
+            <input id="b90-search-q" class="b90-input" placeholder="Nome ou tag de qualquer LLM do Ollama..." onkeydown="if(event.key==='Enter')window.b90SearchModels()" />
+          </div>
+          <div>
+            <span class="b90-label">Especialidade</span>
+            <select id="b90-search-cat" class="b90-select" onchange="window.b90SearchModels()">
+              <option value="todas">Todas</option>
+              <option value="geral">Geral / Chat</option>
+              <option value="codigo">Código / Dev</option>
+              <option value="raciocinio">Raciocínio / STEM</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Máx. VRAM (GB)</span>
+            <input id="b90-search-vram" type="number" value="80" class="b90-input" />
+          </div>
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SearchModels()">Buscar</button>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+          <button class="b90-btn-ok" onclick="window.b90PullModel()">⬇️ Baixar, Aquecer & Executar a tag digitada</button>
+          <label style="display:flex; align-items:center; gap:5px; font-size:0.74rem; color:#fca5a5; cursor:pointer;" title="force_oom_override=True: ignora o bloqueio do validador de VRAM. O runtime pode travar por falta de memória.">
+            <input type="checkbox" id="b90-force-oom" style="width:auto;" onchange="window.b90SearchModels()" /> Forçar mesmo com 🔴 risco de OOM
+          </label>
+          <span id="b90-online-note" style="font-size:0.74rem; color:var(--muted);">A tag é baixada exatamente como digitada (sem alias). Busque para ver tamanhos e o veredito de VRAM.</span>
+        </div>
+        <div class="b90-prog-wrap"><div id="b90-pull-bar" class="b90-prog-bar"></div></div>
+        <div id="b90-pull-label" style="font-size:0.78rem; color:var(--accent); font-family:monospace;">Download: ocioso</div>
+        <div id="b90-pull-gpu" style="font-size:0.75rem; color:var(--muted); font-family:monospace; white-space:pre-wrap;"></div>
+        <div id="b90-models-results" style="margin-top:10px; max-height:300px; overflow-y:auto;"></div>
+      </div>
+
+      <div class="b90-card">
+        <h3>⚙️ Seletor de Cérebro & Controle do Auto-Router</h3>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--accent); cursor:pointer; margin-bottom:8px;">
+          <input type="checkbox" id="b90-auto-router-chk" checked style="width:auto;" onchange="window.b90ToggleEffortRouter(this.checked)" />
+          <b>Ativar Auto-Routing por Esforço Calibrado pelo Usuário</b>
+        </label>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <div>
+            <span class="b90-label">Provedor Base</span>
+            <select id="b90-llm-prov" class="b90-select" onchange="window.b90UpdateModels(true)">
+              <option value="ollama">Ollama (Local GPU)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="openai">OpenAI (GPT)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Modelos Instalados / Catálogo</span>
+            <select id="b90-llm-sel" class="b90-select" onchange="document.getElementById('b90-llm-custom').value=this.value"></select>
+          </div>
+        </div>
+        <span class="b90-label">Modelo Preferencial (qualquer tag válida; se não estiver instalada, "Aplicar" baixa, aquece e ativa)</span>
+        <input id="b90-llm-custom" class="b90-input" value="qwen2.5:3b" />
+        <span class="b90-label">Mapeamento de modelos por complexidade (vazio = escolha automática entre os instalados)</span>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:6px; align-items:end;">
+          <input id="b90-cx-baixo" class="b90-input" placeholder="🟢 Baixo: automático" />
+          <input id="b90-cx-medio" class="b90-input" placeholder="🔵 Médio: automático" />
+          <input id="b90-cx-alto" class="b90-input" placeholder="🔴 Alto: automático (ou openai:gpt-4o)" />
+          <button class="b90-btn-sec" onclick="window.b90SaveComplexityMap()">Salvar</button>
+        </div>
+        <div id="b90-cx-resolved" style="font-size:0.74rem; color:var(--muted); font-family:monospace; margin-top:4px;"></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;">
+          <div>
+            <span class="b90-label">Temperatura</span>
+            <input id="b90-llm-temp" type="number" step="0.05" value="0.25" class="b90-input" />
+          </div>
+          <div>
+            <span class="b90-label">Máx. Tokens (`num_predict`)</span>
+            <input id="b90-llm-pred" type="number" step="256" value="2048" class="b90-input" />
+          </div>
+          <div>
+            <span class="b90-label">Janela (`num_ctx`)</span>
+            <input id="b90-llm-ctx" type="number" step="1024" value="8192" class="b90-input" />
+          </div>
+        </div>
+        <span class="b90-label">API Key (Opcional para Ollama)</span>
+        <input id="b90-llm-key" type="password" class="b90-input" placeholder="AIza... / sk-... / sk-ant-..." />
+        <div id="b90-switch-feedback" style="font-size:0.78rem; color:var(--ok); margin-top:6px; font-family:monospace;"></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+          <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SaveLLM(true)">⚡ Aplicar Modelo & Parâmetros</button>
+          <button class="b90-btn-ok" onclick="window.b90PullModelDirect(document.getElementById('b90-llm-custom').value)">⬇️ Baixar & Ativar</button>
+          <button class="b90-btn-del" onclick="window.b90CancelProvision()">🛑 Destravar VRAM</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="b90-card" style="margin-top:12px;">
+      <h3>🏆 Arena de Comparação de LLMs</h3>
+      <div style="display:grid; grid-template-columns: 1fr 1fr 2fr auto auto; gap:8px; align-items:end; margin-bottom:10px;">
+        <div>
+          <span class="b90-label">Cérebro Competidor A</span>
+          <input id="b90-arena-a" class="b90-input" value="ollama:qwen2.5:3b" />
+        </div>
+        <div>
+          <span class="b90-label">Cérebro Competidor B</span>
+          <input id="b90-arena-b" class="b90-input" value="ollama:nemotron-mini:4b" />
+        </div>
+        <div>
+          <span class="b90-label">Prompt de Teste Comparativo</span>
+          <input id="b90-arena-prompt" class="b90-input" value="Explique em 3 tópicos completos a diferença entre um flip-flop JK e um flip-flop D." />
+        </div>
+        <div>
+          <span class="b90-label">Máx. tokens por competidor</span>
+          <input id="b90-arena-tokens" type="number" step="512" min="256" value="4096" class="b90-input" style="width:110px;" />
+        </div>
+        <button id="b90-arena-btn" class="b90-btn-pri" style="margin-top:0;" onclick="window.b90RunArena()">⚔️ Comparar LLMs</button>
+      </div>
+      <div id="b90-arena-summary" style="font-family:monospace; font-size:0.8rem; color:var(--ok); margin-bottom:8px;"></div>
+      <div class="b90-grid-equal">
+        <div>
+          <span class="b90-label" id="b90-arena-title-a">Resultado Competidor A</span>
+          <pre id="b90-arena-out-a" class="b90-pre">Aguardando execução da Arena...</pre>
+        </div>
+        <div>
+          <span class="b90-label" id="b90-arena-title-b">Resultado Competidor B</span>
+          <pre id="b90-arena-out-b" class="b90-pre">Aguardando execução da Arena...</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 5: CONEXÃO ONLINE / OFFLINE E CONTROLE DE VRAM -->
+  <div id="b90-tab-conn" class="b90-tab-content">
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>🌐 Status do Setup da LLM, VRAM & Cadeia de Auditoria SHA-256</h3>
+        <div class="b90-prog-wrap"><div id="b90-prov-bar" class="b90-prog-bar"></div></div>
+        <div id="b90-prov-label" style="font-size:0.78rem; color:var(--accent); font-family:monospace; margin-bottom:10px;">Status: Pronto</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+          <button class="b90-btn-ok" onclick="window.b90SetConnMode('online')">🟢 Ativar Modo Online (Imediato)</button>
+          <button class="b90-btn-sec" onclick="window.b90SetConnMode('offline')">📴 Ativar Modo Offline</button>
+          <button class="b90-btn-del" onclick="window.b90CancelProvision()">🛑 Cancelar Pull / Destravar VRAM</button>
+        </div>
+        <button class="b90-btn-pri" style="width:100%; margin-top:0;" onclick="window.b90RunOnlineSetup()">🔥 Iniciar / Reaquecer Servidor Ollama na GPU</button>
+        <hr style="border-color:var(--border); margin:12px 0;">
+        <h3>💾 Sincronização com Google Drive</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="b90-btn-sec" onclick="window.b90SyncDrive('push')">⬆️ Salvar Banco no Google Drive (Push)</button>
+          <button class="b90-btn-sec" onclick="window.b90SyncDrive('pull')">⬇️ Restaurar Banco do Google Drive (Pull)</button>
+        </div>
+      </div>
+      <div class="b90-card">
+        <h3>Log ao Vivo do Provisionador, VRAM (/api/ps) & Auditoria</h3>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
+          <button class="b90-btn-sec" onclick="window.b90GpuDiag()">🩺 Diagnóstico de GPU</button>
+          <button class="b90-btn-del" onclick="window.b90RepairGpu()">🛠️ Reparar GPU (reinstalar e reiniciar Ollama)</button>
+        </div>
+        <pre id="b90-gpu-diag" class="b90-pre" style="display:none; margin-bottom:6px;"></pre>
+        <pre id="b90-conn-report" class="b90-pre">Pronto.</pre>
+        <h3 style="margin-top:12px;">🧬 Auto-otimização supervisionada (funções puras)</h3>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <select id="b90-evo-target" class="b90-select" style="width:auto;"></select>
+          <button class="b90-btn-sec" onclick="window.b90EvolverPropose()">Propor otimização</button>
+          <button id="b90-evo-approve" class="b90-btn-ok" style="display:none;" onclick="window.b90EvolverDecide(true)">✅ Aprovar hot-swap (RAM)</button>
+          <button id="b90-evo-reject" class="b90-btn-del" style="display:none;" onclick="window.b90EvolverDecide(false)">Descartar</button>
+          <button class="b90-btn-sec" onclick="window.b90EvolverRevert()">↩️ Reverter alvo</button>
+        </div>
+        <pre id="b90-evo-out" class="b90-pre" style="margin-top:6px;">Nenhuma proposta. O código gerado só é testado em subprocesso e nunca entra em uso sem a sua aprovação.</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABA 6: GMAIL & OUTLOOK -->
+  <div id="b90-tab-email" class="b90-tab-content">
+    <div class="b90-card" style="margin-bottom:12px;">
+      <h3>✉️ Modelos de e-mail (o Bit escreve como você)</h3>
+      <div style="color:var(--muted); font-size:0.76rem; margin-bottom:6px;">Sempre que o Bit preparar um e-mail (Bit no PC,
+        triagem, respostas, plano de cliente), ele usa o modelo que combina com a situação, mantendo o seu texto e tom.
+        Use <code>{{nome}}</code>, <code>{{pedido}}</code>... onde muda. Sem modelo adequado, ele escreve no seu estilo.
+        <b>Com o formato do Outlook</b> (tabelas, cores): copie o e-mail no Outlook e cole no campo do texto; com imagens
+        (logo, banner), use "Colar do Outlook" ou "Importar do Outlook" no Bit no PC.</div>
+      <div class="b90-grid-equal">
+        <div>
+          <div id="b90-tpl-list" style="max-height:260px; overflow:auto; font-size:0.82rem;"></div>
+          <span class="b90-label" style="margin-top:8px; display:block;">Assinatura (vai no fim de todo e-mail)</span>
+          <textarea id="b90-tpl-sig" class="b90-input" rows="3" placeholder="Gabriel Amorim&#10;Comercial · (11) 99999-0000"></textarea>
+          <button class="b90-btn-sec" style="margin-top:4px;" onclick="window.b90SaveSignature()">Salvar assinatura</button>
+        </div>
+        <div>
+          <input id="b90-tpl-nome" class="b90-input" placeholder="Nome (ex.: Follow-up de orçamento)" />
+          <input id="b90-tpl-uso" class="b90-input" style="margin-top:4px;" placeholder="Quando usar (ex.: 3 dias depois de mandar a proposta)" />
+          <input id="b90-tpl-assunto" class="b90-input" style="margin-top:4px;" placeholder="Assunto (opcional; pode ter {{campos}})" />
+          <textarea id="b90-tpl-corpo" class="b90-input" rows="8" style="margin-top:4px;" placeholder="Olá, {{nome}}!&#10;&#10;Passando para saber se conseguiu avaliar a proposta do {{pedido}}..."></textarea>
+          <div style="display:flex; gap:6px; margin-top:4px;">
+            <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SaveTemplate()">Salvar modelo</button>
+            <button class="b90-btn-sec" style="margin:0;" onclick="window.b90ClearTemplate()">Novo</button>
+          </div>
+          <div id="b90-tpl-fmt" style="font-size:0.74rem; color:var(--green, #3fb950); margin-top:4px; display:none;"></div>
+          <div id="b90-tpl-fb" style="font-size:0.74rem; color:var(--muted); margin-top:4px;"></div>
+        </div>
+      </div>
+    </div>
+    <div class="b90-grid">
+      <div class="b90-card">
+        <h3>Integração Gmail & Outlook (IMAP / SMTP)</h3>
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px;">
+          <div>
+            <span class="b90-label">Serviço</span>
+            <select id="b90-em-prov" class="b90-select" onchange="window.b90EmailSelect(this.value)">
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook</option>
+            </select>
+          </div>
+          <div>
+            <span class="b90-label">Seu E-mail</span>
+            <input id="b90-em-addr" class="b90-input" placeholder="voce@gmail.com" />
+          </div>
+          <div>
+            <span class="b90-label">App Password</span>
+            <input id="b90-em-pass" type="password" class="b90-input" placeholder="xxxx xxxx xxxx xxxx" />
+          </div>
+        </div>
+        <span class="b90-label">Segredo do Colab com a senha desta conta (opcional; vazio = nome padrão do provedor)</span>
+        <input id="b90-em-secret" class="b90-input" placeholder="ex.: SENHA_OUTLOOK_TRABALHO" />
+        <div id="b90-em-status" style="font-size:0.74rem; color:var(--muted); margin-top:6px;">A senha de app não é gravada no banco. Para não redigitar, crie o segredo BYTE_EMAIL_APP_PASSWORD no Colab (ícone 🔑).</div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <button class="b90-btn-sec" onclick="window.b90CfgEmail()">Conectar Conta</button>
+          <button class="b90-btn-sec" onclick="window.b90Inbox()">📥 Ler Caixa de Entrada</button>
+        </div>
+        <span class="b90-label">Para</span>
+        <input id="b90-em-to" class="b90-input" placeholder="destinatario@empresa.com" />
+        <span class="b90-label">Assunto</span>
+        <input id="b90-em-subj" class="b90-input" placeholder="Assunto..." />
+        <span class="b90-label">Corpo</span>
+        <textarea id="b90-em-body" class="b90-textarea"></textarea>
+        <div style="display:flex; gap:8px;">
+          <button class="b90-btn-sec" style="margin-top:8px;" onclick="window.b90DraftEmail()">✨ Redigir com IA</button>
+          <button class="b90-btn-pri" onclick="window.b90SendEmail()">📤 Enviar E-mail</button>
+        </div>
+      </div>
+      <div class="b90-card">
+        <h3>Saída de E-mail</h3>
+        <pre id="b90-em-out" class="b90-pre">Pronto.</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script data-b90="1">
+(function() {
+  function b90EncodeB64(obj) {
+    const jsonStr = JSON.stringify(obj || {});
+    const bytes = new TextEncoder().encode(jsonStr);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+
+  function b90DecodeB64(rawInput) {
+    if (rawInput && typeof rawInput === 'object') return rawInput;
+    const cleanB64 = String(rawInput || '').replace(/[^A-Za-z0-9+/=]/g, '');
+    const bin = atob(cleanB64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
+  function b90EscapeHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Serializa um valor como literal JS seguro para uso dentro de atributos onclick="...".
+  function b90JsArg(v) {
+    return b90EscapeHtml(JSON.stringify(String(v == null ? '' : v)));
+  }
+
+  const b90HttpToken = "__BYTE_TOKEN__";
+  let b90State = b90DecodeB64("__INITIAL_B64__");
+  let b90Catalog = {};
+  let b90ClockId = null;
+  let b90PollTimer = null;
+  window.b90CodeSnippets = [];
+
+  let b90GameFrames = [];
+  let b90GameIdx = 0;
+  let b90GamePlaying = false;
+  let b90GameTimer = null;
+  let b90GameFps = 15;
+
+  window.b90Tab = function(id, btn) {
+    document.querySelectorAll('#byte-v90-root .b90-tab-content').forEach(e => e.classList.remove('active'));
+    document.querySelectorAll('#byte-v90-root .b90-tab-btn').forEach(e => e.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    if (btn) btn.classList.add('active');
+  };
+
+  // NOVO NA v9.0: Ponte 1-Clique que envia qualquer código gerado no Chat direto para o Terminal e o executa!
+  window.b90RunSnippetInTerminal = async function(snippetIdx, mode) {
+    const code = window.b90CodeSnippets[snippetIdx];
+    if (!code) return;
+    const termBtn = document.getElementById('b90-btn-tab-term');
+    window.b90Tab('b90-tab-term', termBtn);
+    document.getElementById('b90-term-mode').value = mode;
+    document.getElementById('b90-term-code').value = code;
+    await window.b90RunTerm();
+  };
+
+  // v10.0: cartão de aprovação para e-mails preparados pela LLM (bloco ```byte-email).
+  function b90RenderEmailProposal(jsonText) {
+    let d = null;
+    try { d = JSON.parse(jsonText); } catch (e) { d = null; }
+    if (!d || !d.id) return `<div class="b90-code-card"><pre style="margin:0;white-space:pre-wrap;">${b90EscapeHtml(jsonText)}</pre></div>`;
+    window.b90EmailCards = window.b90EmailCards || {};
+    window.b90EmailCards[d.id] = { to: String(d.to || ''), subject: String(d.subject || ''), body: String(d.body || '') };
+    if (d.from) window.b90EmailCards[d.id].from = String(d.from);
+    return `<div class="b90-code-card" style="border-color:#f59e0b;white-space:normal;">
+      <div style="color:#f59e0b;font-weight:700;margin-bottom:6px;">✉️ E-mail aguardando sua aprovação</div>
+      ${d.from ? `<div><b>De:</b> ${b90EscapeHtml(d.from)}</div>` : ''}
+      <div><b>Para:</b> ${b90EscapeHtml(d.to)}</div>
+      <div><b>Assunto:</b> ${b90EscapeHtml(d.subject)}</div>
+      <pre style="margin:6px 0;white-space:pre-wrap;color:#f1f5f9;">${b90EscapeHtml(d.body)}</pre>
+      <div style="display:flex;gap:6px;">
+        <button class="b90-btn-ok" onclick="window.b90DecideAction(${b90JsArg(d.id)}, true, this)">📤 Aprovar e enviar</button>
+        <button class="b90-btn-del" onclick="window.b90DecideAction(${b90JsArg(d.id)}, false, this)">Descartar</button>
+      </div>
+      <div class="b90-action-result" style="font-size:0.76rem;margin-top:6px;color:#94a3b8;"></div>
+    </div>`;
+  }
+
+  // v12.1: ação externa aguardando aprovação (Asana, Notion, Teams...)
+  function b90RenderActionProposal(jsonText) {
+    let d = null;
+    try { d = JSON.parse(jsonText); } catch (e) { d = null; }
+    if (!d || !d.id) return `<div class="b90-code-card"><pre style="margin:0;white-space:pre-wrap;">${b90EscapeHtml(jsonText)}</pre></div>`;
+    window.b90EmailCards = window.b90EmailCards || {};
+    window.b90EmailCards[d.id] = { title: String(d.title || ''), details: String(d.details || '') };
+    return `<div class="b90-code-card" style="border-color:#f59e0b;white-space:normal;">
+      <div style="color:#f59e0b;font-weight:700;margin-bottom:6px;">Ação aguardando sua aprovação</div>
+      <div><b>${b90EscapeHtml(d.title)}</b></div>
+      <pre style="margin:6px 0;white-space:pre-wrap;">${b90EscapeHtml(d.details)}</pre>
+      <div style="display:flex;gap:6px;">
+        <button class="b90-btn-ok" onclick="window.b90DecideAction(${b90JsArg(d.id)}, true, this)">Aprovar</button>
+        <button class="b90-btn-del" onclick="window.b90DecideAction(${b90JsArg(d.id)}, false, this)">Descartar</button>
+      </div>
+      <div class="b90-action-result" style="font-size:0.76rem;margin-top:6px;color:#94a3b8;"></div>
+    </div>`;
+  }
+
+  window.b90DecideAction = async function(actionId, approve, btnEl) {
+    const card = btnEl ? btnEl.closest('.b90-code-card') : null;
+    if (card) card.querySelectorAll('button').forEach(b => b.disabled = true);
+    const shown = (window.b90EmailCards || {})[actionId] || null;   // o servidor confere com o rascunho guardado
+    const res = await b90Call(approve ? 'approve_action' : 'reject_action', { action_id: actionId, shown: shown });
+    const out = card ? card.querySelector('.b90-action-result') : null;
+    if (!out) return;
+    if (res.error) out.innerText = `Não enviado: ${res.error}`;
+    else if (approve && res.result && res.kind === 'email_send') out.innerText = `${res.result.status} — resposta do servidor: ${res.result.smtp_code} ${res.result.smtp_reply}`;
+    else if (approve && res.result) out.innerText = `Feito: ${res.result.summary || 'ação executada'}${res.result.url ? ' — ' + res.result.url : ''}`;
+    else out.innerText = 'Descartado. Nada foi enviado.';
+  };
+
+  function b90FormatReplyWithCodeButtons(rawText) {
+    const parts = String(rawText || '').split(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g);
+    let htmlOut = '';
+    for (let i = 0; i < parts.length; i += 3) {
+      htmlOut += b90EscapeHtml(parts[i]);
+      if (i + 2 < parts.length) {
+        const lang = (parts[i + 1] || 'python').toLowerCase();
+        const codeContent = (parts[i + 2] || '').trim();
+        if (lang === 'byte-email') { htmlOut += b90RenderEmailProposal(codeContent); continue; }
+        if (lang === 'byte-action') { htmlOut += b90RenderActionProposal(codeContent); continue; }
+        const mode = (lang === 'bash' || lang === 'sh' || lang === 'shell') ? 'shell' : 'python';
+        const idx = window.b90CodeSnippets.length;
+        window.b90CodeSnippets.push(codeContent);
+        htmlOut += `<div class="b90-code-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><span style="color:#38bdf8;font-weight:700;">[${lang.toUpperCase()}]</span><button class="b90-btn-ok" onclick="window.b90RunSnippetInTerminal(${idx}, '${mode}')">▶️ Enviar e Rodar no Terminal</button></div><pre style="margin:0;white-space:pre-wrap;color:#f1f5f9;">${b90EscapeHtml(codeContent)}</pre></div>`;
+      }
+    }
+    return htmlOut;
+  }
+
+  // NOVO NA v9.0: Feedback de calibração do Auto-Router (👍 Ideal vs ⚡ Exigir Modelo Mais Forte)
+  window.b90SendFeedback = async function(tierUsed, modelUsed, feedbackType, btnEl) {
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.innerText = feedbackType === 'upgrade' ? '⚡ Router Calibrado (+Forte)!' : '👍 Calibrado!';
+    }
+    await b90Call('record_feedback', { tier_used: tierUsed, model_used: modelUsed, feedback_type: feedbackType });
+    await window.b90Refresh();
+  };
+
+  function b90StartClock(label) {
+    const el = document.getElementById('b90-live-timer');
+    const t0 = performance.now();
+    if (b90ClockId) clearInterval(b90ClockId);
+    b90ClockId = setInterval(() => {
+      const elapsed = (performance.now() - t0).toFixed(0);
+      el.innerText = `⏳ ${label}: ${elapsed} ms`;
+    }, 25);
+    return t0;
+  }
+
+  function b90StopClock(t0, serverMs, label) {
+    if (b90ClockId) {
+      clearInterval(b90ClockId);
+      b90ClockId = null;
+    }
+    const uiMs = (performance.now() - t0).toFixed(1);
+    const srv = (serverMs !== undefined && serverMs !== null) ? serverMs : uiMs;
+    document.getElementById('b90-live-timer').innerText = `⏱️ ${label}: ${srv} ms (UI: ${uiMs} ms)`;
+  }
+
+  // v10.1.3: a Arena carrega dois modelos em sequência e o chat pode carregar um modelo grande a frio.
+  function b90ActionTimeoutMs(action) {
+    return ({ compare_models: 2100000, chat: 1000000, trigger_proactive_now: 1000000,
+              work_analyze: 900000, work_triage: 900000, work_presentation: 600000, web_research: 900000 })[action] || 180000;
+  }
+
+  // v10.5.1: painel de uma execução antiga (kernel reiniciado) não tem mais a função 'byte_v90_bridge' registrada.
+  let b90Disconnected = false;
+  function b90MarkDisconnected() {
+    if (b90Disconnected) return;
+    b90Disconnected = true;
+    const banner = document.getElementById('b90-dead-banner');
+    if (banner) banner.style.display = '';
+    if (b90PollTimer) { clearInterval(b90PollTimer); b90PollTimer = null; }
+  }
+
+  async function b90Call(action, payload={}, silentClock=false) {
+    if (b90Disconnected) return { error: 'Painel desconectado: rode a célula iniciar_byte() novamente.', latency_ms: 0 };
+    const t0 = silentClock ? performance.now() : b90StartClock(action);
+    let srvMs = null;
+    try {
+      const watchdog = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Limite de ${b90ActionTimeoutMs(action) / 1000}s atingido.`)), b90ActionTimeoutMs(action))
+      );
+
+      const requestPromise = (async () => {
+        if (window.google && google.colab && google.colab.kernel) {
+          const reqB64 = b90EncodeB64(payload);
+          const res = await google.colab.kernel.invokeFunction('byte_v90_bridge', [action, reqB64], {});
+          const rawB64 = (res && res.data) ? (res.data['text/plain'] || res.data['application/json']) : '';
+          return b90DecodeB64(rawB64);
+        }
+        const r = await fetch('/api/dispatch', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Byte-Token': b90HttpToken},
+          body: JSON.stringify({ action, payload })
+        });
+        return await r.json();
+      })();
+
+      const data = await Promise.race([requestPromise, watchdog]);
+      srvMs = data.latency_ms ?? data.dispatch_total_ms ?? null;
+      return data;
+    } catch (err) {
+      if (/Function not found|byte_v90_bridge/i.test(String(err))) {
+        b90MarkDisconnected();
+        return { error: 'Painel desconectado: rode a célula iniciar_byte() novamente.', latency_ms: 0 };
+      }
+      return { error: String(err), latency_ms: 0 };
+    } finally {
+      if (!silentClock) b90StopClock(t0, srvMs, action);
+    }
+  }
+
+  window.b90UpdateModels = function(userChangedProvider=false) {
+    const p = document.getElementById('b90-llm-prov').value;
+    const list = b90Catalog[p] || ['qwen2.5:3b'];
+    const sel = document.getElementById('b90-llm-sel');
+    const currentCustom = document.getElementById('b90-llm-custom').value;
+    const targetModel = userChangedProvider ? list[0] : (currentCustom || list[0]);
+
+    const fullList = list.includes(targetModel) ? list : [targetModel, ...list];
+    sel.innerHTML = fullList.map(m => `<option value="${b90EscapeHtml(m)}" ${m === targetModel ? 'selected' : ''}>${b90EscapeHtml(m)}</option>`).join('');
+    document.getElementById('b90-llm-custom').value = targetModel;
+  };
+
+  function b90RenderContextWindow(winList) {
+    const box = document.getElementById('b90-context-window-box');
+    if (!winList || !winList.length) {
+      box.innerText = 'Janela de contexto ativa (aguardando 1º turno da LLM real).';
+      return;
+    }
+    box.innerText = winList.map((m, idx) => {
+      const tag = m.role === 'user' ? '👤 VOCÊ' : `🤖 ${b90AgentLabel()} [${m.brain || 'LLM'}]`;
+      return `[Turno #${idx + 1}] ${tag}:\n${m.content}`;
+    }).join('\n\n');
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function b90RenderProactiveMessages(msgList) {
+    if (!msgList || !msgList.length) return;
+    const log = document.getElementById('b90-chat-log');
+    msgList.forEach(item => {
+      log.innerHTML += `<div class="b90-msg-proactive"><b>🤖 ${b90AgentLabel()} [${b90EscapeHtml(item.brain_used || 'AUTONOMIA LLM REAL')}]:</b>\n${b90FormatReplyWithCodeButtons(item.message)}</div>`;
+      log.innerHTML += `<div class="b90-meta"><span>⚡ Evento Assíncrono / Iniciativa (Gatilho: ${b90EscapeHtml(item.trigger_type)})</span></div>`;
+    });
+    log.scrollTop = log.scrollHeight;
+  }
+
+  const b90SafetyColors = { safe: '#22c55e', hybrid: '#f59e0b', oom: '#ef4444', unknown: '#94a3b8' };
+
+  function b90SafetyChip(saf) {
+    if (!saf) return '';
+    const color = b90SafetyColors[saf.level] || '#94a3b8';
+    return `<span class="b90-safety" style="color:${color};" title="${b90EscapeHtml(saf.message || '')}">${b90EscapeHtml(saf.label)}</span>`;
+  }
+
+  function b90HardwareText(hw) {
+    if (!hw || !hw.gpu_name) return '🖥️ Hardware: sem dados';
+    const gpu = hw.gpu_detected
+      ? `🖥️ GPU: ${hw.gpu_name} | VRAM livre ${hw.vram_free_gb}/${hw.vram_total_gb} GB (em uso: ${hw.vram_used_gb} GB)`
+      : `🖥️ ${hw.gpu_name}`;
+    const ram = `RAM livre ${hw.ram_free_gb}/${hw.ram_total_gb} GB`;
+    const loaded = (hw.ollama_loaded || []).map(m => `${m.name} (${m.size_vram_gb} GB VRAM, ${m.gpu_pct}% GPU)`).join(', ');
+    return `${gpu} | ${ram}\nOllama carregado: ${loaded || 'nenhum modelo na VRAM'} | lido às ${hw.checked_at} via ${hw.source}`;
+  }
+
+  function b90RenderHardware(hw, activeSafety) {
+    const line = document.getElementById('b90-hw-line');
+    if (line) line.innerText = b90HardwareText(hw);
+    const badge = document.getElementById('b90-gpu-badge');
+    if (!badge || !hw) return;
+    const head = hw.gpu_detected
+      ? `🖥️ ${hw.gpu_name} | VRAM ${hw.vram_free_gb}/${hw.vram_total_gb} GB livres`
+      : `🖥️ ${hw.gpu_detected === false && hw.ram_total_gb ? 'Sem GPU NVIDIA' : (hw.gpu_name || 'GPU ?')} | RAM ${hw.ram_free_gb || 0}/${hw.ram_total_gb || 0} GB livres`;
+    const level = activeSafety ? activeSafety.level : 'unknown';
+    badge.className = 'b90-badge-gpu' + (level === 'oom' ? ' danger' : (level === 'hybrid' || !hw.gpu_detected ? ' warn' : ''));
+    badge.innerText = activeSafety && activeSafety.level !== 'unknown' ? `${head} | ${activeSafety.short}` : head;
+    badge.title = (activeSafety && activeSafety.message ? `Modelo ativo: ${activeSafety.message}\n` : '') + b90HardwareText(hw);
+  }
+
+  function b90RenderDiscoverableModels(disc) {
+    if (!disc || !disc.models) return;
+    const box = document.getElementById('b90-models-results');
+    const on = disc.online_search || {};
+    const noteEl = document.getElementById('b90-online-note');
+    if (noteEl && on.queried) {
+      noteEl.innerText = on.ok
+        ? `ollama.com ao vivo: ${on.count} variante(s) baixável(is) | ${on.tags_pages || 0} página(s) de tags com tamanho real`
+        : `Busca ao vivo indisponível (${on.error || 'erro'}); a tag digitada continua baixável e o catálogo local é exibido`;
+    }
+    if (disc.gpu_hardware) {
+      const line = document.getElementById('b90-hw-line');
+      if (line) line.innerText = b90HardwareText(disc.gpu_hardware);
+    }
+    const forceOn = !!(document.getElementById('b90-force-oom') || {}).checked;
+    box.innerHTML = disc.models.map(m => {
+      const isLocal = m.provider === 'ollama';
+      const blocked = isLocal && !m.installed && m.safety && m.safety.level === 'oom' && !forceOn;
+      const vramTxt = (m.vram_gb === '?' || m.vram_gb === undefined) ? 'tamanho ?' : `${m.vram_gb} GB${m.size_source ? ' ' + m.size_source : ''}`;
+      const stateTxt = m.active ? '⭐ ATIVO NA BYTE' : (m.loaded_in_vram ? '🔥 NA VRAM' : (m.installed ? '✅ INSTALADO' : (isLocal ? '⬇️ DISPONÍVEL P/ PULL' : '🔑 REQUER API KEY')));
+      let mainBtn;
+      if (isLocal && !m.installed) {
+        mainBtn = `<button class="${blocked ? 'b90-btn-del' : 'b90-btn-ok'}" title="${b90EscapeHtml(blocked ? 'Bloqueado pelo validador de VRAM. Marque “Forçar mesmo com risco de OOM” para prosseguir.' : 'Baixa via /api/pull, aquece na VRAM e ativa no Chat e na Arena')}" onclick="window.b90PullModelDirect(${b90JsArg(m.name)})">${blocked ? '🔴 Bloqueado (OOM)' : '⬇️ Baixar, Aquecer & Executar'}</button>`;
+      } else {
+        mainBtn = `<button class="b90-btn-ok" onclick="window.b90SelectFromHub(${b90JsArg(m.provider)}, ${b90JsArg(m.name)})">${m.active && (m.loaded_in_vram || !isLocal) ? '✓ Em Uso' : (isLocal ? '⚡ Aquecer & Executar' : '⚡ Selecionar')}</button>`;
+      }
+      return `
+      <div class="b90-row-item ${m.active ? 'active-model' : ''}">
+        <div>
+          <b>${b90EscapeHtml(m.name)}</b> <span style="color:#38bdf8;font-size:0.75rem;">[${b90EscapeHtml(String(m.provider).toUpperCase())} | ${b90EscapeHtml(m.params)} | ${b90EscapeHtml(vramTxt)}]</span>
+          <span style="color:${m.installed ? '#22c55e' : '#f59e0b'}; font-size:0.74rem; font-weight:700;">${stateTxt}</span>
+          ${b90SafetyChip(m.safety)}
+          <div style="font-size:0.75rem; color:#94a3b8;">${b90EscapeHtml(m.desc)} (${b90EscapeHtml(m.speed)})</div>
+        </div>
+        <div style="display:flex; gap:5px; flex-wrap:wrap;">
+          ${mainBtn}
+          <button class="b90-btn-sec" onclick="document.getElementById('b90-arena-a').value=${b90JsArg(m.provider + ':' + m.name)}">Arena A</button>
+          <button class="b90-btn-sec" onclick="document.getElementById('b90-arena-b').value=${b90JsArg(m.provider + ':' + m.name)}">Arena B</button>
+        </div>
+      </div>`;
+    }).join('') || '<pre class="b90-pre">Nenhum modelo encontrado. Digite a tag exata e use “Baixar, Aquecer & Executar a tag digitada”.</pre>';
+  }
+
+  let b90PullWatch = null;          // tag cujo download foi pedido nesta sessão da UI
+  let b90ServerFieldValues = {};    // último valor vindo do servidor por campo (não sobrescreve o que o usuário digita)
+
+  function b90SyncField(id, value) {
+    const el = document.getElementById(id);
+    if (!el || value === undefined || value === null) return false;
+    const key = String(value);
+    if (b90ServerFieldValues[id] === key) return false;
+    b90ServerFieldValues[id] = key;
+    if (document.activeElement !== el) el.value = key;
+    return true;
+  }
+
+  let b90CxInputsFilled = false;
+  let b90EvoProposal = null;
+
+  // v12.2: nome do agente ativo nos rótulos do chat (antes era sempre 'BYTE')
+  function b90AgentLabel() { return String((b90State && b90State.agent_name) || 'Matrix').toUpperCase(); }
+
+  // v10.0: progresso de download, mapeamento de complexidade, conta de e-mail e alvos do evolver.
+  function b90RenderV10Extras(st) {
+    const pull = st.llm.pull_progress || {};
+    const bar = document.getElementById('b90-pull-bar');
+    const lab = document.getElementById('b90-pull-label');
+    if (bar && lab) {
+      bar.style.width = `${pull.pct || 0}%`;
+      if (pull.error) lab.innerText = `❌ ${pull.model || ''}: ${pull.error}`;
+      else if (pull.activated) lab.innerText = `✅ ${pull.model} baixado, aquecido na VRAM e ativo no Chat e na Arena`;
+      else if (pull.running) lab.innerText = `⬇️ ${pull.model}: ${pull.completed_mb} MB / ${pull.total_gb} GB (${pull.pct}%) — ${pull.status}`;
+      else if (pull.model && pull.pct === 100) lab.innerText = `✅ ${pull.model}: ${pull.status}`;
+      else lab.innerText = 'Download: ocioso';
+      lab.style.color = pull.error ? '#ef4444' : '';
+      const gpuEl = document.getElementById('b90-pull-gpu');
+      if (gpuEl) {
+        const lines = [];
+        if (pull.safety && pull.model) lines.push(`Validador de VRAM: ${pull.safety.label} — ${pull.safety.message}`);
+        if (pull.gpu_alloc) lines.push(`Alocação na GPU: ${pull.gpu_alloc}`);
+        gpuEl.innerText = lines.join('\n');
+        gpuEl.style.color = pull.safety ? (b90SafetyColors[pull.safety.level] || '') : '';
+      }
+      // Ao concluir: o modelo recém-baixado vira o cérebro do Chat e o competidor A da Arena.
+      if (b90PullWatch && pull.model && (pull.activated || pull.error)) {
+        const same = String(pull.model).toLowerCase().replace(/:latest$/, '') === String(b90PullWatch).toLowerCase().replace(/:latest$/, '');
+        if (same) {
+          b90PullWatch = null;
+          const log = document.getElementById('b90-chat-log');
+          if (pull.activated) {
+            document.getElementById('b90-arena-a').value = 'ollama:' + pull.model;
+            log.innerHTML += `<div class="b90-meta"><span>✅ Modelo ${b90EscapeHtml(pull.model)} baixado, aquecido e ativo. ${b90EscapeHtml(pull.gpu_alloc || '')}</span></div>`;
+          } else {
+            log.innerHTML += `<div class="b90-meta"><span style="color:#ef4444;">❌ ${b90EscapeHtml(pull.model)} não foi ativado: ${b90EscapeHtml(pull.error)}</span></div>`;
+          }
+          log.scrollTop = log.scrollHeight;
+          setTimeout(() => { window.b90SearchModels(); }, 50);
+        }
+      }
+    }
+    b90RenderHardware(st.llm.gpu_hardware, st.llm.active_model_safety);
+    if ((st.llm.loaded_on_cpu_only || []).length) {
+      const gb = document.getElementById('b90-gpu-badge');
+      gb.className = 'b90-badge-gpu danger';
+      gb.innerText = `⚠️ ${st.llm.loaded_on_cpu_only[0]} na RAM (0 GB de VRAM) | ${st.llm.gpu_hardware.gpu_name} ociosa`;
+    }
+    const forceChk = document.getElementById('b90-force-oom');
+    const forceVal = String(!!st.llm.force_oom_override);
+    if (forceChk && b90ServerFieldValues['b90-force-oom'] !== forceVal) {
+      b90ServerFieldValues['b90-force-oom'] = forceVal;
+      forceChk.checked = !!st.llm.force_oom_override;
+    }
+    const cx = st.llm.complexity_map || {};
+    const cxEl = document.getElementById('b90-cx-resolved');
+    if (cxEl && cx.baixo) {
+      const fmt = k => `${cx[k].label} → ${cx[k].provider}:${cx[k].model}${cx[k].installed ? '' : ' (não instalado)'} [${cx[k].source}]`;
+      cxEl.innerText = ['baixo', 'medio', 'alto'].map(fmt).join('\n') + (cx.baixo.note ? `\n⚠️ ${cx.baixo.note}` : '');
+    }
+    if (!b90CxInputsFilled && st.llm.complexity_map_user) {
+      b90CxInputsFilled = true;
+      ['baixo', 'medio', 'alto'].forEach(k => {
+        const el = document.getElementById('b90-cx-' + k);
+        if (el && st.llm.complexity_map_user[k]) el.value = st.llm.complexity_map_user[k];
+      });
+    }
+    if (st.email) {
+      // v11.1.2: só copia do servidor quando o valor SALVO muda (antes o heartbeat de 4 s desfazia a sua escolha).
+      if (st.email.provider) b90SyncField('b90-em-prov', st.email.provider);
+      if (st.email.email_address !== undefined) b90SyncField('b90-em-addr', st.email.email_address);
+      if (st.email.custom_secret !== undefined) b90SyncField('b90-em-secret', st.email.custom_secret);
+      const es = document.getElementById('b90-em-status');
+      if (es) es.innerText = st.email.credentials_ready
+        ? `Conta pronta (${st.email.email_address}). Senha vinda de: ${st.email.password_source}. Ela não é gravada no banco.`
+        : `Sem senha para esta conta. Digite a App Password ou crie o segredo ${(st.email.secret_names || [st.email.secret_name])[0]} no Colab (ícone 🔑). Ela não é gravada no banco.`;
+    }
+    if (st.evolver) {
+      const sel = document.getElementById('b90-evo-target');
+      if (sel && !sel.options.length) {
+        sel.innerHTML = (st.evolver.targets || []).map(t => `<option value="${b90EscapeHtml(t)}">${b90EscapeHtml(t)}</option>`).join('');
+      }
+    }
+  }
+
+  // v13.9: objetivos de longo prazo
+  function b90RenderGoals(st) {
+    const box = document.getElementById('b90-goals-list');
+    if (!box) return;
+    const g = st.goals;
+    if (!g || !g.goals) { box.innerHTML = '<span style="color:var(--muted);font-size:0.78rem;">Objetivos indisponíveis neste agente.</span>'; return; }
+    const icon = { done: '✅', running: '⏳', failed: '⚠️', pending: '▫️' };
+    const rows = g.goals.map(goal => `<div class="b90-msg-b" style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; gap:6px; align-items:center;">
+          <b>#${goal.id} ${b90EscapeHtml(goal.title)}</b>
+          <span style="white-space:nowrap; font-size:0.74rem;">${b90EscapeHtml(goal.status_label)} (${goal.progress})
+            ${goal.status === 'blocked' ? `<button class="b90-btn-ok" style="margin:0 0 0 4px;" onclick="window.b90GoalAction(${goal.id}, 'goal_resume')">Retomar</button>` : ''}
+            <button class="b90-btn-del" style="margin:0 0 0 4px;" onclick="window.b90GoalAction(${goal.id}, 'goal_cancel')">Cancelar</button></span>
+        </div>
+        ${goal.steps.map(x => `<div style="font-size:0.78rem;">${icon[x.status] || '▫️'} ${b90EscapeHtml(x.text)}</div>`).join('')}
+      </div>`).join('');
+    const left = g.budget && g.budget.left;
+    const budget = (left === null || left === undefined) ? '' :
+      `<div style="font-size:0.72rem; color:var(--muted);">Orçamento de hoje para a autonomia: ${Math.max(0, left).toLocaleString('pt-BR')} tokens</div>`;
+    box.innerHTML = (rows || '<span style="color:var(--muted);font-size:0.78rem;">Nenhum objetivo em andamento.</span>') + budget;
+  }
+  function b90RenderTriggers(st) {
+    const box = document.getElementById('b90-triggers-list');
+    if (!box) return;
+    const g = st.gatilhos;
+    if (!g || !g.triggers) { box.innerHTML = '<span style="color:var(--muted);">Gatilhos indisponíveis neste agente.</span>'; return; }
+    box.innerHTML = g.triggers.map(t => {
+      const state = !t.enabled ? 'desligado' : (t.configured ? 'ligado' : 'ligado (falta configurar)');
+      const err = t.last_error ? ` <span style="color:#f59e0b;">⚠️ ${b90EscapeHtml(t.last_error)}</span>` : '';
+      return `<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:3px;">
+        <span><b>${b90EscapeHtml(t.label)}</b> <span style="color:var(--muted);">(${b90EscapeHtml(t.name)}): ${state}</span>${err}</span>
+        <button class="${t.enabled ? 'b90-btn-del' : 'b90-btn-ok'}" style="margin:0;" onclick="window.b90ToggleTrigger('${b90EscapeHtml(t.name)}', ${!t.enabled})">${t.enabled ? 'Desligar' : 'Ligar'}</button>
+      </div>`; }).join('');
+  }
+  const B90_LEVELS = { sugerir: 'só sugerir', aprovar: 'pedir aprovação', automatico: 'fazer e registrar' };
+  function b90RenderPermissions(st) {
+    const box = document.getElementById('b90-perms-list');
+    if (!box) return;
+    const p = st.permissoes;
+    if (!p || !p.levels) { box.innerHTML = '<span style="color:var(--muted);">Permissões indisponíveis neste agente.</span>'; return; }
+    box.innerHTML = Object.keys(p.levels).map(cat => {
+      const info = (p.categories || {})[cat] || {};
+      const opts = Object.keys(B90_LEVELS).filter(l => !(info.floor && l === 'automatico'))
+        .map(l => `<option value="${l}" ${p.levels[cat] === l ? 'selected' : ''}>${B90_LEVELS[l]}</option>`).join('');
+      return `<div style="display:flex; justify-content:space-between; align-items:center; gap:6px; margin-bottom:3px;">
+        <span>${b90EscapeHtml(info.label || cat)}${info.floor ? ' <span style="color:var(--muted);">(máx.: aprovar)</span>' : ''}</span>
+        <select class="b90-select" style="width:auto;" onchange="window.b90SetPermission('${b90EscapeHtml(cat)}', this.value)">${opts}</select>
+      </div>`; }).join('');
+  }
+  window.b90SetPermission = async function(cat, level) {
+    const res = await b90Call('permission_set', { category: cat, level }, true);
+    if (res.error) { alert(res.error); }
+    const st = await b90Call('permission_list', {}, true);
+    if (!st.error) { b90State.permissoes = st; b90RenderPermissions({ permissoes: st }); }
+  };
+  // ---------------- v13.40: reuniões pelo painel (mesmo transcritor do app e da página /reuniao)
+  const B90_MEET = { RATE: 16000, ctx: null, streams: [], proc: null, pcm: null, size: 0, seq: 0, sent: 0, id: 0,
+                     on: false, queue: [], busy: false, started: 0, timer: null };
+  function b90MeetWav(samples) {
+    const R = B90_MEET.RATE, b = new DataView(new ArrayBuffer(44 + samples.length * 2));
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) b.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); b.setUint32(4, 36 + samples.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+    b.setUint32(16, 16, true); b.setUint16(20, 1, true); b.setUint16(22, 1, true); b.setUint32(24, R, true);
+    b.setUint32(28, R * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true); w(36, 'data');
+    b.setUint32(40, samples.length * 2, true);
+    for (let i = 0; i < samples.length; i++) b.setInt16(44 + i * 2, samples[i], true);
+    let bin = ''; const u = new Uint8Array(b.buffer);
+    for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function b90MeetCut(from) {
+    const M = B90_MEET, win = M.RATE * 0.3 | 0; let best = 1e9, at = -1;
+    for (let i = from; i + win <= M.size; i += M.RATE / 20) {
+      let s = 0; for (let j = i; j < i + win; j += 4) s += Math.abs(M.pcm[j]);
+      const avg = s / (win / 4); if (avg < best) { best = avg; at = i + (win / 2 | 0); }
+    }
+    return best < 400 ? at : -1;
+  }
+  function b90MeetPush(cut) {
+    const M = B90_MEET;
+    M.queue.push({ seq: M.seq++, t: M.sent / M.RATE, audio_b64: b90MeetWav(M.pcm.slice(0, cut)) });
+    M.sent += cut; M.pcm.copyWithin(0, cut, M.size); M.size -= cut; b90MeetPump();
+  }
+  async function b90MeetPump() {
+    const M = B90_MEET; if (M.busy) return; M.busy = true;
+    const live = document.getElementById('b90-meet-live'), st = document.getElementById('b90-meet-state');
+    while (M.queue.length) {
+      const it = M.queue[0];
+      const res = await b90Call('meeting_chunk', { id: M.id, seq: it.seq, t: it.t, audio_b64: it.audio_b64 }, true);
+      if (res.error) { st.textContent = '⚠️ ' + res.error + ' (tentando de novo)'; await new Promise(r => setTimeout(r, 4000)); continue; }
+      M.queue.shift();
+      if (res.texto) { live.style.display = 'block'; live.textContent += res.texto + '\n'; live.scrollTop = live.scrollHeight; }
+      st.textContent = M.on ? '🔴 Gravando a reunião #' + M.id : 'Enviando o final...';
+    }
+    M.busy = false;
+  }
+  function b90MeetCleanup() {
+    const M = B90_MEET;
+    M.streams.forEach(s => s.getTracks().forEach(t => t.stop())); M.streams = [];
+    if (M.proc) { M.proc.onaudioprocess = null; try { M.proc.disconnect(); } catch (e) {} M.proc = null; }
+    if (M.ctx) { M.ctx.close().catch(() => {}); M.ctx = null; }
+    clearInterval(M.timer);
+  }
+  window.b90MeetToggle = async function() {
+    const M = B90_MEET, btn = document.getElementById('b90-meet-btn'), st = document.getElementById('b90-meet-state');
+    if (M.on) {
+      M.on = false; btn.disabled = true;
+      if (M.size > M.RATE) b90MeetPush(M.size); else M.size = 0;
+      b90MeetCleanup(); st.textContent = 'Enviando o final...';
+      while (M.queue.length || M.busy) await new Promise(r => setTimeout(r, 500));
+      await b90Call('meeting_finish', { id: M.id }, true);
+      st.textContent = '📝 Preparando a ata... (chega aqui, no app e no Telegram)';
+      btn.disabled = false; btn.innerText = '🔴 Gravar';
+      b90MeetWatch(M.id);
+      return;
+    }
+    const wantSys = document.getElementById('b90-meet-sys').checked, wantMic = document.getElementById('b90-meet-mic').checked;
+    if (!wantSys && !wantMic) { st.textContent = 'Escolha pelo menos uma fonte de áudio.'; return; }
+    try {
+      M.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: M.RATE });
+      const mix = M.ctx.createGain();
+      if (wantSys) {
+        const sys = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { echoCancellation: false, noiseSuppression: false },
+                                                                    systemAudio: 'include', selfBrowserSurface: 'exclude' });
+        sys.getVideoTracks().forEach(t => t.stop());
+        if (!sys.getAudioTracks().length) { sys.getTracks().forEach(t => t.stop());
+          throw new Error('O compartilhamento veio sem áudio: grave de novo e ligue "Compartilhar áudio do sistema" (ou da aba).'); }
+        M.streams.push(sys); M.ctx.createMediaStreamSource(sys).connect(mix);
+      }
+      if (wantMic) {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+        M.streams.push(mic); M.ctx.createMediaStreamSource(mic).connect(mix);
+      }
+      const res = await b90Call('meeting_start', { title: document.getElementById('b90-meet-title').value.trim() }, true);
+      if (res.error) throw new Error(res.error);
+      M.id = res.id; M.pcm = new Int16Array(M.RATE * 40); M.size = 0; M.seq = 0; M.sent = 0; M.queue = [];
+      M.proc = M.ctx.createScriptProcessor(4096, 1, 1);
+      M.proc.onaudioprocess = ev => {
+        if (!M.on) return;
+        const x = ev.inputBuffer.getChannelData(0);
+        if (M.size + x.length > M.pcm.length) { const big = new Int16Array(M.pcm.length * 2); big.set(M.pcm.subarray(0, M.size)); M.pcm = big; }
+        for (let i = 0; i < x.length; i++) M.pcm[M.size++] = Math.max(-1, Math.min(1, x[i])) * 32767;
+        const secs = M.size / M.RATE;
+        if (secs >= 30) b90MeetPush(M.size); else if (secs >= 20) { const c = b90MeetCut(20 * M.RATE); if (c > 0) b90MeetPush(c); }
+      };
+      const silent = M.ctx.createGain(); silent.gain.value = 0;
+      mix.connect(M.proc); M.proc.connect(silent); silent.connect(M.ctx.destination);
+      M.on = true; M.started = Date.now(); b90RefreshMeetings();
+      document.getElementById('b90-meet-live').textContent = ''; document.getElementById('b90-meet-title').value = '';
+      btn.innerText = '⏹️ Encerrar e gerar ata'; st.textContent = '🔴 Gravando a reunião #' + M.id;
+      M.timer = setInterval(() => { const s = (Date.now() - M.started) / 1000 | 0;
+        document.getElementById('b90-meet-clock').textContent = String(s / 60 | 0).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }, 1000);
+      M.streams.forEach(s => s.getAudioTracks().forEach(t => t.onended = () => { if (M.on) window.b90MeetToggle(); }));
+    } catch (e) {
+      b90MeetCleanup();
+      st.textContent = '⚠️ ' + (e.name === 'NotAllowedError' ? 'Permissão negada (compartilhamento ou microfone).' : e.message);
+    }
+  };
+  async function b90MeetWatch(id) {
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 5000));
+      const m = await b90Call('meeting_get', { id }, true);
+      if (m.status === 'pronta' || m.status === 'erro') {
+        document.getElementById('b90-meet-state').textContent = m.status === 'pronta' ? '✅ Ata pronta (também no app e no Telegram).' : '⚠️ ' + (m.error || 'A ata falhou.');
+        window.b90MeetShow(id); b90RefreshMeetings(); return;
+      }
+    }
+  }
+  window.b90MeetShow = async function(id) {
+    const m = await b90Call('meeting_get', { id }, true), box = document.getElementById('b90-meet-ata');
+    box.style.display = 'block';
+    box.textContent = m.error && m.status !== 'pronta' ? ('⚠️ ' + m.error) :
+      (m.ata || ('Ainda ' + (m.status === 'gravando' ? 'gravando' : 'fazendo a ata') + '...\n\n' + (m.transcript || '')));
+    if (m.file) {
+      const a = document.createElement('a');
+      a.className = 'b90-btn-sec'; a.style.cssText = 'display:inline-block; margin-top:6px; text-decoration:none;';
+      a.target = '_blank'; a.rel = 'noopener'; a.textContent = '⬇️ Baixar a ata (.docx)';
+      a.href = '/files/' + encodeURIComponent(m.file) + '?token=' + encodeURIComponent(b90HttpToken || '');
+      box.appendChild(document.createTextNode('\n\n')); box.appendChild(a);
+    }
+  };
+  window.b90MeetUpload = async function(input) {
+    const f = input.files && input.files[0], st = document.getElementById('b90-meet-state');
+    if (!f) return;
+    if (f.size > 150 * 1024 * 1024) { st.textContent = '⚠️ Arquivo acima de 150 MB.'; return; }
+    const PART = 1024 * 1024, total = Math.max(1, Math.ceil(f.size / PART));
+    const upload = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    let res = null;
+    for (let i = 0; i < total; i++) {
+      const buf = new Uint8Array(await f.slice(i * PART, (i + 1) * PART).arrayBuffer());
+      let bin = ''; for (let j = 0; j < buf.length; j += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(j, j + 0x8000));
+      st.textContent = `📤 Enviando ${Math.round((i + 1) / total * 100)}%...`;
+      res = await b90Call('meeting_file_part', { upload, index: i, total, data_b64: btoa(bin), name: f.name, mime: f.type,
+                                                 title: document.getElementById('b90-meet-title').value.trim() }, true);
+      if (res.error) { st.textContent = '⚠️ ' + res.error; input.value = ''; return; }
+    }
+    input.value = '';
+    st.textContent = `📝 Recebi "${res.title}" (#${res.id}). Transcrevendo; a ata aparece na lista quando ficar pronta.`;
+    b90MeetWatch(res.id);
+  };
+  window.b90MeetOpt = async function(cmd) {
+    const action = cmd.startsWith('google') ? 'google_command' : 'microsoft_command';
+    const res = await b90Call(action, { arg: cmd.replace(/^(google|microsoft) /, '') }, true);
+    document.getElementById('b90-meet-state').textContent = res.error ? '⚠️ ' + res.error : (res.text || '');
+    b90RefreshMeetings();
+  };
+  async function b90RefreshMeetings() {
+    const st = await b90Call('status', {}, true);
+    if (!st.error) { b90State.reunioes = st.reunioes; b90RenderMeetings(st); }   // o redesenho a cada 4 s usa b90State
+  }
+  function b90RenderMeetings(st) {
+    const r = st.reunioes, list = document.getElementById('b90-meet-list'), opts = document.getElementById('b90-meet-opts');
+    if (!list) return;
+    if (!r) { list.innerHTML = '<span style="color:var(--muted);">Reuniões indisponíveis neste agente.</span>'; return; }
+    const tok = encodeURIComponent(b90HttpToken || ''), icons = { gravando: '🔴', processando: '⏳', pronta: '📝', erro: '⚠️' };
+    const parts = [r.stt ? '🎙️ Transcrição: ligada' : '⚠️ Transcrição desligada (BYTE_STT_URL, veja docs/voz.md)'];
+    parts.push(r.teams ? '🟦 Transcrições do Teams: automáticas' : '🟦 Teams: <a href="#" onclick="window.b90MeetOpt(\'microsoft entrar teams\');return false;">conectar</a>');
+    if (r.onedrive) parts.push(`☁️ OneDrive automático: ${r.onedrive_auto ? 'ligado' : 'desligado'} <a href="#" onclick="window.b90MeetOpt('microsoft onedrive ${r.onedrive_auto ? 'off' : 'on'}');return false;">${r.onedrive_auto ? 'desligar' : 'ligar'}</a>`);
+    if (r.drive) parts.push(`☁️ Drive automático: ${r.drive_auto ? 'ligado' : 'desligado'} <a href="#" onclick="window.b90MeetOpt('google drive ${r.drive_auto ? 'off' : 'on'}');return false;">${r.drive_auto ? 'desligar' : 'ligar'}</a>`);
+    opts.innerHTML = parts.join(' · ');
+    list.innerHTML = (r.recent || []).map(m => `<div class="b90-row-item"><span>${icons[m.status] || '•'} #${m.id} ${b90EscapeHtml(m.title)}
+      <span style="color:var(--muted);">(${new Date(m.started_at * 1000).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })},
+      ${m.seconds < 60 ? Math.round(m.seconds) + ' s' : Math.round(m.seconds / 60) + ' min'})</span></span><span style="display:flex; gap:4px;">
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90MeetShow(${m.id})">Ver</button></span></div>`).join('')
+      || '<span style="color:var(--muted);">Nenhuma reunião ainda.</span>';
+  }
+  function b90RenderPeople(st) {
+    const box = document.getElementById('b90-people-list'), r = st.pessoas;
+    if (!box) return;
+    if (!r) { document.getElementById('b90-people-box').innerHTML = '<span style="color:var(--muted);">Multiusuário indisponível neste agente.</span>'; return; }
+    box.innerHTML = (r.pessoas || []).map(p => {
+      const how = [p.telegram ? 'Telegram ✅' : (p.convite ? 'convite pendente ⏳' : ''), p.painel ? 'painel ✅' : ''].filter(Boolean).join(' · ') || 'sem acesso ativo';
+      return `<div class="b90-row-item"><span>${p.n}. <b>${b90EscapeHtml(p.nome)}</b> <span style="color:var(--muted);">(${p.papel} · ${how} ·
+        hoje ${p.uso}/${p.limite})</span></span><span style="display:flex; gap:4px; flex-wrap:wrap;">
+        <button class="b90-btn-sec" style="margin:0;" title="Gera um link novo (o anterior deixa de valer)" onclick="window.b90PeopleCmd('/pessoas', 'painel ${p.n}')">🖥️ Painel</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleCmd('/pessoas', 'convite ${p.n}')">✉️ Convite</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleLimit(${p.n}, ${p.limite})">📊 Limite</button>
+        <button class="b90-btn-sec" style="margin:0;" onclick="window.b90PeopleRemove(${p.n})">🚫 Remover</button></span></div>`;
+    }).join('') || '<span style="color:var(--muted);">Ninguém além de você usa este agente.</span>';
+  }
+  // v13.48: comandos do Telegram no painel (mesmo catálogo e mesma ponte do app Android)
+  let b90Commands = null;
+  window.b90LoadCommands = async function(force) {
+    if (b90Commands && !force) { window.b90DrawCommands(); return; }
+    const res = await b90Call('app_commands', {}, true);
+    b90Commands = res.commands || [];
+    const pcBox = document.getElementById('b90-pc-box');
+    if (pcBox) pcBox.style.display = b90Commands.some(c => c.command === '/pc') ? '' : 'none';
+    if (res.error) document.getElementById('b90-cmd-list').innerHTML = '<span style="color:var(--muted);">⚠️ ' + b90EscapeHtml(res.error) + '</span>';
+    else window.b90DrawCommands();
+  };
+  window.b90DrawCommands = function() {
+    const box = document.getElementById('b90-cmd-list');
+    if (!box || !b90Commands) return;
+    const f = (document.getElementById('b90-cmd-filter').value || '').toLowerCase();
+    const groups = {};
+    b90Commands.filter(c => !f || (c.label + ' ' + c.command + ' ' + c.group).toLowerCase().includes(f))
+      .forEach(c => (groups[c.group] = groups[c.group] || []).push(c));
+    box.innerHTML = Object.keys(groups).map(g => `<div style="margin:6px 0 2px; font-size:0.7rem; text-transform:uppercase;
+      letter-spacing:0.05em; color:var(--muted);">${b90EscapeHtml(g)}</div><div style="display:flex; flex-wrap:wrap; gap:4px;">` +
+      groups[g].map((c, i) => `<button class="b90-btn-sec" style="margin:0;" title="${b90EscapeHtml(c.command + (c.ask ? ' — ' + c.ask : ''))}"
+        onclick='window.b90PickCommand(${JSON.stringify(c).replace(/'/g, "&#39;")})'>${b90EscapeHtml(c.label)}${c.ask ? ' 🖊️' : ''}</button>`).join('') +
+      '</div>').join('') || '<span style="color:var(--muted);">Nenhum comando com esse filtro.</span>';
+  };
+  window.b90PickCommand = function(c) {
+    const input = document.getElementById('b90-cmd-input');
+    if (c.ask) {
+      input.value = c.command + ' ';
+      input.placeholder = c.ask + (c.example ? ' — ex.: ' + c.example : '');
+      input.focus();
+      if (!c.required) window.b90RunCommand(c.command);
+      return;
+    }
+    window.b90RunCommand(c.command);
+  };
+  function b90Linkify(text) {
+    return b90EscapeHtml(text).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  }
+  function b90ShowCommandOutput(label, messages, error) {
+    const out = document.getElementById('b90-cmd-out');
+    const head = `<div style="margin-top:8px; color:var(--accent, #6d8cff); font-weight:600;">› ${b90EscapeHtml(label)}</div>`;
+    const body = error ? `<div class="b90-pre" style="white-space:pre-wrap;">⚠️ ${b90EscapeHtml(error)}</div>` :
+      (messages || []).map(m => `<div class="b90-pre" style="white-space:pre-wrap; margin-top:4px;">${b90Linkify(m.text || '')}` +
+        ((m.buttons || []).length ? '<div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:6px;">' + m.buttons.map(b =>
+          `<button class="b90-btn-pri" style="margin:0;" onclick='window.b90CommandButton(${JSON.stringify(b).replace(/'/g, "&#39;")}, this)'>${b90EscapeHtml(b.label)}</button>`).join('') + '</div>' : '') +
+        '</div>').join('') || '<div style="color:var(--muted);">(sem resposta)</div>';
+    const empty = document.getElementById('b90-cmd-empty');
+    if (empty) empty.remove();
+    out.innerHTML = head + body + out.innerHTML;
+  }
+  window.b90RunCommand = async function(cmd) {
+    const input = document.getElementById('b90-cmd-input');
+    const text = (cmd || input.value || '').trim();
+    if (!text) { input.focus(); return; }
+    if (!cmd) input.value = '';
+    const res = await b90Call('app_command', { text }, true);
+    b90ShowCommandOutput(text, res.messages, res.error);
+  };
+  window.b90CommandButton = async function(b, el) {
+    el.parentElement.querySelectorAll('button').forEach(x => x.disabled = true);
+    const res = await b90Call('app_command', { callback: b.data }, true);
+    b90ShowCommandOutput(b.label, res.messages, res.error);
+  };
+  // v13.51: modelos-base de e-mail
+  let b90Templates = [], b90TplHtml = null, b90SigHtml = null;
+  const b90TplFmt = (msg) => { const el = document.getElementById('b90-tpl-fmt'); el.textContent = msg || ''; el.style.display = msg ? 'block' : 'none'; };
+  const b90PasteHtml = (id, onHtml) => {            // v13.52: colar do Outlook mantendo o formato (HTML)
+    const el = document.getElementById(id);
+    if (!el || el.dataset.b90paste) return;
+    el.dataset.b90paste = '1';
+    el.addEventListener('paste', ev => {
+      const html = ev.clipboardData && ev.clipboardData.getData('text/html');
+      if (!html || !/<(table|div|p|span|font|td)\b/i.test(html)) return;
+      ev.preventDefault();
+      const text = ev.clipboardData.getData('text/plain') || '';
+      el.value = text.trim();
+      onHtml(html, /src=["']?(file:|cid:)/i.test(html));
+    });
+  };
+  window.b90LoadTemplates = async function() {
+    b90PasteHtml('b90-tpl-corpo', (html, lost) => { b90TplHtml = html;
+      b90TplFmt('◆ Formato copiado do Outlook (tabelas, cores, fontes). Dê um nome e salve.' + (lost ? ' As imagens não vêm pelo navegador: para elas, use o Bit no PC.' : '')); });
+    b90PasteHtml('b90-tpl-sig', (html) => { b90SigHtml = html; document.getElementById('b90-tpl-fb').textContent = '◆ Assinatura com formato: clique em Salvar assinatura.'; });
+    const res = await b90Call('email_templates_list', {}, true);
+    if (res.error) { document.getElementById('b90-tpl-list').textContent = '⚠️ ' + res.error; return; }
+    b90Templates = res.modelos || [];
+    const sig = document.getElementById('b90-tpl-sig');
+    if (sig && document.activeElement !== sig) sig.value = res.assinatura || '';
+    document.getElementById('b90-tpl-list').innerHTML = b90Templates.map(t => `<div class="b90-row-item"><span>${t.tem_html ? '<span title="Com o formato do Outlook">◆ </span>' : ''}<b>${b90EscapeHtml(t.nome)}</b>
+      <span style="color:var(--muted);">${b90EscapeHtml(t.uso || '')} · usado ${t.usos}x</span></span><span style="display:flex; gap:4px;">
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90EditTemplate(${t.n})">Editar</button>
+      <button class="b90-btn-sec" style="margin:0;" onclick="window.b90DeleteTemplate(${t.n})">Apagar</button></span></div>`).join('')
+      || '<span style="color:var(--muted);">Nenhum modelo ainda: crie ao lado (ou importe do Outlook pelo Bit no PC).</span>';
+  };
+  window.b90EditTemplate = function(n) {
+    const t = b90Templates.find(x => x.n === n); if (!t) return;
+    const v = id => document.getElementById(id);
+    v('b90-tpl-nome').value = t.nome; v('b90-tpl-uso').value = t.uso || ''; v('b90-tpl-assunto').value = t.assunto || ''; v('b90-tpl-corpo').value = t.corpo;
+    b90TplHtml = null;
+    b90TplFmt(t.tem_html ? '◆ Com o formato do Outlook: o e-mail sai igual ao modelo. O texto é a referência do conteúdo; para mudar o visual, cole de novo do Outlook.' : '');
+  };
+  window.b90ClearTemplate = function() { ['b90-tpl-nome', 'b90-tpl-uso', 'b90-tpl-assunto', 'b90-tpl-corpo'].forEach(id => document.getElementById(id).value = ''); b90TplHtml = null; b90TplFmt(''); };
+  window.b90SaveTemplate = async function() {
+    const v = id => document.getElementById(id).value;
+    const body = { nome: v('b90-tpl-nome'), uso: v('b90-tpl-uso'), assunto: v('b90-tpl-assunto'), corpo: v('b90-tpl-corpo'), origem: 'painel' };
+    if (b90TplHtml) body.html = b90TplHtml;
+    const res = await b90Call('email_template_save', body, true);
+    document.getElementById('b90-tpl-fb').textContent = res.error ? '⚠️ ' + res.error : '✅ Modelo salvo.';
+    if (!res.error) { window.b90ClearTemplate(); window.b90LoadTemplates(); }
+  };
+  window.b90DeleteTemplate = async function(n) {
+    if (!confirm('Apagar este modelo?')) return;
+    await b90Call('email_template_delete', { n }, true); window.b90LoadTemplates();
+  };
+  window.b90SaveSignature = async function() {
+    const body = { assinatura: document.getElementById('b90-tpl-sig').value };
+    if (b90SigHtml) body.assinatura_html = b90SigHtml;
+    const res = await b90Call('email_signature', body, true);
+    if (!res.error) b90SigHtml = null;
+    document.getElementById('b90-tpl-fb').textContent = res.error ? '⚠️ ' + res.error : '✅ Assinatura salva.';
+  };
+  window.b90OpenVoice = function(ev) {            // v13.44: página de voz do Kronus, já conectada
+    ev.preventDefault();
+    let known = '';
+    try { known = localStorage.getItem('byte_voice_token') || ''; } catch (e) {}
+    const tab = window.open('about:blank', '_blank');   // abre antes de esperar o servidor (senão o navegador bloqueia)
+    if (known) { if (tab) tab.location = '/voz'; return false; }
+    b90Call('voice_page_token', {}, true).then(res => {
+      if (res.error || !res.token) { if (tab) tab.close(); alert(res.error || 'Não consegui abrir a página de voz.'); return; }
+      if (tab) tab.location = '/voz#token=' + encodeURIComponent(res.token); else location.href = '/voz#token=' + encodeURIComponent(res.token);
+    });
+    return false;
+  };
+  window.b90PeopleCmd = async function(cmd, arg) {
+    const out = document.getElementById('b90-people-out');
+    const res = await b90Call('people_command', { cmd, arg }, true);
+    out.textContent = res.error ? '⚠️ ' + res.error : (res.text || ''); out.style.display = 'block';
+    if (res.pessoas) { b90State.pessoas = res.pessoas; b90RenderPeople(b90State); }   // o redesenho a cada 4 s usa b90State
+  };
+  window.b90PeopleInvite = async function() {
+    const el = document.getElementById('b90-people-name'), name = el.value.trim();
+    if (!name) { el.focus(); return; }
+    await window.b90PeopleCmd('/convidar', name + (document.getElementById('b90-people-admin').checked ? ' admin' : ''));
+    el.value = '';
+  };
+  window.b90PeopleLimit = async function(n, current) {
+    const v = prompt('Mensagens por dia para esta pessoa:', String(current));
+    if (v) await window.b90PeopleCmd('/limite', n + ' ' + v.trim());
+  };
+  window.b90PeopleRemove = async function(n) {
+    if (!confirm('Tirar o acesso desta pessoa? (os dados dela ficam guardados)')) return;
+    await window.b90PeopleCmd('/remover', String(n));
+  };
+  const B90_DIAS = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+  function b90RenderBriefings(st) {
+    const box = document.getElementById('b90-brief-box');
+    const r = st.resumos;
+    if (!box) return;
+    if (!r || !r.manha) { box.innerHTML = '<span style="color:var(--muted);">Resumos indisponíveis neste agente.</span>'; return; }
+    if ((box.contains(document.activeElement) && document.activeElement !== document.body)) return;
+    const m = r.manha, w = r.semana;
+    const dias = B90_DIAS.map((d, i) => `<option value="${i}" ${Number(w.dia) === i ? 'selected' : ''}>${d}</option>`).join('');
+    const row = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:4px;';
+    box.innerHTML = `
+      <div style="${row}"><label><input type="checkbox" id="b90-bm-on" ${m.ativo ? 'checked' : ''}> Manhã</label>
+        <input type="time" id="b90-bm-hora" class="b90-input" style="width:auto;" value="${b90EscapeHtml(m.hora)}">
+        <select id="b90-bm-dias" class="b90-select" style="width:auto;"><option value="todos" ${m.dias === 'todos' ? 'selected' : ''}>todos os dias</option>
+          <option value="uteis" ${m.dias === 'uteis' ? 'selected' : ''}>segunda a sexta</option></select></div>
+      <div style="${row}"><label><input type="checkbox" id="b90-bw-on" ${w.ativo ? 'checked' : ''}> Semana</label>
+        <select id="b90-bw-dia" class="b90-select" style="width:auto;">${dias}</select>
+        <input type="time" id="b90-bw-hora" class="b90-input" style="width:auto;" value="${b90EscapeHtml(w.hora)}"></div>
+      <div style="${row}"><input id="b90-b-cidade" class="b90-input" style="flex:1; min-width:140px;" placeholder="Cidade do clima (opcional)" value="${b90EscapeHtml(r.cidade || '')}">
+        <input id="b90-b-news" class="b90-input" style="flex:2; min-width:160px;" placeholder="Temas de notícias, separados por vírgula (opcional)" value="${b90EscapeHtml(r.noticias || '')}"></div>
+      <button class="b90-btn-pri" style="margin-top:0;" onclick="window.b90SaveBriefings()">Salvar horários</button>
+      <span id="b90-brief-fb" style="color:var(--muted); font-size:0.74rem; margin-left:6px;">${r.agenda ? '' : 'Sem agenda iCal (BYTE_AGENDA_ICS): o resumo usa só tarefas e lembretes.'}</span>`;
+  }
+  window.b90SaveBriefings = async function() {
+    const v = id => document.getElementById(id);
+    const changes = { manha: { ativo: v('b90-bm-on').checked, hora: v('b90-bm-hora').value || '07:30', dias: v('b90-bm-dias').value },
+      semana: { ativo: v('b90-bw-on').checked, dia: Number(v('b90-bw-dia').value), hora: v('b90-bw-hora').value || '18:00' },
+      cidade: v('b90-b-cidade').value.trim() || 'off', noticias: v('b90-b-news').value.trim() || 'off' };
+    const res = await b90Call('briefing_set', { changes }, true);
+    const fb = document.getElementById('b90-brief-fb');
+    if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
+    document.activeElement && document.activeElement.blur && document.activeElement.blur();
+    b90State.resumos = res;
+    b90RenderBriefings({ resumos: res });
+    document.getElementById('b90-brief-fb').textContent = '✅ Salvo.';
+  };
+  window.b90BriefNow = async function(kind) {
+    const pre = document.getElementById('b90-brief-preview');
+    pre.style.display = 'block'; pre.textContent = kind === 'semana' ? '📊 Fechando a semana...' : '☀️ Juntando o resumo...';
+    const res = await b90Call('briefing_now', { kind }, true);
+    pre.textContent = res.error ? ('⚠️ ' + res.error) : (res.text || '');
+  };
+  window.b90ShowActivity = async function() {
+    const box = document.getElementById('b90-activity-box');
+    const res = await b90Call('activity_list', { limit: 20 }, true);
+    box.style.display = 'block';
+    box.textContent = res.error ? ('⚠️ ' + res.error) : (res.text || 'Nada registrado.');
+  };
+  window.b90ToggleTrigger = async function(name, on) {
+    const res = await b90Call('trigger_toggle', { name, on }, true);
+    if (res.error) { alert(res.error); return; }
+    const st = await b90Call('trigger_list', {}, true);
+    if (!st.error) { b90State.gatilhos = st; b90RenderTriggers({ gatilhos: st }); }
+  };
+  window.b90AddGoal = async function() {
+    const inp = document.getElementById('b90-new-goal'), btn = document.getElementById('b90-goal-btn');
+    const fb = document.getElementById('b90-goal-feedback');
+    const title = inp.value.trim();
+    if (title.length < 5) { fb.textContent = 'Descreva o objetivo (o que você quer receber no fim).'; return; }
+    btn.disabled = true; fb.textContent = '🧩 Planejando as etapas...';
+    const res = await b90Call('goal_create', { title });
+    btn.disabled = false;
+    if (res.error) { fb.textContent = '⚠️ ' + res.error; return; }
+    inp.value = ''; fb.textContent = res.text || 'Objetivo criado.';
+    const st = await b90Call('goal_list', {}, true);
+    if (!st.error) { b90State.goals = st; b90RenderGoals({ goals: st }); }
+  };
+  window.b90GoalAction = async function(id, action) {
+    if (action === 'goal_cancel' && !confirm('Cancelar o objetivo #' + id + '?')) return;
+    const res = await b90Call(action, { goal_id: id }, true);
+    const fb = document.getElementById('b90-goal-feedback');
+    fb.textContent = res.error ? '⚠️ ' + res.error : (action === 'goal_cancel' ? 'Objetivo cancelado.' : 'Retomado.');
+    const st = await b90Call('goal_list', {}, true);
+    if (!st.error) { b90State.goals = st; b90RenderGoals({ goals: st }); }
+  };
+
+  function b90RenderState(st) {
+    if (!st || !st.llm) return;
+    b90RenderV10Extras(st);
+    b90RenderGoals(st);
+    b90RenderTriggers(st);
+    b90RenderPermissions(st);
+    b90RenderBriefings(st);
+    b90RenderMeetings(st);
+    b90RenderPeople(st);
+    const voiceLink = document.getElementById('b90-voice-link');
+    if (voiceLink) voiceLink.style.display = st.voice_page ? 'inline-block' : 'none';
+    if (st.version) {
+      const agentName = st.agent_name || 'Matrix';
+      const wakeEl = document.getElementById('b90-voice-wake');
+      if (wakeEl) wakeEl.innerText = `(“${agentName}, …”)`;
+      document.getElementById('b90-title').innerText = st.agent
+        ? `${st.profile === 'trabalho' ? '' : '⚡ '}${agentName} ${st.version} · ${({assistente: 'assistente pessoal', trabalho: 'assistente de trabalho', vtuber: 'VTuber'})[st.agent.tipo] || st.agent.tipo}`
+        : (st.profile === 'trabalho' ? `${agentName} ${st.version} · assistente de trabalho` : `⚡ ${agentName} ${st.version} · núcleo padrão`);
+    }
+    b90State = { ...st, version: st.version || b90State.version };
+    b90Catalog = st.llm.provider_catalog || {};
+
+    const badge = document.getElementById('b90-conn-badge');
+    const isOnline = st.llm.connection_mode === 'online';
+    const driveTag = st.llm.drive_connected ? 'Drive OK' : 'Tmp Local';
+    const prov = st.llm.provision_state || {};
+    const cpuOnly = (st.llm.loaded_on_cpu_only || []).length > 0;
+    const vramTag = st.llm.active_provider === 'azure'
+      ? `☁️ Azure${(st.llm.azure || {}).last_error ? ' ⚠️ ' + st.llm.azure.last_error : ''}`
+      : cpuOnly
+      ? `⚠️ MODELO NA RAM/CPU, GPU OCIOSA (${st.llm.loaded_on_cpu_only[0]})`
+      : st.llm.ollama_gpu_warm
+      ? `VRAM Quente (${st.llm.ollama_loaded_vram[0] || st.llm.active_model})`
+      : (prov.running ? `Setup ${prov.progress_pct}%` : 'Aguardando Warmup');
+
+    if (isOnline) {
+      badge.className = 'b90-badge';
+      badge.innerText = `🟢 ONLINE (${driveTag} | ${vramTag} | ${st.llm.active_provider.toUpperCase()}:${st.llm.active_model})`;
+    } else {
+      badge.className = 'b90-badge offline';
+      badge.innerText = `📴 MODO OFFLINE (Clique p/ Online)`;
+    }
+
+    const cal = st.llm.routing_calibration || { calibration_boost: 0.0, feedback_count: 0 };
+    const rBadge = document.getElementById('b90-router-badge');
+    const autoOn = st.llm.auto_effort_routing !== false;
+    rBadge.innerText = `🧭 AUTO-ROUTER: ${autoOn ? 'ON' : 'MANUAL'} (Boost: ${cal.calibration_boost >= 0 ? '+' : ''}${cal.calibration_boost})`;
+    document.getElementById('b90-auto-router-chk').checked = autoOn;
+
+    const aud = st.llm.audit_integrity || { valid: true, events_count: 0 };
+    document.getElementById('b90-audit-badge').innerText =
+      aud.valid ? `🔒 SHA-256 ÍNTEGRO (${aud.events_count} ev)` : `⚠️ SHA-256 QUEBRADO`;
+
+    document.getElementById('b90-prov-bar').style.width = `${prov.progress_pct || 0}%`;
+    document.getElementById('b90-prov-label').innerText =
+      `Status do Provisionador: ${(prov.stage || 'idle').toUpperCase()} (${prov.progress_pct || 0}% | ${prov.elapsed_s || 0}s)`;
+    document.getElementById('b90-conn-report').innerText = JSON.stringify({
+      connection_mode: st.llm.connection_mode,
+      auto_effort_routing: st.llm.auto_effort_routing,
+      routing_calibration: cal,
+      audit_integrity: aud,
+      active_provider: st.llm.active_provider,
+      active_model: st.llm.active_model,
+      ollama_online: st.llm.ollama_online,
+      ollama_gpu_warm: st.llm.ollama_gpu_warm,
+      ollama_loaded_vram: st.llm.ollama_loaded_vram,
+      ollama_installed_models: st.llm.ollama_installed_models,
+      gpu_hardware: st.llm.gpu_hardware,
+      active_model_safety: st.llm.active_model_safety,
+      force_oom_override: st.llm.force_oom_override,
+      last_model_substitution: st.llm.last_model_substitution,
+      provisioner: prov
+    }, null, 2);
+
+    if (prov.running && !b90PollTimer) {
+      b90PollTimer = setInterval(async () => {
+        const latest = await b90Call('status', {}, true);
+        if (!latest.error) {
+          b90RenderState(latest);
+          if (latest.llm && latest.llm.provision_state && !latest.llm.provision_state.running) {
+            clearInterval(b90PollTimer);
+            b90PollTimer = null;
+          }
+        }
+      }, 1500);
+    }
+
+    // v10.1: os campos só são reescritos quando o valor do SERVIDOR muda. Antes o heartbeat de 4 s
+    // apagava a tag que o usuário estava digitando em "Modelo Preferencial".
+    const provChanged = b90SyncField('b90-llm-prov', st.llm.active_provider);
+    const modelChanged = b90SyncField('b90-llm-custom', st.llm.active_model);
+    b90SyncField('b90-llm-pred', st.llm.num_predict);
+    b90SyncField('b90-llm-ctx', st.llm.num_ctx);
+    b90SyncField('b90-llm-temp', st.llm.temperature);
+    if (provChanged || modelChanged || !document.getElementById('b90-llm-sel').options.length) window.b90UpdateModels(false);
+
+    if (st.autonomy && st.autonomy.pending_proactive_messages) {
+      b90RenderProactiveMessages(st.autonomy.pending_proactive_messages);
+    }
+
+    if (st.autonomy) {
+      if (st.autonomy.idle_threshold_sec) b90SyncField('b90-auto-idle', Math.round(st.autonomy.idle_threshold_sec / 60));
+      if (st.autonomy.min_interval_sec) b90SyncField('b90-auto-gap', Math.round(st.autonomy.min_interval_sec / 60));
+      const autoChk = document.getElementById('b90-auto-enabled');
+      if (autoChk && b90ServerFieldValues['b90-auto-enabled'] !== String(st.autonomy.enabled)) {
+        b90ServerFieldValues['b90-auto-enabled'] = String(st.autonomy.enabled);
+        autoChk.checked = !!st.autonomy.enabled;
+      }
+    }
+
+    b90RenderContextWindow(st.context_window || []);
+    // v10.1: o status traz a lista SEM filtro; ela não pode substituir os resultados de uma busca em
+    // andamento (o polling de 1,5 s durante um download apagava a lista pesquisada).
+    const b90ActiveQuery = (document.getElementById('b90-search-q').value || '').trim();
+    if (st.discoverable_models && !b90ActiveQuery) b90RenderDiscoverableModels(st.discoverable_models);
+
+    if (st.telemetry_feed && st.telemetry_feed.length) {
+      document.getElementById('b90-telemetry-box').innerText = st.telemetry_feed.map(
+        t => `[#${t.interaction_id} | ${t.timestamp}] Esforço: ${t.effort_tier} (${t.effort_score}) | Total: ${t.total_execution_ms}ms | Tok: ${t.tokens_generated}/${t.token_limit} | Tools: ${t.tools_called || 0} -> ${t.provider_used}`
+      ).join('\n');
+    }
+
+    document.getElementById('b90-tasks-list').innerHTML = (st.tasks || []).map(t => `
+      <div class="b90-row-item">
+        <div>
+          <b>[P${t.priority}] ${b90EscapeHtml(t.title)}</b>
+          <span style="color:#38bdf8; font-size:0.75rem;">(🗓️ ${b90EscapeHtml(t.scheduled_slot || 'Sem horário')})</span>
+          ${t.auto_extracted ? '<span style="color:#c084fc; font-size:0.72rem; font-weight:700;">[Extraído em Background pela LLM]</span>' : ''}
+        </div>
+        <span style="display:flex; gap:4px;"><button class="b90-btn-ok" style="margin:0;" title="Concluída" onclick="window.b90DoneTask(${t.id})">✓</button>
+        <button class="b90-btn-del" style="margin:0;" title="Apagar" onclick="window.b90DelTask(${t.id})">X</button></span>
+      </div>
+    `).join('') || '<pre class="b90-pre">Sem compromissos na agenda.</pre>';
+
+    if (st.work && !st.work.error) b90RenderWork(st.work);
+    if (st.web && st.web.backends) {
+      const note = document.getElementById('b90-web-note');
+      if (note) note.innerText = `Buscador: ${st.web.backends[0]}. A Byte faz várias buscas, lê as melhores fontes e entrega um relatório com cada afirmação ligada à fonte.`;
+    }
+    b90RenderProfileSwitch(st);
+    b90RenderAgentMenu(st);
+
+    if (st.reminders) {
+      document.getElementById('b90-reminders-list').innerHTML = st.reminders.map(r => `
+        <div class="b90-row-item">
+          <div><b>${r.kind === 'mission' ? '🗓️' : '⏰'} ${b90EscapeHtml(r.due_local)}</b>
+            <span style="color:#38bdf8; font-size:0.75rem;">${r.repeat === 'daily' ? '(todo dia)' : (r.repeat === 'weekly' ? '(toda semana)' : '')}</span>
+            ${b90EscapeHtml(r.text)}</div>
+          <button class="b90-btn-del" onclick="window.b90CancelReminder(${r.id})">X</button>
+        </div>`).join('') || '<pre class="b90-pre">Nenhum lembrete agendado.</pre>';
+    }
+
+    document.getElementById('b90-mem-list').innerHTML = (st.memories || []).map(m => `
+      <div class="b90-row-item">
+        <span><b>#${m.id} [${b90EscapeHtml(m.category)}]</b> ${b90EscapeHtml(m.content)}</span>
+        <button class="b90-btn-del" onclick="window.b90DelMem(${m.id})">X</button>
+      </div>
+    `).join('') || '<pre class="b90-pre">Sem memórias registradas.</pre>';
+  }
+
+  window.b90Refresh = async function() {
+    const st = await b90Call('status');
+    if (!st.error) b90RenderState(st);
+  };
+
+  // v12.3: comando de voz no painel. O navegador reconhece a fala (Web Speech API); sem isso, grava e o servidor transcreve.
+  let b90VoiceRec = null, b90VoiceOn = false, b90VoiceRecorder = null, b90VoiceAwait = 0, b90VoiceSpeaking = false;
+  function b90VoiceMsg(t) { const el = document.getElementById('b90-voice-msg'); if (el) el.innerText = t || ''; }
+  function b90Fold(s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
+  function b90VoiceWake(text) {
+    const words = String(text).trim().split(/\s+/), wake = ((b90State.voice || {}).wake_words || []);
+    for (let i = 0; i < Math.min(4, words.length); i++) {
+      if (wake.includes(b90Fold(words[i]).replace(/[^\w]/g, ''))) return [true, words.slice(i + 1).join(' ').replace(/^[\s,.:;!?-]+/, '')];
+    }
+    return [false, text];
+  }
+  function b90VoiceHeard(text) {
+    text = String(text || '').trim();
+    if (!text || b90VoiceSpeaking) return;
+    const hands = document.getElementById('b90-voice-hands').checked;
+    if (hands && Date.now() > b90VoiceAwait) {
+      const [called, cmd] = b90VoiceWake(text);
+      if (!called) return;
+      if (!cmd) { b90VoiceAwait = Date.now() + 8000; b90VoiceMsg('🎙️ Pode falar.'); return; }
+      text = cmd;
+    }
+    b90VoiceAwait = 0;
+    document.getElementById('b90-chat-in').value = text;
+    window.b90SendChat({ voice: true });
+  }
+  function b90VoiceStop() {
+    b90VoiceOn = false;
+    if (b90VoiceRec) { try { b90VoiceRec.stop(); } catch (e) {} b90VoiceRec = null; }
+    if (b90VoiceRecorder && b90VoiceRecorder.state === 'recording') b90VoiceRecorder.stop();
+    const btn = document.getElementById('b90-mic-btn'); if (btn) btn.innerText = '🎙️ Falar';
+  }
+  window.b90HandsFree = function() { if (b90VoiceOn) { b90VoiceStop(); window.b90Mic(); } };
+  window.b90Mic = async function() {
+    b90SpeechUnlock();
+    if (b90VoiceOn) { b90VoiceStop(); b90VoiceMsg(''); return; }
+    const v = b90State.voice || {};
+    if (v.enabled === false) { b90VoiceMsg('Comando de voz desligado para este agente.'); return; }
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const btn = document.getElementById('b90-mic-btn');
+    const hands = document.getElementById('b90-voice-hands').checked;
+    if (Ctor) {
+      b90VoiceRec = new Ctor(); b90VoiceRec.lang = 'pt-BR'; b90VoiceRec.interimResults = false; b90VoiceRec.continuous = hands;
+      b90VoiceRec.onresult = e => b90VoiceHeard(e.results[e.results.length - 1][0].transcript);
+      b90VoiceRec.onerror = e => { if (e.error !== 'no-speech' && e.error !== 'aborted') b90VoiceMsg('⚠️ Microfone: ' + e.error); };
+      b90VoiceRec.onend = () => { if (b90VoiceOn && document.getElementById('b90-voice-hands').checked) { try { b90VoiceRec.start(); } catch (e) {} } else b90VoiceStop(); };
+      try { b90VoiceRec.start(); b90VoiceOn = true; btn.innerText = '⏹️ Parar'; b90VoiceMsg(hands ? '🎙️ Ouvindo… chame pelo nome.' : '🎙️ Ouvindo…'); }
+      catch (e) { b90VoiceMsg('⚠️ ' + e.message); }
+      return;
+    }
+    if (!v.stt) { b90VoiceMsg('Este navegador não reconhece fala e o servidor não tem transcrição (veja docs/voz.md).'); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks = [];
+      b90VoiceRecorder = new MediaRecorder(stream);
+      b90VoiceRecorder.ondataavailable = e => chunks.push(e.data);
+      b90VoiceRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, { type: b90VoiceRecorder.mimeType || 'audio/webm' });
+        const b64 = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.readAsDataURL(blob); });
+        b90VoiceMsg('Transcrevendo…');
+        const res = await b90Call('voice_transcribe', { audio_b64: b64, mime: blob.type });
+        if (res.error) { b90VoiceMsg('⚠️ ' + res.error); return; }
+        b90VoiceMsg(''); b90VoiceHeard(res.text);
+      };
+      b90VoiceRecorder.start(); b90VoiceOn = true; btn.innerText = '⏹️ Enviar áudio'; b90VoiceMsg('🎙️ Gravando…');
+    } catch (e) { b90VoiceMsg('⚠️ Sem acesso ao microfone: ' + e.message); }
+  };
+  // v13.7: fala do navegador mais robusta. O Chrome descarta falas iniciadas logo após cancel(), corta textos longos
+  // (~15 s) e pode bloquear a fala sem um clique antes: limpa o texto, fala em pedaços e "destrava" no clique.
+  let b90SpeechUnlocked = false;
+  function b90SpeechUnlock() {
+    try {
+      if (b90SpeechUnlocked || !('speechSynthesis' in window)) return;
+      const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); b90SpeechUnlocked = true;
+    } catch (e) {}
+  }
+  function b90SpeechClean(t) {
+    return String(t || '').replace(/```[\s\S]*?```/g, ' ').replace(/https?:\/\/\S+/g, ' ').replace(/\u{1F6E1}\uFE0F?[^\n]*/gu, ' ')
+      .replace(/[*_`#>|~\[\]{}]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+  }
+  function b90SpeechChunks(t) {
+    const out = []; let cur = '';
+    for (const part of t.split(/(?<=[.!?…;:])\s+/)) {
+      if (cur && (cur + ' ' + part).length > 180) { out.push(cur); cur = part; } else cur = cur ? cur + ' ' + part : part;
+    }
+    if (cur) out.push(cur);
+    return out.flatMap(c => c.length > 220 ? (c.match(/.{1,200}(\s|$)/g) || [c]) : [c]);
+  }
+  function b90BrowserSpeak(text, done) {
+    const clean = b90SpeechClean(text);
+    if (!('speechSynthesis' in window) || !clean) { done(); return; }
+    const vcfg = b90State.voice || {};
+    const voice = speechSynthesis.getVoices().find(x => /pt(-|_)BR/i.test(x.lang));
+    const parts = b90SpeechChunks(clean);
+    speechSynthesis.cancel();
+    setTimeout(() => {                                   // depois do cancel(), senão o Chrome descarta a fala
+      try { speechSynthesis.resume(); } catch (e) {}
+      parts.forEach((part, i) => {
+        const u = new SpeechSynthesisUtterance(part); u.lang = 'pt-BR';
+        u.pitch = vcfg.pitch || 1; u.rate = vcfg.rate || 1;                                  // v12.4: voz de cada agente
+        if (voice) u.voice = voice;
+        if (i === parts.length - 1) u.onend = done;
+        u.onerror = (ev) => { if (i === parts.length - 1 || (ev && ev.error !== 'interrupted')) done(); };
+        speechSynthesis.speak(u);
+      });
+    }, 120);
+  }
+  function b90VoiceSpeak(res) {
+    if (!document.getElementById('b90-voice-speak').checked) return;
+    let finished = false;
+    const done = () => { if (!finished) { finished = true; b90VoiceSpeaking = false; } };
+    b90VoiceSpeaking = true;
+    const text = res.speech || res.response;
+    const fallback = () => b90BrowserSpeak(text, done);
+    const play = (b64, mime) => {                       // voz do servidor (Azure Speech/Kokoro); se não tocar, o navegador fala
+      const a = new Audio('data:' + (mime || 'audio/ogg') + ';base64,' + b64);
+      a.onended = done; a.onerror = fallback; a.play().catch(fallback);
+    };
+    if (res.audio_b64) { play(res.audio_b64, res.audio_mime); return; }
+    if ((b90State.voice || {}).tts && b90SpeechClean(text)) {   // v13.8: mesma voz do agente que no Telegram
+      b90Call('voice_speak', { text: b90SpeechClean(text) }, true)
+        .then(r => (r && r.audio_b64) ? play(r.audio_b64, r.audio_mime) : fallback())
+        .catch(fallback);
+      return;
+    }
+    b90BrowserSpeak(text, done);
+  }
+
+  window.b90SendChat = async function(opts) {
+    opts = (opts && typeof opts === 'object' && !(opts instanceof Event)) ? opts : {};
+    b90SpeechUnlock();
+    const inp = document.getElementById('b90-chat-in');
+    const btn = document.getElementById('b90-send-btn');
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = '';
+    btn.disabled = true;
+    btn.innerText = 'Gerando na LLM...';
+
+    const mode = document.getElementById('b90-chat-mode').value;
+    const dir = document.getElementById('b90-chat-dir').value;
+    const rawTok = parseInt(document.getElementById('b90-chat-tokens').value || '0');
+    const maxTok = rawTok === 0 ? null : rawTok;
+    const numCtx = parseInt(document.getElementById('b90-chat-ctx').value || '8192');
+
+    const log = document.getElementById('b90-chat-log');
+    log.innerHTML += `<div class="b90-msg-u"><b>${opts.voice ? '🎙️ VOCÊ (voz)' : 'VOCÊ'}:</b> ${b90EscapeHtml(text)}</div>`;
+    log.scrollTop = log.scrollHeight;
+
+    const res = await b90Call('chat', {
+      voice: !!opts.voice,
+      message: text,
+      mode: mode,
+      custom_directive: dir,
+      max_tokens: maxTok,
+      num_ctx: numCtx,
+      complexity: document.getElementById('b90-chat-complexity').value
+    });
+    btn.disabled = false;
+    btn.innerText = 'Enviar';
+
+    if (res.error) {
+      log.innerHTML += `<div class="b90-msg-b" style="border-left-color:#ef4444;"><b>AVISO:</b> ${b90EscapeHtml(res.error)}</div>`;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
+
+    setTimeout(() => { try { b90VoiceSpeak(res); } catch (e) { b90VoiceSpeaking = false; b90VoiceMsg('⚠️ Voz: ' + e.message); } }, 0);
+    if (res.live) {
+      log.innerHTML += `<div class="b90-msg-b"><b>${b90AgentLabel()} [LIVE]:</b> 🎙️ ${b90EscapeHtml(res.response || 'Respondendo na live.')}</div>`;
+      log.scrollTop = log.scrollHeight;
+      return;
+    }
+    const b = res.breakdown_ms || { total_ms: res.latency_ms, memory_ms: 0, llm_ms: 0, db_ms: 0 };
+    const eff = res.effort_routing || { tier_label: 'Padrão', effort_tier: 'STANDARD', effort_score: 0.3 };
+    const b90Reason = String(res.done_reason || '');
+    const stopTag = b90Reason === 'length' ? '⚠️ Limite atingido'
+      : ((b90Reason.startsWith('error') || b90Reason === 'time_limit') ? '⚠️ Geração interrompida' : '✅ Fim Natural');
+
+    log.innerHTML += `<div class="b90-msg-b"><b>${b90AgentLabel()} [${b90EscapeHtml(res.provider_used)}]:</b>\n${b90FormatReplyWithCodeButtons(res.response)}</div>`;
+    log.innerHTML += `
+      <div class="b90-meta">
+        <span>🧭 ${b90EscapeHtml(eff.tier_label)} (Score: ${eff.effort_score}) | ⏱️ ${b.total_ms} ms | 📊 Tok: ${res.tokens_generated}/${res.token_limit_used} (${stopTag}) | 🚀 ${res.tokens_per_sec} tok/s</span>
+        <span style="display:flex; gap:6px;">
+          <button class="b90-btn-sec" onclick="window.b90SendFeedback(${b90JsArg(eff.effort_tier)}, ${b90JsArg(res.provider_used)}, 'ideal', this)">👍 Ideal</button>
+          <button class="b90-btn-purple" onclick="window.b90SendFeedback(${b90JsArg(eff.effort_tier)}, ${b90JsArg(res.provider_used)}, 'upgrade', this)">⚡ Exigir Modelo Mais Forte</button>
+        </span>
+      </div>`;
+    log.scrollTop = log.scrollHeight;
+
+    const b90Notes = [];
+    if (res.tool_mode === 'native') {
+      const used = (res.tool_trace || []).map(t => t.tool);
+      b90Notes.push(`🔧 Ferramentas nativas${used.length ? ': ' + used.join(' → ') : ' (nenhuma chamada neste turno)'}`);
+    } else if (res.tool_mode_note) {
+      b90Notes.push(`🔧 ${res.tool_mode_note}`);
+    }
+    if (res.model_fallback) b90Notes.push(`⚠️ Modelo pedido ${res.model_fallback.requested} → respondeu ${res.model_fallback.used} (${res.model_fallback.reason})`);
+    if (res.complexity && res.complexity.note) b90Notes.push(`ℹ️ ${res.complexity.note}`);
+    if (res.reference && res.reference.replying_to_proactive) b90Notes.push('↩️ Tratado como resposta à última iniciativa da Byte');
+    if (b90Notes.length) {
+      log.innerHTML += `<div class="b90-meta"><span>${b90Notes.map(b90EscapeHtml).join(' | ')}</span></div>`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    if (res.context_window) b90RenderContextWindow(res.context_window);
+    if (res.all_tasks) {
+      b90State.tasks = res.all_tasks;
+      b90RenderState(b90State);
+    }
+    if (res.telemetry_feed) {
+      document.getElementById('b90-telemetry-box').innerText = res.telemetry_feed.map(
+        t => `[#${t.interaction_id} | ${t.timestamp}] Esforço: ${t.effort_tier} (${t.effort_score}) | Total: ${t.total_execution_ms}ms | Tok: ${t.tokens_generated}/${t.token_limit} | Tools: ${t.tools_called || 0} -> ${t.provider_used}`
+      ).join('\n');
+    }
+  };
+
+  window.b90TriggerProactiveNow = async function() {
+    const res = await b90Call('trigger_proactive_now');
+    if (res.messages && res.messages.length) {
+      b90RenderProactiveMessages(res.messages);
+    } else if (res.triggered && res.triggered.reason) {
+      const log = document.getElementById('b90-chat-log');
+      log.innerHTML += `<div class="b90-meta"><span>⏳ ${b90EscapeHtml(res.triggered.reason)}</span></div>`;
+    }
+    if (res.context_window) b90RenderContextWindow(res.context_window);
+  };
+
+  window.b90ToggleEffortRouter = async function(forcedVal) {
+    const cur = (b90State.llm && b90State.llm.auto_effort_routing !== false);
+    const next = forcedVal !== undefined ? forcedVal : !cur;
+    await b90Call('toggle_autonomy', { auto_effort_routing: next });
+    await window.b90Refresh();
+  };
+
+  window.b90ContinueLast = async function() {
+    document.getElementById('b90-chat-in').value = 'Continue exatamente de onde você parou na sua última resposta, desenvolvendo todos os pontos restantes.';
+    await window.b90SendChat();
+  };
+
+  window.b90ClearContext = async function() {
+    await b90Call('clear_context');
+    document.getElementById('b90-chat-log').innerHTML = '<div class="b90-msg-b"><b>BYTE:</b> Janela de contexto reiniciada!</div>';
+    await window.b90Refresh();
+  };
+
+  window.b90CancelProvision = async function() {
+    const st = await b90Call('cancel_provision');
+    const fb = document.getElementById('b90-switch-feedback');
+    if (fb) fb.innerText = '🛑 Download cancelado e VRAM destravada! Modelo estável restaurado.';
+    b90RenderState({ ...b90State, llm: st });
+  };
+
+  function b90ShowFrame(idx) {
+    if (!b90GameFrames.length) return;
+    b90GameIdx = ((idx % b90GameFrames.length) + b90GameFrames.length) % b90GameFrames.length;
+    document.getElementById('b90-game-canvas').src = 'data:image/png;base64,' + b90GameFrames[b90GameIdx];
+    document.getElementById('b90-frame-slider').value = b90GameIdx;
+    document.getElementById('b90-frame-counter').innerText = `Frame ${b90GameIdx + 1}/${b90GameFrames.length}`;
+  }
+
+  function b90StartGameAnimation() {
+    if (b90GameTimer) clearInterval(b90GameTimer);
+    if (b90GameFrames.length <= 1) return;
+    b90GamePlaying = true;
+    document.getElementById('b90-play-btn').innerText = '⏸️ Pausar';
+    b90GameTimer = setInterval(() => {
+      b90ShowFrame(b90GameIdx + 1);
+    }, Math.round(1000 / b90GameFps));
+  }
+
+  window.b90TogglePlayGame = function() {
+    if (b90GamePlaying) {
+      if (b90GameTimer) clearInterval(b90GameTimer);
+      b90GamePlaying = false;
+      document.getElementById('b90-play-btn').innerText = '▶️ Reproduzir';
+    } else {
+      b90StartGameAnimation();
+    }
+  };
+
+  window.b90SeekFrame = function(val) {
+    if (b90GameTimer) clearInterval(b90GameTimer);
+    b90GamePlaying = false;
+    document.getElementById('b90-play-btn').innerText = '▶️ Reproduzir';
+    b90ShowFrame(parseInt(val));
+  };
+
+  window.b90ChangeFPS = function(val) {
+    b90GameFps = parseInt(val || '15');
+    if (b90GamePlaying) b90StartGameAnimation();
+  };
+
+  window.b90RunTerm = async function() {
+    const btn = document.getElementById('b90-term-btn');
+    btn.disabled = true;
+    btn.innerText = 'Renderizando Frames...';
+    const mode = document.getElementById('b90-term-mode').value;
+    const code = document.getElementById('b90-term-code').value;
+    const timeoutSec = parseFloat(document.getElementById('b90-term-timeout').value || '6');
+    const targetFrames = parseInt(document.getElementById('b90-term-frames').value || '24');
+
+    const res = await b90Call('terminal', { mode, code, timeout_sec: timeoutSec, target_game_frames: targetFrames });
+    btn.disabled = false;
+    btn.innerText = '▶️ Rodar Jogo / Código (Gerar Animação)';
+
+    if (res.error) {
+      document.getElementById('b90-term-out').innerText = `ERRO: ${res.error}`;
+      return;
+    }
+    let out = `[Modo: ${res.mode} | Status: ${res.ok ? 'OK' : 'ERRO'} | Frames: ${res.frames_count || 0} | Tempo: ${res.latency_ms} ms]\n\n`;
+    if (res.stdout) out += `--- STDOUT ---\n${res.stdout}\n`;
+    if (res.stderr) out += `--- STDERR ---\n${res.stderr}\n`;
+    if (res.result !== undefined && res.result !== null) out += `--- RETURN ---\n${res.result}\n`;
+    if (res.engine) out = `[Motor: ${res.engine}${res.exec_us !== undefined ? ' | execução: ' + res.exec_us + ' µs' : ''}${res.worker_cold_start ? ' | worker iniciado agora' : ''}]\n` + out;
+    if (res.test_summary) {
+      const ts = res.test_summary;
+      out += ts.kind === 'unittest'
+        ? `--- TESTES: ${ts.status} ---\n${ts.ran} executado(s), ${ts.failures} falha(s), ${ts.errors} erro(s), ${ts.skipped} pulado(s)\n`
+        : `--- ASSERTS: ${ts.status} ---\n${ts.asserts} assert(s) no código\n`;
+    }
+    if (res.changed_vars && Object.keys(res.changed_vars).length) {
+      out += '--- VARIÁVEIS ALTERADAS ---\n' + Object.entries(res.changed_vars).map(([k, v]) => `${k} = ${v}`).join('\n') + '\n';
+    }
+    document.getElementById('b90-term-out').innerText = out;
+
+    const playerBox = document.getElementById('b90-game-player');
+    if (res.frames_b64 && res.frames_b64.length > 0) {
+      b90GameFrames = res.frames_b64;
+      document.getElementById('b90-frame-slider').max = b90GameFrames.length - 1;
+      playerBox.style.display = 'block';
+      b90ShowFrame(0);
+      b90StartGameAnimation();
+    } else {
+      playerBox.style.display = 'none';
+    }
+  };
+
+  window.b90SearchModels = async function() {
+    const res = await b90Call('search_models', {
+      query: document.getElementById('b90-search-q').value,
+      category: document.getElementById('b90-search-cat').value,
+      max_vram_gb: parseFloat(document.getElementById('b90-search-vram').value || '80')
+    });
+    b90RenderDiscoverableModels(res);
+  };
+
+  window.b90SelectFromHub = async function(prov, name) {
+    document.getElementById('b90-llm-prov').value = prov;
+    document.getElementById('b90-llm-custom').value = name;
+    window.b90UpdateModels(false);
+    await window.b90SaveLLM(true);
+    await window.b90SearchModels();
+  };
+
+  window.b90SaveLLM = async function(pullAsync) {
+    const prov = document.getElementById('b90-llm-prov').value;
+    const mod = document.getElementById('b90-llm-custom').value.trim();
+    const pred = parseInt(document.getElementById('b90-llm-pred').value || '2048');
+    const ctx = parseInt(document.getElementById('b90-llm-ctx').value || '8192');
+    const temp = parseFloat(document.getElementById('b90-llm-temp').value || '0.25');
+
+    document.getElementById('b90-chat-ctx').value = ctx;
+
+    const fb = document.getElementById('b90-switch-feedback');
+    fb.innerText = `Ativando ${prov.toUpperCase()}:${mod}...`;
+    const res = await b90Call('configure_llm', {
+      provider: prov,
+      model_name: mod,
+      api_key: document.getElementById('b90-llm-key').value,
+      temperature: temp,
+      num_predict: pred,
+      num_ctx: ctx,
+      pull_model_async: pullAsync,
+      force_oom_override: !!(document.getElementById('b90-force-oom') || {}).checked
+    });
+    document.getElementById('b90-llm-key').value = '';
+    if (res.error || !res.active_provider) {
+      fb.style.color = '#ef4444';
+      fb.innerText = `❌ ${res.error || 'Resposta inesperada do servidor.'}`;
+      return;
+    }
+    fb.style.color = '';
+    const note = [res.normalization_note, res.activation_note].filter(Boolean).join(' ');
+    if (res.download_started) {
+      b90PullWatch = res.active_model;
+      fb.innerText = `⬇️ ${res.active_provider.toUpperCase()}:${res.active_model} — ${note} Acompanhe a barra de progresso.`;
+    } else {
+      if (res.provision_state && res.provision_state.running) b90PullWatch = res.active_model;
+      fb.innerText = `✅ Cérebro selecionado: ${res.active_provider.toUpperCase()}:${res.active_model} | Tokens: ${res.num_predict}${note ? ' (' + note + ')' : ''}`;
+    }
+    b90RenderState({ ...b90State, llm: res });
+    await window.b90Refresh();
+  };
+
+  window.b90RunArena = async function() {
+    const btn = document.getElementById('b90-arena-btn');
+    btn.disabled = true;
+    btn.innerText = 'Comparando...';
+    const modA = document.getElementById('b90-arena-a').value.trim();
+    const modB = document.getElementById('b90-arena-b').value.trim();
+    const prompt = document.getElementById('b90-arena-prompt').value.trim();
+    const maxTok = parseInt(document.getElementById('b90-arena-tokens').value || '4096') || 4096;
+
+    const res = await b90Call('compare_models', { prompt, model_a: modA, model_b: modB, max_tokens: maxTok });
+    btn.disabled = false;
+    btn.innerText = '⚔️ Comparar LLMs';
+
+    if (res.error) {
+      document.getElementById('b90-arena-summary').innerText = `Erro: ${res.error}`;
+      return;
+    }
+
+    const a = res.contestant_a;
+    const b = res.contestant_b;
+    document.getElementById('b90-arena-summary').innerText =
+      `⏱️ Menor tempo total: ${res.summary.faster_model} (Diferença: ${res.summary.latency_diff_ms} ms) | 🚀 Maior vazão: ${res.summary.higher_throughput_model}`
+      + ((res.summary.truncated || []).length ? `\n⚠️ Resposta cortada pelo limite de tokens/tempo: ${res.summary.truncated.join(', ')} — aumente o "Máx. tokens por competidor".` : '')
+      + `\nℹ️ ${res.summary.note || ''}`;
+    document.getElementById('b90-arena-title-a').innerText =
+      `🅰️ ${a.engine_used} — Total: ${a.latency_ms} ms | TTFT: ${a.ttft_ms} ms | ${a.tokens_per_sec} tok/s | ${a.tokens_generated} tokens de ${a.token_budget}${a.truncated ? ' (CORTADA)' : ''}`;
+    document.getElementById('b90-arena-out-a').innerText = a.response;
+
+    document.getElementById('b90-arena-title-b').innerText =
+      `🅱️ ${b.engine_used} — Total: ${b.latency_ms} ms | TTFT: ${b.ttft_ms} ms | ${b.tokens_per_sec} tok/s | ${b.tokens_generated} tokens de ${b.token_budget}${b.truncated ? ' (CORTADA)' : ''}`;
+    document.getElementById('b90-arena-out-b').innerText = b.response;
+  };
+
+  // ---------------- v10.0 ----------------
+  // ---------------- v10.1: baixar, aquecer e executar qualquer tag ----------------
+  window.b90PullModelDirect = async function(name) {
+    const typed = (name || document.getElementById('b90-search-q').value || document.getElementById('b90-llm-custom').value || '').trim();
+    const lab = document.getElementById('b90-pull-label');
+    if (!typed) { lab.innerText = 'Digite a tag do modelo no campo de busca (ex.: qwen2.5-coder:14b).'; return; }
+    lab.style.color = '';
+    lab.innerText = `Solicitando download de ${typed} (tag exata, sem alias)...`;
+    document.getElementById('b90-pull-bar').style.width = '0%';
+    const res = await b90Call('pull_ollama_model', {
+      model_name: typed,
+      force_oom_override: !!(document.getElementById('b90-force-oom') || {}).checked
+    });
+    if (res.error) { lab.style.color = '#ef4444'; lab.innerText = `❌ ${res.error}`; return; }
+    b90PullWatch = res.model;
+    document.getElementById('b90-llm-prov').value = 'ollama';
+    document.getElementById('b90-llm-custom').value = res.model;
+    if (res.normalization_note) document.getElementById('b90-online-note').innerText = `ℹ️ ${res.normalization_note}`;
+    await window.b90Refresh();     // inicia o acompanhamento do progresso (polling de 1,5 s enquanto o provisionador roda)
+  };
+
+  window.b90PullModel = async function() { await window.b90PullModelDirect(''); };
+
+  // ---------------- v10.1.2: diagnóstico e reparo de GPU ----------------
+  window.b90GpuDiag = async function() {
+    const box = document.getElementById('b90-gpu-diag');
+    box.style.display = '';
+    box.innerText = 'Coletando diagnóstico de GPU...';
+    const res = await b90Call('gpu_diagnostics');
+    box.innerText = JSON.stringify(res, null, 2);
+  };
+
+  window.b90RepairGpu = async function() {
+    const box = document.getElementById('b90-gpu-diag');
+    box.style.display = '';
+    box.innerText = 'Reparo iniciado: reinstalando o Ollama e reiniciando o servidor (pode levar alguns minutos)...';
+    const res = await b90Call('repair_gpu');
+    box.innerText = res.error ? `Erro: ${res.error}` : 'Reparo em andamento; acompanhe o log abaixo. Diagnóstico ANTES do reparo:\n' + JSON.stringify(res.diagnostics_before, null, 2);
+    await window.b90Refresh();
+  };
+
+  window.b90SaveComplexityMap = async function() {
+    const mapping = {};
+    ['baixo', 'medio', 'alto'].forEach(k => { mapping[k] = document.getElementById('b90-cx-' + k).value.trim(); });
+    const res = await b90Call('set_complexity_map', { mapping });
+    if (res.error) document.getElementById('b90-cx-resolved').innerText = `Erro: ${res.error}`;
+    await window.b90Refresh();
+  };
+
+  window.b90ResetTerm = async function() {
+    await b90Call('terminal_reset');
+    document.getElementById('b90-term-out').innerText = 'Namespace do modo rápido reiniciado.';
+  };
+
+  window.b90EvolverPropose = async function() {
+    const out = document.getElementById('b90-evo-out');
+    out.innerText = 'Gerando e validando a proposta em subprocesso...';
+    const res = await b90Call('evolver_propose', { target: document.getElementById('b90-evo-target').value });
+    const pending = !res.error && res.status === 'pending_approval';
+    b90EvoProposal = pending ? res.proposal_id : null;
+    document.getElementById('b90-evo-approve').style.display = pending ? '' : 'none';
+    document.getElementById('b90-evo-reject').style.display = pending ? '' : 'none';
+    if (res.error) { out.innerText = `Erro: ${res.error}`; return; }
+    const tries = (res.attempts || []).map(a => `tentativa ${a.attempt}: ${a.ok ? 'ok' : 'rejeitada em ' + a.stage + (a.error ? ' — ' + a.error : '')}`).join('\n');
+    out.innerText = pending
+      ? `PROPOSTA VALIDADA (aguardando sua aprovação)\n${res.orig_us} µs → ${res.cand_us} µs (${res.speedup_pct}% mais rápida) | ramos: ${res.branch_delta >= 0 ? '+' : ''}${res.branch_delta}\n${(res.warnings || []).map(w => '⚠️ ' + w).join('\n')}\n${tries}\n\n${res.diff}`
+      : `PROPOSTA REJEITADA — nada foi alterado.\n${tries}`;
+  };
+
+  window.b90EvolverDecide = async function(approve) {
+    if (!b90EvoProposal) return;
+    const res = await b90Call(approve ? 'evolver_approve' : 'evolver_reject', { proposal_id: b90EvoProposal });
+    b90EvoProposal = null;
+    document.getElementById('b90-evo-approve').style.display = 'none';
+    document.getElementById('b90-evo-reject').style.display = 'none';
+    document.getElementById('b90-evo-out').innerText = res.error ? `Erro: ${res.error}` : JSON.stringify(res, null, 2);
+  };
+
+  window.b90EvolverRevert = async function() {
+    const res = await b90Call('evolver_revert', { target: document.getElementById('b90-evo-target').value });
+    document.getElementById('b90-evo-out').innerText = JSON.stringify(res, null, 2);
+  };
+
+  window.b90RunOnlineSetup = async function() {
+    await b90Call('run_online_setup', { model_name: document.getElementById('b90-llm-custom').value });
+    await window.b90Refresh();
+  };
+
+  window.b90SetConnMode = async function(mode) {
+    const st = await b90Call('set_connection_mode', { mode });
+    if (!st.error) b90RenderState({ ...b90State, llm: st });
+    await window.b90Refresh();
+  };
+
+  window.b90ToggleConnQuick = async function() {
+    const cur = (b90State.llm && b90State.llm.connection_mode) || 'online';
+    const next = cur === 'online' ? 'offline' : 'online';
+    await window.b90SetConnMode(next);
+  };
+
+  window.b90SyncDrive = async function(direction) {
+    const res = await b90Call('sync_drive', { direction });
+    document.getElementById('b90-conn-report').innerText = JSON.stringify(res, null, 2);
+  };
+
+  window.b90CfgEmail = async function() {
+    const res = await b90Call('email_config', {
+      provider: document.getElementById('b90-em-prov').value,
+      email_address: document.getElementById('b90-em-addr').value,
+      app_password: document.getElementById('b90-em-pass').value,
+      secret_name: document.getElementById('b90-em-secret').value,
+    });
+    document.getElementById('b90-em-pass').value = '';
+    document.getElementById('b90-em-out').innerText = res.error ? res.error : JSON.stringify(res, null, 2);
+    if (!res.error) await window.b90Refresh();
+  };
+
+  window.b90EmailSelect = async function(provider) {
+    const res = await b90Call('email_select', { provider });
+    document.getElementById('b90-em-out').innerText = res.error ? res.error
+      : `Conta ativa: ${provider}${res.email_address ? ' (' + res.email_address + ')' : ' (ainda não configurada)'}`;
+    await window.b90Refresh();
+  };
+
+  window.b90Inbox = async function() {
+    const res = await b90Call('email_inbox');
+    document.getElementById('b90-em-out').innerText = JSON.stringify(res, null, 2);
+  };
+
+  window.b90DraftEmail = async function() {
+    const subj = document.getElementById('b90-em-subj').value || 'Alinhamento de Projeto';
+    const res = await b90Call('chat', { message: subj, mode: 'email_draft' });
+    document.getElementById('b90-em-body').value = res.response || '';
+  };
+
+  window.b90SendEmail = async function() {
+    const res = await b90Call('email_send', {
+      to_address: document.getElementById('b90-em-to').value,
+      subject: document.getElementById('b90-em-subj').value,
+      body: document.getElementById('b90-em-body').value,
+    });
+    document.getElementById('b90-em-out').innerText = res.error
+      ? `❌ ${res.error}`
+      : `✅ ${res.status}\n${res.delivery_note || ''}\n\n${JSON.stringify(res, null, 2)}`;
+  };
+
+  window.b90AddTask = async function() {
+    const t = document.getElementById('b90-new-task').value.trim();
+    const s = document.getElementById('b90-new-slot').value.trim();
+    if (!t) return;
+    await b90Call('add_task', { title: t, priority: 4, scheduled_slot: s });
+    document.getElementById('b90-new-task').value = '';
+    document.getElementById('b90-new-slot').value = '';
+    await window.b90Refresh();
+  };
+
+  window.b90AddMem = async function() {
+    const m = document.getElementById('b90-new-mem').value.trim();
+    if (!m) return;
+    await b90Call('add_memory', { content: m, importance: 5 });
+    document.getElementById('b90-new-mem').value = '';
+    await window.b90Refresh();
+  };
+
+  // ---------------- v10.2: limpar memórias (dois cliques) e ritmo da autonomia ----------------
+  let b90ClearMemArmed = null;
+  window.b90ClearMemories = async function() {
+    const btn = document.getElementById('b90-clear-mem-btn');
+    if (!b90ClearMemArmed) {
+      btn.innerText = '⚠️ Clique de novo para apagar TUDO';
+      b90ClearMemArmed = setTimeout(() => { b90ClearMemArmed = null; btn.innerText = '🧹 Limpar memórias'; }, 5000);
+      return;
+    }
+    clearTimeout(b90ClearMemArmed); b90ClearMemArmed = null;
+    const res = await b90Call('clear_memories');
+    btn.innerText = res.error ? `Erro: ${res.error}` : `✅ ${res.removed} memória(s) apagada(s)`;
+    setTimeout(() => { btn.innerText = '🧹 Limpar memórias'; }, 4000);
+    await window.b90Refresh();
+  };
+
+  window.b90SaveAutonomyPace = async function() {
+    const idleMin = Math.max(1, parseFloat(document.getElementById('b90-auto-idle').value || '10'));
+    const gapMin = Math.max(1, parseFloat(document.getElementById('b90-auto-gap').value || '30'));
+    await b90Call('toggle_autonomy', {
+      enabled: document.getElementById('b90-auto-enabled').checked,
+      idle_threshold_sec: idleMin * 60, min_interval_sec: gapMin * 60
+    });
+    await window.b90Refresh();
+  };
+
+  // ---------------- v11.1: troca discreta de perfil (VTuber <-> Trabalho) ----------------
+  const b90ProfileNames = { pessoal: 'Matrix', trabalho: 'Trabalho' };
+  let b90ProfileArmed = null;
+  let b90ProfileSwitching = false;
+
+  function b90RenderProfileSwitch(st) {
+    const box = document.getElementById('b90-profile-switch');
+    if (!box || st.profile_switch_available === undefined) return;
+    box.style.display = st.profile_switch_available ? '' : 'none';
+    if (b90ProfileSwitching) return;
+    box.querySelectorAll('button').forEach(b => {
+      b.classList.toggle('active', b.dataset.profile === (st.profile || 'pessoal'));
+      if (b90ProfileArmed !== b.dataset.profile) b.innerText = b90ProfileNames[b.dataset.profile];
+    });
+  }
+
+  window.b90SwitchProfile = async function(target, btn) {
+    const current = (b90State && b90State.profile) || 'pessoal';
+    const msg = document.getElementById('b90-profile-msg');
+    if (target === current || b90ProfileSwitching) return;
+    if (b90ProfileArmed !== target) {              // 1º clique só arma: evita trocar por engano
+      b90ProfileArmed = target;
+      btn.innerText = 'Confirmar?';
+      setTimeout(() => { if (b90ProfileArmed === target) { b90ProfileArmed = null; btn.innerText = b90ProfileNames[target]; } }, 4000);
+      return;
+    }
+    b90ProfileArmed = null;
+    b90ProfileSwitching = true;
+    msg.innerText = '';
+    document.querySelectorAll('#b90-profile-switch button').forEach(b => b.disabled = true);
+    btn.innerText = 'Trocando...';
+    const inColab = !!(window.google && google.colab && google.colab.kernel);
+    const res = await b90Call('switch_profile', { profile: target, want_html: inColab });
+    if (res.error || res.profile !== target) {
+      b90ProfileSwitching = false;
+      document.querySelectorAll('#b90-profile-switch button').forEach(b => b.disabled = false);
+      btn.innerText = b90ProfileNames[target];
+      msg.innerText = `Não foi possível trocar: ${res.error || 'resposta inesperada'}`;
+      return;
+    }
+    b90FinishSwitch(res, inColab);
+  };
+
+  // ---------------- v12.1: menu de agentes (SOMENTE PARA TESTES) ----------------
+  let b90AgentMenuKey = '';
+  function b90RenderAgentMenu(st) {
+    const box = document.getElementById('b90-agent-box');
+    if (!box) return;
+    if (!st.agent_menu) { box.style.display = 'none'; return; }
+    box.style.display = 'inline-flex';
+    const current = (st.agent && st.agent.id) || '';
+    const key = JSON.stringify(st.agent_menu) + '|' + current;
+    if (key === b90AgentMenuKey) return;
+    b90AgentMenuKey = key;
+    const sel = document.getElementById('b90-agent-menu');
+    const opts = [{ id: '', nome: 'Matrix', tipo: 'padrão' }].concat(st.agent_menu);
+    window.b90AgentLinks = {};
+    opts.forEach(a => { if (a.panel_url) window.b90AgentLinks[a.id] = a.panel_url; });
+    sel.innerHTML = opts.map(a => `<option value="${b90EscapeHtml(a.id)}" ${a.id === current ? 'selected' : ''}>${b90EscapeHtml(a.nome)} (${b90EscapeHtml(a.panel_url ? 'painel próprio ↗' : a.tipo)})</option>`).join('');
+    document.getElementById('b90-agent-go').style.display = 'none';
+  }
+  window.b90AgentArm = function() {
+    const current = (b90State.agent && b90State.agent.id) || '';
+    document.getElementById('b90-agent-go').style.display = document.getElementById('b90-agent-menu').value === current ? 'none' : '';
+  };
+  window.b90RequestUpdate = async function() {               // v13.41: atualizar pelo painel, como /atualizar
+    const btn = document.getElementById('b90-update-btn'), msg = document.getElementById('b90-profile-msg');
+    btn.disabled = true; msg.innerText = 'Conferindo o GitHub...';
+    const res = await b90Call('request_update', {}, true);
+    btn.disabled = false;
+    msg.innerText = res.error ? `⚠️ ${res.error}` : (res.text || 'Pedido enviado.') + ' O resultado chega nos avisos do painel e no Telegram.';
+  };
+  window.b90SwitchAgent = async function() {
+    const target = document.getElementById('b90-agent-menu').value;
+    const btn = document.getElementById('b90-agent-go');
+    const msg = document.getElementById('b90-profile-msg');
+    const link = (window.b90AgentLinks || {})[target];
+    if (link) {                                                      // v13.40: roda à parte: abre o painel dele
+      window.open(link, '_blank', 'noopener');
+      msg.innerText = 'Esse agente roda à parte: abri o painel dele numa nova aba.';
+      document.getElementById('b90-agent-menu').value = (b90State.agent && b90State.agent.id) || '';
+      btn.style.display = 'none';
+      return;
+    }
+    btn.disabled = true; btn.innerText = 'Trocando...'; msg.innerText = '';
+    const inColab = !!(window.google && google.colab && google.colab.kernel);
+    const res = await b90Call('switch_agent', { agent: target, want_html: inColab });
+    if (res.error || ((res.agent && res.agent.id) || '') !== target) {
+      btn.disabled = false; btn.innerText = 'Confirmar troca';
+      msg.innerText = `Não foi possível trocar: ${res.error || 'resposta inesperada'}`;
+      return;
+    }
+    b90FinishSwitch(res, inColab);
+  };
+
+  function b90FinishSwitch(res, inColab) {
+    // Para este painel antes de desenhar o novo: nada do perfil anterior continua consultando o servidor.
+    b90Disconnected = true;
+    clearInterval(window.b90HeartbeatId);
+    if (b90PollTimer) { clearInterval(b90PollTimer); b90PollTimer = null; }
+    if (b90ClockId) { clearInterval(b90ClockId); b90ClockId = null; }
+    if (inColab && res.html) {
+      try {
+        b90SwapPanel(res.html);                                      // só o painel é trocado; a célula do Colab fica intacta
+      } catch (err) {
+        b90MarkDisconnected();
+        const banner = document.getElementById('b90-dead-banner');
+        if (banner) banner.innerHTML = '⚠️ <b>O perfil foi trocado, mas o painel não pôde ser redesenhado.</b> Rode a célula <code>iniciar_byte()</code> de novo.';
+      }
+    } else {
+      location.reload();                                             // modo servidor: a página vem com o tema novo
+    }
+  }
+
+  // v11.1.1: NÃO usar document.write no Colab. Ele substitui a página inteira da célula de saída, inclusive os
+  // scripts do próprio Colab que dimensionam e exibem a saída, e o painel some. Aqui trocamos apenas o estilo,
+  // a <div> do painel e o script dele, dentro do mesmo lugar da página.
+  function b90SwapPanel(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const newRoot = doc.getElementById('byte-v90-root');
+    const newScripts = Array.from(doc.querySelectorAll('script'));
+    const oldRoot = document.getElementById('byte-v90-root');
+    if (!newRoot || !oldRoot || !newScripts.length) throw new Error('painel novo incompleto');
+    const host = oldRoot.parentNode;
+    const oldStyles = Array.from(document.querySelectorAll('style')).filter(st => st.dataset.b90 || st.textContent.includes('#byte-v90-root'));
+    const oldScripts = Array.from(document.querySelectorAll('script')).filter(sc => sc.dataset.b90 || sc.textContent.includes('b90EncodeB64'));
+    doc.querySelectorAll('style').forEach(st => {
+      const el = document.createElement('style');
+      el.setAttribute('data-b90', '1');
+      el.textContent = st.textContent;
+      host.insertBefore(el, oldRoot);
+    });
+    oldStyles.forEach(st => st.remove());
+    oldRoot.replaceWith(document.importNode(newRoot, true));
+    oldScripts.forEach(sc => sc.remove());                           // o código antigo já foi parado acima
+    newScripts.forEach(sc => {                                       // <script> criado via DOM executa; via innerHTML não
+      const el = document.createElement('script');
+      el.setAttribute('data-b90', '1');
+      el.textContent = sc.textContent;
+      host.appendChild(el);
+    });
+  }
+
+  // ---------------- v11.0: perfil de trabalho ----------------
+  let b90WorkFilesKey = '';
+  function b90RenderWork(work) {
+    document.getElementById('b90-btn-tab-work').style.display = '';
+    const files = (work.inputs || []).map(f => f.name);
+    const key = files.join('|');
+    if (key !== b90WorkFilesKey) {
+      b90WorkFilesKey = key;
+      const sel = document.getElementById('b90-work-file');
+      const current = sel.value;
+      sel.innerHTML = files.map(n => `<option value="${b90EscapeHtml(n)}" ${n === current ? 'selected' : ''}>${b90EscapeHtml(n)}</option>`).join('')
+        || '<option value="">(nenhuma planilha: envie uma)</option>';
+    }
+    document.getElementById('b90-work-mail-note').innerText = work.email_ready
+      ? 'Conta de e-mail configurada.' + (work.last_triage ? ` Última triagem: ${work.last_triage.at} (${work.last_triage.count} mensagens, ${work.last_triage.drafts} rascunhos).` : '')
+      : 'Conta de e-mail ainda não configurada: preencha a aba de e-mail antes de triar.';
+    const inColab = !!(window.google && google.colab && google.colab.kernel);
+    document.getElementById('b90-work-outputs-dir').innerText = inColab ? `Pasta: ${work.outputs_dir}` : '';
+    document.getElementById('b90-work-outputs').innerHTML = (work.outputs || []).map(f => {
+      const link = inColab ? '' : `<a class="b90-btn-sec" style="text-decoration:none;" target="_blank" rel="noopener" href="/files/${encodeURIComponent(f.name)}?token=${encodeURIComponent(b90HttpToken)}">Abrir</a>`;
+      return `<div class="b90-row-item"><div><b>${b90EscapeHtml(f.name)}</b><div style="font-size:0.72rem; color:var(--muted);">${b90EscapeHtml(f.modified)} · ${f.size_kb} KB</div></div>${link}</div>`;
+    }).join('') || '<div style="font-size:0.8rem; color:var(--muted);">Nenhuma entrega ainda.</div>';
+  }
+
+  async function b90WorkRun(btnId, busyText, action, payload) {
+    const btn = document.getElementById(btnId);
+    const out = document.getElementById('b90-work-out');
+    const label = btn.innerText;
+    btn.disabled = true; btn.innerText = busyText;
+    out.innerText = busyText + ' Isso pode levar de alguns segundos a alguns minutos.';
+    const res = await b90Call(action, payload);
+    btn.disabled = false; btn.innerText = label;
+    if (res.error) { out.innerHTML = `<span style="color:var(--danger);">${b90EscapeHtml(res.error)}</span>`; return; }
+    out.innerHTML = b90FormatReplyWithCodeButtons(res.response || 'Concluído.');
+    await window.b90Refresh();
+  }
+
+  window.b90WorkAnalyze = function() {
+    const file = document.getElementById('b90-work-file').value;
+    if (!file) { document.getElementById('b90-work-out').innerText = 'Envie uma planilha primeiro.'; return; }
+    return b90WorkRun('b90-work-analyze-btn', 'Analisando...', 'work_analyze', { file, question: document.getElementById('b90-work-question').value });
+  };
+  window.b90WorkDeck = function() {
+    const topic = document.getElementById('b90-work-topic').value.trim();
+    if (!topic) return;
+    return b90WorkRun('b90-work-deck-btn', 'Gerando...', 'work_presentation', { topic });
+  };
+  window.b90WorkTriage = function() {
+    return b90WorkRun('b90-work-triage-btn', 'Lendo a caixa de entrada...', 'work_triage', { unread_only: document.getElementById('b90-work-unread').checked });
+  };
+  window.b90WebResearch = function() {
+    const question = document.getElementById('b90-web-question').value.trim();
+    if (!question) return;
+    return b90WorkRun('b90-web-btn', 'Pesquisando...', 'web_research', { question });
+  };
+
+  window.b90WorkUpload = function(input) {
+    const file = input.files && input.files[0];
+    const out = document.getElementById('b90-work-out');
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) { out.innerText = 'Arquivo acima de 20 MB.'; input.value = ''; return; }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const res = await b90Call('work_upload', { name: file.name, content_b64: String(reader.result).split(',')[1] || '' });
+      out.innerText = res.error ? `Erro: ${res.error}` : `Planilha '${res.saved}' recebida (${res.size_kb} KB).`;
+      input.value = '';
+      await window.b90Refresh();
+      if (!res.error) document.getElementById('b90-work-file').value = res.saved;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ---------------- v10.4: lembretes ----------------
+  window.b90AddReminder = async function() {
+    const inp = document.getElementById('b90-new-reminder');
+    const fb = document.getElementById('b90-reminder-feedback');
+    const spec = inp.value.trim();
+    if (!spec) return;
+    const res = await b90Call('add_reminder', {
+      spec, repeat: document.getElementById('b90-reminder-repeat').value,
+      run_as_task: document.getElementById('b90-reminder-task').checked
+    });
+    fb.style.color = res.error ? '#ef4444' : '';
+    fb.innerText = res.error ? `❌ ${res.error}` : `✅ Agendado para ${res.due_local}`;
+    if (!res.error) inp.value = '';
+    await window.b90Refresh();
+  };
+  window.b90CancelReminder = async function(id) { await b90Call('cancel_reminder', { reminder_id: id }); await window.b90Refresh(); };
+
+  window.b90DelTask = async function(id) { await b90Call('del_task', { task_id: id }); await window.b90Refresh(); };
+  window.b90DoneTask = async function(id) { await b90Call('done_task', { task_id: id }); await window.b90Refresh(); };
+  window.b90DelMem = async function(id) { await b90Call('del_memory', { memory_id: id }); await window.b90Refresh(); };
+
+  // Heartbeat a cada 4s para atualizar agenda extraída em background e iniciativas proativas
+  window.b90HeartbeatId = setInterval(async () => {
+    const poll = await b90Call('poll_proactive', {}, true);
+    if (poll && !poll.error) {
+      if (poll.llm) b90RenderState({
+        ...b90State,
+        llm: poll.llm,
+        tasks: poll.tasks || b90State.tasks,
+        memories: poll.memories || b90State.memories,
+        context_window: poll.context_window || b90State.context_window
+      });
+      if (poll.messages && poll.messages.length > 0) {
+        b90RenderProactiveMessages(poll.messages);
+        if (poll.context_window) b90RenderContextWindow(poll.context_window);
+      }
+    }
+  }, 4000);
+
+  b90RenderState(b90State);
+})();
+</script>
+</body>
+</html>

@@ -21,7 +21,7 @@ byte-agent = "byte_agent.headless:main"
 packages = ["byte_agent"]
 
 [tool.setuptools.package-data]
-byte_agent = ["agentes/*.json"]
+byte_agent = ["agentes/*.json", "painel/*.html"]
 
 [tool.setuptools.dynamic]
 version = { attr = "byte_agent.engine.BYTE_VERSION" }
