@@ -206,7 +206,7 @@ class Google:
         if not email:
             self.notify("⚠️ Login do Google feito, mas não consegui ler o e-mail da conta.")
             return False
-        accs = [a for a in self.accounts() if a["email"].lower() != email.lower()] + [{"email": email}]
+        accs = [a for a in self.accounts() if a["email"].lower() != email.lower()] + [{"email": email, "desde": self.clock()}]
         self.db.set_setting(SETTING, accs)
         self.vault.put(f"google:{email.lower()}", data["refresh_token"])
         self._tokens[email.lower()] = (data.get("access_token", ""), self.clock() + float(data.get("expires_in") or 3600))
@@ -227,6 +227,8 @@ class Google:
         if status != 200 or not data.get("access_token"):
             if data.get("error") == "invalid_grant":
                 self.vault.drop(f"google:{key}")
+                self.notify(f"🔑 O login do Google de {acc['email']} expirou (no modo de teste do Google, isso acontece a cada "
+                            "7 dias). Mande /google entrar para conectar de novo.")
                 raise PermissionError("O login do Google expirou ou foi revogado: /google entrar")
             raise PermissionError(f"O Google recusou a renovação: {str(data.get('error_description') or status)[:160]}")
         self._tokens[key] = (data["access_token"], self.clock() + float(data.get("expires_in") or 3600))
@@ -332,6 +334,31 @@ class Google:
     def auto_upload_on(self) -> bool:
         return bool(self.db.get_setting("google.drive_auto", True)) and bool(self.ready_accounts())
 
+    TEST_MODE_S = 7 * 86400
+
+    def test_mode(self) -> bool:
+        """App do Google em "Teste" (não publicado): o Google derruba o login a cada 7 dias. Padrão: sim."""
+        return bool(self.db.get_setting("google.modo_teste", True))
+
+    def remind_expiry(self) -> List[str]:
+        """v13.56: no modo de teste, avisa um dia antes do Google derrubar o login (uma vez por login)."""
+        if not self.test_mode():
+            return []
+        warned, accs, changed = [], self.accounts(), False
+        for a in accs:
+            since = float(a.get("desde") or 0)
+            if not since or a.get("avisado") == since or not self.vault.get(f"google:{a['email'].lower()}"):
+                continue
+            if self.clock() - since >= self.TEST_MODE_S - 86400:
+                a["avisado"], changed = since, True
+                warned.append(a["email"])
+                self.notify(f"⏳ O login do Google de {a['email']} vence em menos de 1 dia (o app do Google está em modo de "
+                            "teste: o Google desconecta a cada 7 dias). Mande /google entrar para renovar agora. Se publicar o "
+                            "app no Google Cloud, mande /google teste off.")
+        if changed:
+            self.db.set_setting(SETTING, accs)
+        return warned
+
     def status(self) -> Dict[str, Any]:
         return {"accounts": [{"email": a["email"], "ready": bool(self.vault.get(f"google:{a['email'].lower()}"))} for a in self.accounts()],
                 "drive_auto": bool(self.db.get_setting("google.drive_auto", True)), "last_error": self.last_error,
@@ -422,6 +449,10 @@ def install(service: Any, data_dir: Path) -> Google:
             return {"text": format_status(g.status())}
         if words[0] == "entrar":
             return g.start_login()
+        if words[0] == "teste" and len(words) > 1 and words[1] in {"on", "off"}:
+            service.db.set_setting("google.modo_teste", words[1] == "on")
+            return {"text": "Ok: " + ("vou avisar um dia antes de o login de teste vencer (a cada 7 dias)." if words[1] == "on"
+                                      else "app publicado, sem avisos de vencimento.")}
         if words[0] in {"endereco", "endereço", "redirect", "uri"}:
             return {"text": g.redirect_help()}
         if words[0] == "drive" and len(words) > 1 and words[1] in {"on", "off"}:
@@ -435,8 +466,12 @@ def install(service: Any, data_dir: Path) -> Google:
         if words[0] == "padrao" and len(words) > 1 and words[1] in {"google", "outlook"}:
             service.db.set_setting("agenda_padrao", words[1])
             return {"text": f"Compromissos novos vão para o {calendarios.NAMES[words[1]]}."}
-        return {"text": "Use: /google · /google entrar · /google endereco · /google drive on|off · /google padrao google|outlook · "
+        return {"text": "Use: /google · /google entrar · /google endereco · /google teste on|off · /google drive on|off · /google padrao google|outlook · "
                         "/google sair"}
     service.extra_actions["google_command"] = act_command
+    scheduler = getattr(service, "scheduler", None)
+    if scheduler is not None:
+        scheduler.add("google_vencimento", 3 * 3600, g.remind_expiry, when=lambda: bool(g.accounts()),
+                      label="Aviso do login de teste do Google")
     service.status_providers["google"] = g.status
     return g

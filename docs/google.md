@@ -51,7 +51,9 @@ Salve, espere alguns minutos (o Google demora para aplicar) e mande `/google ent
 O app está em **Teste** e a conta não está na lista de testadores. No Google Cloud → **Google Auth Platform → Público**:
 - **Publicar aplicativo** (status **Em produção**). É o recomendado, porque em "Teste" o login cai a cada 7 dias. Não
   precisa pedir verificação: no login aparece "O Google não verificou este app" → **Avançado → Acessar**;
-- ou, para continuar em Teste: **Usuários de teste → Adicionar usuários** com o seu e-mail.
+- ou, para continuar em Teste: **Usuários de teste → Adicionar usuários** com o seu e-mail. Em Teste, o Google
+  desconecta o login a cada 7 dias: o agente avisa um dia antes (e quando cair) para você mandar `/google entrar`.
+  Se publicar o app depois, mande `/google teste off`.
 
 Conta Google Workspace da empresa: o administrador pode bloquear apps de terceiros; aí é a TI que libera.
 

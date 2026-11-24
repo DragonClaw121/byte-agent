@@ -105,7 +105,7 @@ def test_login_through_another_process_and_forged_state(svc, tmp_path):
         kronus.public_routes["/oauth/google"](page, "GET", "/oauth/google", "state=" + "a" * 30 + "&code=X")
         assert "venceu" in page.html                               # state inventado não entra
         login(svc, other=kronus)
-        assert svc.google.accounts() == [{"email": "gabriel@gmail.com"}] and b"GRT" not in svc.google.vault.path.read_bytes()
+        assert [a["email"] for a in svc.google.accounts()] == ["gabriel@gmail.com"] and b"GRT" not in svc.google.vault.path.read_bytes()
         assert "gabriel@gmail.com — ✅ agenda e Drive" in svc.extra_actions["google_command"]({"arg": ""})["text"]
     finally:
         kronus.proactive_engine.stop()
@@ -160,3 +160,20 @@ def test_redirect_help_shows_the_exact_uri(tmp_path, monkeypatch):
     text = g.redirect_help()
     assert "https://byte.exemplo.io/oauth/google\n" in text and "123-abc.apps.googleusercontent.com" in text
     assert "URIs de redirecionamento autorizados" in text
+
+
+def test_test_mode_login_expiry_is_announced_a_day_before(svc):
+    """v13.56: app do Google em "Teste" (não publicado): o login cai a cada 7 dias; o agente avisa antes, uma vez."""
+    login(svc)
+    g, notes = svc.google, []
+    g.notify = notes.append
+    assert g.remind_expiry() == []                                    # recém-conectado
+    since = g.accounts()[0]["desde"]
+    g.clock = lambda: since + 6.2 * 86400
+    assert g.remind_expiry() == ["gabriel@gmail.com"] and "/google entrar" in notes[-1]
+    assert g.remind_expiry() == []                                    # uma vez por login
+    assert "app publicado" in svc.extra_actions["google_command"]({"arg": "teste off"})["text"]
+    accs = g.accounts()
+    accs[0].pop("avisado")
+    svc.db.set_setting("google.contas", accs)
+    assert not g.test_mode() and g.remind_expiry() == []              # publicado: sem aviso
