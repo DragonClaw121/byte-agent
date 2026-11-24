@@ -274,10 +274,35 @@ class Meetings:
             conn.execute("UPDATE meetings SET status = 'pronta', ata_json = ?, ata_text = ?, file = ?, error = NULL WHERE id = ?",
                          (json.dumps(ata, ensure_ascii=False), text, file_name, int(mid)))
         card = self._tasks_card(m, ata)
+        client = self._to_client_card(m, ata, file_name)
         tail = f"\nArquivos gerados em entregas/: {file_name}" if file_name else ""
+        if client:
+            tail += f"\n🗂️ Guardei na ficha de {client} (/ficha {client})."
         self.db.enqueue_proactive_message("reuniao", text + tail + (f"\n\n{card}" if card else ""), brain_used="REUNIÃO")
         self.db.record_audit("meeting_minutes", "reunioes", "success", {"id": mid, "tarefas": len(ata["tarefas"])})
         return ata
+
+    def _to_client_card(self, m: Dict[str, Any], ata: Dict[str, Any], file_name: Optional[str]) -> str:
+        """v13.63: reunião com um cliente que tem ficha (citado no nome da reunião ou no resumo) -> entra no histórico
+        dele, com os próximos passos. Devolve o nome do cliente (ou "")."""
+        book = getattr(self.service, "client_book", None)
+        if book is None:
+            return ""
+        try:
+            card = book.find(m["title"]) or book.find(str(ata.get("resumo") or ""))
+            if card is None:
+                return ""
+            steps = [str(x) for x in (ata.get("proximos_passos") or []) if str(x).strip()]
+            steps += [f"{t.get('o_que')}" + (f" ({t['quem']})" if t.get("quem") else "") + (f" até {t['prazo']}" if t.get("prazo") else "")
+                      for t in ata.get("tarefas") or [] if isinstance(t, dict)]
+            book.upsert(card["nome"], proximos=steps[:8] or None)
+            book.add_event(card["n"], "reuniao", f"{m['title']}: {str(ata.get('resumo') or '')[:400]}"
+                           + (f" (ata: {file_name})" if file_name else ""))
+            return card["nome"]
+        except Exception as err:
+            from .falhas import note
+            note("Ficha do cliente (gravar reunião)", err)
+            return ""
 
     @staticmethod
     def format_minutes(m: Dict[str, Any], ata: Dict[str, Any]) -> str:

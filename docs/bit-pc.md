@@ -128,6 +128,10 @@ Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:
    chegam como um cartão "Criar N tarefas?" e nada é criado sem a sua aprovação.
 
 Detalhes:
+- **Sugestão automática (v1.9):** ao abrir uma reunião no Teams, Zoom, Google Meet ou Webex, o Bit pergunta, num aviso,
+  se deve transcrever. Isso acontece no máximo uma vez a cada 30 min por aplicativo. Ele só pergunta: nada começa sem o
+  seu clique.
+- **Na ficha do cliente:** se o nome da reunião (ou o resumo) cita um cliente com ficha, a ata entra no histórico dele.
 - **O áudio não fica guardado:** os pedaços vão para a transcrição e ficam só o texto e a ata. Trechos de silêncio nem são
   enviados, porque a transcrição inventaria frases. Se a internet cair, cada trecho é reenviado até 3 vezes.
 - **Requisitos:** a transcrição usa o mesmo serviço de voz do Bit (`BYTE_STT_URL`, ver `voz.md`). O app precisa do

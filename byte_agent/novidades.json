@@ -74,5 +74,13 @@
   "itens": [
    "Bit no PC 1.8: botão ⏺ Reunião transcreve ao vivo (som do PC + microfone) e faz a ata no fim"
   ]
+ },
+ {
+  "versao": "13.63",
+  "itens": [
+   "Atas de reunião e e-mails recebidos de clientes entram na ficha do cliente",
+   "A triagem usa a ficha para escrever a resposta e mostra \"🗂️ cliente X\"",
+   "Bit no PC 1.9: ao abrir uma reunião (Teams, Zoom, Meet, Webex), oferece transcrever"
+  ]
  }
 ]

@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS client_events_card ON client_events(card, t);
 """
 SUFFIXES = set("""ltda ltd s/a sa s.a. s.a me epp eireli cia companhia sociedade grupo holding inc corp limitada
 industria comercio servicos""".split())
-EVENT_ICONS = {"pesquisa": "🏢", "email": "✉️", "tela": "📸", "nota": "📝"}
+EVENT_ICONS = {"pesquisa": "🏢", "email": "✉️", "tela": "📸", "nota": "📝", "reuniao": "🎙️", "recebido": "📥"}
 COMPRAS_MAX = 5000
 
 

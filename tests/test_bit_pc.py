@@ -138,3 +138,12 @@ def test_meeting_audio_conversion_mix_and_chunks():
     assert chunks and chunks[0][0][:4] == b"RIFF" and [c[1] for c in chunks] == list(range(len(chunks)))
     assert rec.skipped >= 1 and abs(rec.offset_s - 5.0) < 0.6                 # o silêncio não foi enviado, mas o tempo andou
     assert bit_pc.quiet_cut(array("h", [5000] * 32000 + [0] * 8000 + [5000] * 8000)) in range(32000, 40001)
+
+
+def test_meeting_window_titles():
+    """v1.9: janela de reunião em uso -> o Bit oferece transcrever."""
+    m = bit_pc.meeting_app
+    assert m("Reunião semanal | Microsoft Teams") == "Teams" and m("Chamada com Ana | Microsoft Teams") == "Teams"
+    assert m("Zoom Meeting") == "Zoom" and m("Meet - abc-defg-hij - Google Chrome") == "Google Meet"
+    assert m("Webex") == "Webex"
+    assert m("Chat | Microsoft Teams") == "" and m("Caixa de entrada - Outlook") == "" and m("") == ""

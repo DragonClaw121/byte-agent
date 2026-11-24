@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.8"
+VERSION = "1.9"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -1294,6 +1294,22 @@ def wav_bytes(samples: _array) -> bytes:
     return buf.getvalue()
 
 
+MEETING_APPS = (
+    (re.compile(r"(?i)\b(reuni[aã]o|meeting|chamada|call)\b.*\bteams\b|\bteams\b.*\b(reuni[aã]o|meeting|chamada|call)\b"), "Teams"),
+    (re.compile(r"(?i)zoom (meeting|workplace)|reuni[aã]o (do|no) zoom|\bzoom\b.*\b(reuni[aã]o|meeting)\b"), "Zoom"),
+    (re.compile(r"(?i)^meet\s*[-–—:]|google meet|\bmeet\.google\.com\b"), "Google Meet"),
+    (re.compile(r"(?i)\bwebex\b"), "Webex"),
+)
+
+
+def meeting_app(title: str) -> str:
+    """Pelo título da janela em uso: 'Teams', 'Zoom', 'Google Meet', 'Webex' ou ''."""
+    for rx, name in MEETING_APPS:
+        if rx.search(str(title or "")):
+            return name
+    return ""
+
+
 class AudioSource:
     """Um fluxo (som do PC ou microfone) já convertido para mono 16 kHz, esperando o misturador."""
 
@@ -1749,9 +1765,26 @@ class App:
                 info = foreground()
                 if info and info["pid"] != self.my_pid and not info["minimized"]:
                     self.last_foreign = info
+                    self.maybe_suggest_meeting(str(info.get("title") or ""))
             except Exception:
                 pass
             time.sleep(0.5)
+
+    def maybe_suggest_meeting(self, title: str, now: Optional[float] = None) -> Optional[str]:
+        """v1.9: janela de reunião em uso (Teams, Zoom, Meet, Webex) e nada sendo transcrito -> oferece transcrever, no
+        máximo uma vez a cada 30 min por aplicativo. Desliga com "sugerir_reuniao": false na configuração."""
+        app = meeting_app(title)
+        if not app or self.meeting is not None or self.cfg.get("sugerir_reuniao") is False:
+            return None
+        now = time.time() if now is None else now
+        last = getattr(self, "meeting_hints", {})
+        if now - last.get(app, 0.0) < 1800:
+            return None
+        last[app] = now
+        self.meeting_hints = last
+        self.events.put(("call", lambda: self.notice(f"Parece uma reunião no {app}. Quer que eu transcreva e faça a ata?",
+                                                     action=("⏺ Transcrever", self.ask_meeting))))
+        return app
 
     def target_region(self) -> Tuple[Optional[Dict[str, int]], str]:
         """A janela em uso (a última que não é do Bit). Sem ela, o monitor principal."""
@@ -2512,7 +2545,7 @@ class App:
             except Exception:
                 pass
 
-    def notice(self, text: str) -> None:
+    def notice(self, text: str, action: Optional[Tuple[str, Callable[[], None]]] = None) -> None:
         if not text.strip():
             return
         self.add_message("● " + text, "aviso")
@@ -2529,6 +2562,11 @@ class App:
         body = tk.Label(inner, text=tk_safe(text)[:420], bg=self.CARD, fg=self.INK, wraplength=self.px(330),
                         justify="left", font=("Segoe UI", 10), cursor="hand2")
         body.pack(fill="x", padx=self.px(10), pady=(self.px(4), self.px(10)))
+        if action is not None:                                   # v1.9: aviso com um botão (ex.: transcrever a reunião)
+            label, cmd = action
+            tk.Button(inner, text=tk_safe(label), command=lambda t=toast: (self.close_toast(t), cmd()), relief="flat",
+                      cursor="hand2", bg=self.PRI, fg="#0d1020", font=("Segoe UI", 9, "bold"), borderwidth=0,
+                      padx=self.px(10), pady=self.px(3)).pack(anchor="w", padx=self.px(10), pady=(0, self.px(10)))
         close.bind("<Button-1>", lambda e=None, t=toast: self.close_toast(t))
         body.bind("<Button-1>", lambda e=None, t=toast: (self.close_toast(t), self.hotkey_open()))
         self.toasts.append(toast)
@@ -3371,6 +3409,13 @@ def autotest(out_path: str) -> int:
             atas = [w for w in app.result_windows if alive(w) and "Ata" in str(w.title())]
             if not atas:
                 problems.append("reunião: a ata não abriu")
+            first = app.maybe_suggest_meeting("Reunião semanal | Microsoft Teams")    # v1.9: oferece transcrever
+            again = app.maybe_suggest_meeting("Reunião semanal | Microsoft Teams")
+            app.pump()
+            buttons = [t for toast in app.toasts for t in texts(toast) if "Transcrever" in t]
+            result["sugestao_reuniao"] = [first, again, len(buttons)]
+            if first != "Teams" or again is not None or not buttons:
+                problems.append(f"reunião: sugestão de transcrever falhou ({result['sugestao_reuniao']})")
             app.root.after(100, step3c)
 
         def step3c() -> None:

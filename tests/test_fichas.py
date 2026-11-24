@@ -81,3 +81,34 @@ def test_research_reads_and_writes_the_card_and_pc_uses_it(bit, monkeypatch):
                                                                     "corpo": "Olá, Júlia!\n\nAbraço,"}))
     out = bit.pc_hub.prepare("", "email", "e-mail para a EMS sobre a renovação")
     assert out["ficha"] == card["n"] and book.events(card["n"])[0]["tipo"] == "email"
+
+
+def test_meeting_minutes_and_received_email_go_to_the_card(bit, monkeypatch):
+    """v13.63: a ata de uma reunião com o cliente e os e-mails recebidos dele entram na ficha."""
+    book = bit.client_book
+    card = book.upsert("EMS S/A", cnpj="57.507.378/0003-65")
+    meetings = bit.meetings
+    meetings._llm = lambda messages, max_tokens: json.dumps({
+        "resumo": "Renovação do Figma aprovada.", "participantes": [], "decisoes": ["Renovar 18 licenças"],
+        "tarefas": [{"o_que": "Enviar proposta", "quem": "Gabriel", "prazo": "sexta"}], "pontos_em_aberto": [],
+        "proximos_passos": ["Agendar onboarding"]})
+    m = meetings.start("Alinhamento EMS — renovação")
+    with bit.db.connection() as conn:
+        conn.execute("UPDATE meetings SET transcript = ? WHERE id = ?", ("[00:00] Vamos renovar.", m["id"]))
+    meetings.finish(m["id"], background=False)
+    got = book.get(card["n"])
+    assert book.events(card["n"])[0]["tipo"] == "reuniao" and "Renovação do Figma" in book.events(card["n"])[0]["texto"]
+    assert "Agendar onboarding" in got["proximos"] and any("Enviar proposta (Gabriel) até sexta" in p for p in got["proximos"])
+    prompts = []
+
+    def fake_llm(messages, **kw):
+        prompts.append(messages[0]["content"])
+        return json.dumps({"categoria": "responder", "resumo": "Pede a proposta da renovação.", "precisa_resposta": True,
+                           "rascunho": "Olá, Júlia! Envio até sexta."})
+    monkeypatch.setattr(bit.work, "_llm", fake_llm)
+    verdict = bit.work._classify_email({"from": "Júlia <julia@ems.com.br>", "subject": "Proposta da renovação", "date": "",
+                                        "body": "Oi Gabriel, consegue mandar a proposta?"})
+    assert verdict["cliente"] == "EMS S/A" and "O REMETENTE É UM CLIENTE COM FICHA" in prompts[-1]
+    assert book.events(card["n"])[0]["tipo"] == "recebido"
+    other = bit.work._classify_email({"from": "Loja <promo@loja.com>", "subject": "Ofertas", "date": "", "body": "50% off"})
+    assert other["cliente"] == ""

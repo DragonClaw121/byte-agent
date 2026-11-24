@@ -55,7 +55,9 @@ Cada cliente pesquisado ganha uma **ficha que fica guardada** e cresce com o tem
   - resumo, próximos passos e o último plano de conta;
   - o **histórico**: pesquisas, e-mails preparados, telas lidas e notas suas.
 - **Quem escreve:** a pesquisa de cliente, o Bit no PC (cada tela lida que cita o cliente e cada e-mail preparado para
-  ele) e você.
+  ele), as **atas de reunião** com o cliente (pelo nome da reunião ou pelo resumo; os próximos passos e as tarefas viram
+  os próximos passos da ficha), os **e-mails recebidos** dele na triagem (v13.63) e você.
+- **Na triagem**, o e-mail de um cliente com ficha aparece com "🗂️ cliente X", e o rascunho da resposta usa a ficha.
 - **Quem usa:** a próxima pesquisa (o plano novo parte do que já sabíamos e mostra o que mudou), o **Preparar e-mail**
   e o **Olhar a tela** do PC, e a conversa em qualquer canal. Basta citar o cliente ("quando renova o Figma da EMS?")
   e a ficha entra na resposta. Um CNPJ de outra filial, com a mesma raiz, cai na mesma ficha.
