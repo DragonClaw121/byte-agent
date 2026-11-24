@@ -23,7 +23,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 CNPJ_RE = re.compile(r"(?<!\d)(\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2})(?!\d)")
 CLIENT_RE = re.compile(r"\b(pesquis\w*|levant\w*|analis\w*|investig\w*|estud\w*|plano de (conta|abordagem)|"
                        r"conhecer melhor|informac\w+ sobre|dossie)\b.{0,60}\b(cliente|empresa|prospect\w*|conta|cnpj|fornecedor)\b"
-                       r"|\b(cliente|empresa|prospect\w*)\b.{0,40}\b(pesquis\w*|levant\w*|analis\w*|dossie)\b")
+                       r"|\b(cliente|empresa|prospect\w*)\b.{0,40}\b(pesquis\w*|levant\w*|analis\w*|dossie)\b"
+                       # v13.59: "aquele resumo profundo sobre o cliente", "a análise/abordagem do cliente"
+                       r"|\b(resumo|analise|plano|abordage\w*|estrategi\w*|perfil)\b[^.?!]{0,80}\b(do|da|sobre o|sobre a|desse|dessa|deste|"
+                       r"desta|para o|para a|pro|pra)\s+(cliente|empresa|conta)\b")
 REGISTRY_URLS = ("https://brasilapi.com.br/api/cnpj/v1/{cnpj}", "https://publica.cnpj.ws/cnpj/{cnpj}")
 STOP = set("""ltda s/a sa s.a. me epp eireli cia companhia sociedade de da do das dos e em para com the and of grupo holding
 comercio servicos servico industria industrial brasil brasileira nacional associacao instituto empresa limitada filial""".split())
@@ -280,7 +283,10 @@ class ClientResearch:
             "houver). Responda em JSON: {\"nome\": \"nome da empresa como aparece\", \"cnpj\": \"se aparecer\", \"cidade\": \"\", "
             "\"uf\": \"\", \"dados_internos\": \"tudo que a tela/notas mostram da relação com a gente: compras, pedidos, "
             "produtos, valores, datas, status, contatos (texto corrido, até 250 palavras; vazio se nada)\", "
-            "\"foco\": \"o que o usuário quer com a pesquisa (ex.: reativar, vender mais, renegociar)\"}. Não invente.",
+            "\"foco\": \"o que o usuário quer com a pesquisa (ex.: reativar, vender mais, renegociar)\"}. Não invente. "
+            "Se aparecer mais de um cliente, use o que o pedido nomeia; \"esse cliente\"/\"o cliente\" sem nome = o mais "
+            "recente (notas e dados estão do mais antigo para o mais novo). Em dados_internos, junte TODAS as compras desse "
+            "cliente que aparecerem (inclusive de outros CNPJs do mesmo grupo).",
             f"PEDIDO: {request}\nNOTAS DA TELA:\n{notes[-4000:] or '(nenhuma)'}\nDADOS INTERNOS INFORMADOS:\n{internal[:4000] or '(nenhum)'}",
             image_url=image_url, json_format=True, max_tokens=800)
         name = " ".join(str(ident.get("nome") or "").split())[:160]

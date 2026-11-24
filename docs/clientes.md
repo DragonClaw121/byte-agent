@@ -13,7 +13,12 @@ acioná-lo**, e não com um resumo genérico da web.
   ```
   Antes da barra vai o nome ou o CNPJ. Depois dela, o que você sabe das compras (opcional, mas é o que torna a
   estratégia boa).
-- **Na conversa:** "faça um levantamento do cliente ACME Ltda" também funciona.
+- **Na conversa:** "faça um levantamento do cliente ACME Ltda" também funciona, assim como "continue a análise",
+  "refaz aquele resumo profundo sobre o cliente" ou "a abordagem desse cliente" (v13.59).
+- **Juntando várias telas (v13.59):** cada **Olhar a tela** guarda o que o Bit leu (clientes, CNPJs, pedidos,
+  produtos, valores, datas) por 12 horas. Abra no ERP a lista de vendas do cliente, depois a de outro CNPJ do mesmo
+  grupo, olhando cada uma, e peça a análise: ele junta tudo, mais o que você escreveu na conversa. "Esse cliente" sem
+  nome é o mais recente que apareceu.
 
 ## O que o Bit faz
 1. **Identifica o cliente:** nome e CNPJ, pelo pedido, pela tela ou pelas notas do assistente.
@@ -44,4 +49,5 @@ No Bit do PC, o e-mail de abordagem abre numa janela (copiar ou abrir no Outlook
 - **Cadastro:** só para empresas brasileiras (CNPJ). Para empresas de fora, sai só a parte da web.
 - **Busca na web:** a qualidade depende do buscador configurado. Com o Tavily (`TAVILY_API_KEY`) é bem melhor.
 - **Dados internos:** o Bit não acessa o seu ERP ou CRM diretamente. Ele usa o que aparece na tela ou o que você
-  informar.
+  informar. Desde a v13.59, quando a conversa fala em consultar o ERP/sistema, ele diz isso com clareza e explica como
+  mostrar os dados (Olhar a tela ou Ao vivo), em vez de pedir "autorização" para uma consulta que não existe.

@@ -282,3 +282,47 @@ def test_intent_router_asks_the_ai_only_when_needed(bit):
         assert hub.intent("e o prazo de entrega, como fica?") in hub.INTENTS and len(asked) == before + 1  # e-mail recente
     finally:
         pc.vision = original
+
+
+def test_client_analysis_conversation_from_the_field(bit, monkeypatch):
+    """v13.59 (conversa real): a tela lida fica guardada, "continue a análise… resumo profundo sobre o cliente" vira a
+    pesquisa de cliente com esses dados, e "pode executar" não vira pedido de autorização/Python para consultar o ERP."""
+    from byte_agent import clientes
+    svc, _ = bit
+    hub = svc.pc_hub
+    fold = clientes.fold
+    ask = "Continue com a análise pedida anteriormente. Quero que faça novamente aquele resumo profundo sobre o cliente que também inclui as abordagens"
+    assert clientes.CLIENT_RE.search(fold(ask)) and hub.intent(ask) == "pesquisa_cliente"
+    assert not clientes.CLIENT_RE.search(fold("me dá o resumo do dia")) and not clientes.CLIENT_RE.search(fold("bom dia"))
+    seen_prompts = []
+
+    def fake(service, system, text, image_url, json_format=False, max_tokens=500):
+        seen_prompts.append((system, text))
+        return ("Cliente EMS S/A (CNPJ 57.507.378/0003-65): pedido 1234 — 10 FIGMA ENTERPRISE FULL SEAT, R$ 81.380,00, "
+                "emitido em 03/11/2026, faturado.")
+    monkeypatch.setattr(pc, "vision", fake)
+    svc.context_manager.record_turn("Esse cliente realizou as seguintes compras mais recentes. Talvez tenham outras sob outro CNPJ",
+                                    "Anotado.", "TESTE")
+    hub.look("Olhe minha tela", "data:image/jpeg;base64,AAAA")
+    system, text = seen_prompts[-1]
+    assert "CONVERSA RECENTE" in text and "outro CNPJ" in text and "Nada de listas genéricas" in system
+    assert "EMS S/A" in hub.seen()
+    runs = []
+
+    class FakeResearch:
+        def run(self, request, internal="", notes="", image_url=""):
+            runs.append({"request": request, "internal": internal, "notes": notes})
+            return {"titulo": "Plano de conta — EMS", "texto": "🏢 Plano de conta — EMS", "resumo": "ok", "arquivos": [],
+                    "email": {"assunto": "", "corpo": ""}}
+    monkeypatch.setattr(svc, "client_research", FakeResearch(), raising=False)
+    res = hub.chat_email(ask)
+    assert res["tipo"] == "cliente" and "FIGMA ENTERPRISE FULL SEAT" in runs[-1]["notes"]
+    assert "outro CNPJ" in runs[-1]["internal"]
+    hooks = [h for h in svc.pre_turn_hooks if getattr(h, "__name__", "") == "systems_limit"]
+    assert hooks
+    svc.context_manager.record_turn("Pode realizar a consulta detalhada",
+                                    "Preciso de sua autorização para consultar o sistema ERP da Olist.", "TESTE")
+    assert "NÃO tem acesso direto ao ERP" in hooks[0]("Pode executar", {})
+    assert hooks[0]("puxa o histórico de compras no ERP", {})
+    svc.context_manager.record_turn("oi", "Olá! Tudo certo.", "TESTE")
+    assert hooks[0]("pode sim", {}) is None and hooks[0]("me lembra amanhã às 9h", {}) is None
