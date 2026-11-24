@@ -254,3 +254,31 @@ def test_email_asked_in_the_pc_chat_uses_context_template_and_adjusts(bit):
         pc.vision = original
     assert res["preparado"]["modelo"] == "Customer Success" and "Ajustei" in res["mensagens"][0]["text"]
     assert "Tudo certo com o <b>Notion</b>" in res["preparado"]["corpo_html"]
+
+
+def test_intent_router_asks_the_ai_only_when_needed(bit):
+    """v13.57: sem a palavra "e-mail", a IA decide (com a conversa); conversa comum nem chega a ela."""
+    svc, _ = bit
+    hub = svc.pc_hub
+    asked = []
+
+    def fake(service, system, text, image_url, json_format=False, max_tokens=500):
+        if max_tokens == 40:
+            asked.append(text)
+            return json.dumps({"intencao": "email_novo" if "renovação" in text else "conversa"})
+        return json.dumps({"titulo": "Renovação", "assunto": "Renovação Notion", "corpo": "Olá, Júlia!\n\nAbraço,"})
+    original = pc.vision
+    pc.vision = fake
+    try:
+        assert hub.intent("bom dia, tudo bem?") == "conversa" and not asked             # nem pergunta
+        assert hub.intent("pesquisa a empresa ACME pra mim") == "pesquisa_cliente" and not asked
+        assert hub.intent("escreve um e-mail pra Júlia") == "email_novo" and not asked  # a regex resolve
+        assert hub.intent("manda aquele texto pro cliente sobre a renovação") == "email_novo"
+        assert "PEDIDO AGORA" in asked[-1]
+        assert hub.intent("o que o cliente achou da proposta?") == "conversa"
+        res = hub.chat_email("manda aquele texto pro cliente sobre a renovação")
+        assert res["tipo"] == "email" and res["assunto"] == "Renovação Notion"
+        before = len(asked)
+        assert hub.intent("e o prazo de entrega, como fica?") in hub.INTENTS and len(asked) == before + 1  # e-mail recente
+    finally:
+        pc.vision = original

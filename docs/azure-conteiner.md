@@ -338,3 +338,6 @@ Na aba **Agenda** do painel, a seção **📝 Reuniões** tem:
   ```
 - **Atualização:** a nuvem confere o GitHub a cada **1 hora** (antes, 6). Continua instalando só versões com os testes
   verdes.
+- **Falhas contornadas (v13.58):** alguns pontos engolem erros de propósito (a busca por significado, um gancho do chat,
+  o cofre de logins, a pesquisa de CNPJ, o registro da conversa do PC), para o chat não cair. Agora o `/saude` lista
+  essas falhas das últimas 24 h, agrupadas, com a mais recente de cada; `/saude todos` mostra quantas cada agente teve.

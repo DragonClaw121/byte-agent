@@ -118,6 +118,10 @@ e-mail de abordagem do plano de cliente.
   pesquisado e as memórias, escolhe o modelo (pelo nome citado ou, se você disser "meu modelo"/"o modelo que eu uso",
   sempre um dos seus) e abre a janela com o e-mail formatado. Depois é só pedir ajustes na conversa ("deixa mais curto",
   "troca o produto para Canva"): ele ajusta o mesmo e-mail, no mesmo modelo.
+- **Sem dizer "e-mail" (v13.58):** "manda aquele texto pro cliente sobre a renovação" também vira e-mail: quando a
+  frase não é clara, o Bit pergunta à IA, com a conversa recente, se é um e-mail novo, um ajuste do último, uma pesquisa
+  de cliente ou conversa comum. Mensagens que não falam de trabalho (cliente, e-mail, modelo, proposta...) nem chegam a
+  essa pergunta.
 - **Campos `[Nome]`:** além de `{{nome}}`, valem campos entre colchetes começando por maiúscula (`[Nome]`, `[SOFTWARE]`).
 - **Formato do Outlook (v13.52):** os modelos podem guardar o HTML (tabelas, cores, imagens). No painel, copie o e-mail
   no Outlook e cole no campo do texto: o formato vem junto, mas as imagens não passam pelo navegador. No Bit no PC, use

@@ -224,6 +224,11 @@ def backups_info() -> Optional[Dict[str, Any]]:
     return {"count": len(items), "latest": items[0]["dia"] if items else "", "oldest": items[-1]["dia"] if items else ""}
 
 
+def _recent_failures() -> List[Dict[str, Any]]:
+    from .falhas import recent
+    return recent()
+
+
 def health(service: Any) -> Dict[str, Any]:
     from . import engine
     sched = getattr(service, "scheduler", None)
@@ -251,6 +256,7 @@ def health(service: Any) -> Dict[str, Any]:
         "memory_engine": service.db.vector_engine.engine_id(), "tokens_today": tokens, "token_budget": budget,
         "pending_approvals": pending, "db_kb": size_kb, "jobs": jobs,
         "cache": {"hits": SHARED.hits, "misses": SHARED.misses}, "ram": memory_usage(), "backups": backups_info(),
+        "failures": _recent_failures(),
     }
     out["ok"] = out["llm"]["ready"] and not any(j["failures"] >= ALERT_AFTER for j in jobs) \
         and (out["ram"]["share"] or 0) < 0.9
@@ -279,6 +285,11 @@ def format_health(h: Dict[str, Any]) -> str:
                      + (f" de {h['token_budget']:,} da autonomia".replace(",", ".") if h.get("token_budget") else ""))
     if h["pending_approvals"]:
         lines.append(f"🔐 Aprovações esperando você: {h['pending_approvals']}")
+    fails = h.get("failures") or []
+    if fails:
+        lines.append(f"🧯 Falhas contornadas nas últimas 24 h ({sum(f['vezes'] for f in fails)}):")
+        for f in fails[:6]:
+            lines.append(f"• {f['onde']}: {f['vezes']}x {_ago(int(time.time() - f['ultima']))} — {f['erro']}")
     if h["jobs"]:
         lines.append("⏱️ Tarefas de fundo:")
         for j in h["jobs"]:
@@ -313,6 +324,7 @@ def publish_health(service: Any) -> None:
             "failing": [j["label"] for j in h["jobs"] if j["failures"] >= ALERT_AFTER],
             "pending_approvals": h["pending_approvals"], "tokens_today": h["tokens_today"],
             "process_mb": h["ram"]["process_mb"], "container_share": h["ram"]["share"],
+            "failures_24h": sum(f["vezes"] for f in h.get("failures") or []),
             "container_mb": h["ram"]["container_mb"], "limit_mb": h["ram"]["limit_mb"]}
     tmp = folder / f".{agent_id}.tmp"
     tmp.write_text(json.dumps(data, ensure_ascii=False))
@@ -352,6 +364,7 @@ def format_family(items: List[Dict[str, Any]], now: Optional[float] = None) -> s
             icon, state = "🟢", "tudo certo"
         extra = f" · {it['pending_approvals']} aprovação(ões) esperando" if it.get("pending_approvals") else ""
         extra += f" · {it['process_mb']} MB" if it.get("process_mb") else ""
+        extra += f" · {it['failures_24h']} falha(s) contornada(s) em 24 h" if it.get("failures_24h") else ""
         lines.append(f"{icon} {it['agent']} v{it.get('version', '?')}: {state}{extra}")
     fresh = [it for it in items if not it["stale"] and it.get("container_share") is not None]
     if fresh:

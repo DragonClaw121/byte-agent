@@ -195,7 +195,9 @@ class TokenVault:
             return {}
         try:
             return json.loads(self.fernet.decrypt(self.path.read_bytes()).decode())
-        except Exception:
+        except Exception as err:                               # chave trocada ou arquivo estragado: os logins somem
+            from .falhas import note
+            note("Cofre de logins (BYTE_CHAVE_TOKENS)", err)
             return {}
 
     def get(self, name: str) -> str:

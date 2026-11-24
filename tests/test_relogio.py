@@ -108,3 +108,43 @@ def test_memory_usage_reads_the_container_limits(tmp_path):
                             "llm": {"ready": True, "model": "azure:m"}, "tokens_today": None, "pending_approvals": 0,
                             "jobs": [], "ram": {"container_mb": 900, "limit_mb": 1024, "share": 0.88, "process_mb": 150}})
     assert "⚠️ Memória do servidor: 900 de 1024 MB (88%)" in text and "2 GiB" in text
+
+
+def test_swallowed_failures_show_up_in_health():
+    """v13.57: falhas contornadas (gancho, embeddings, cofre...) aparecem no /saude, agrupadas, sem dados do usuário."""
+    from byte_agent import falhas, relogio as r
+    falhas.clear()
+    now = 1_000_000.0
+    falhas.note("Memória por significado (embeddings)", TimeoutError("timed out"), now=now - 100)
+    falhas.note("Memória por significado (embeddings)", TimeoutError("timed out again"), now=now - 50)
+    falhas.note("Cofre de logins (BYTE_CHAVE_TOKENS)", ValueError("InvalidToken"), now=now - 10)
+    falhas.note("Antiga", ValueError("x"), now=now - 90000)
+    got = falhas.recent(now=now)
+    assert [(g["onde"], g["vezes"]) for g in got] == [("Memória por significado (embeddings)", 2),
+                                                       ("Cofre de logins (BYTE_CHAVE_TOKENS)", 1)]
+    assert got[0]["erro"] == "TimeoutError: timed out again"
+    text = r.format_health({"ok": True, "agent": "Bit", "version": "x", "uptime_s": 60, "memory_engine": "hash-v1",
+                            "llm": {"ready": True, "model": "azure:m"}, "tokens_today": None, "pending_approvals": 0,
+                            "jobs": [], "failures": [dict(g, ultima=__import__("time").time() - 30) for g in got]})
+    assert "🧯 Falhas contornadas nas últimas 24 h (3):" in text and "Cofre de logins" in text
+    falhas.clear()
+
+
+def test_hook_failure_is_recorded(tmp_path):
+    from byte_agent import falhas, headless, engine
+    from test_native_tools import TOOL_MODEL, FakeOllama
+    falhas.clear()
+    fake = FakeOllama()
+    svc = headless.build_service(tmp_path, ollama_url=fake.url, model=TOOL_MODEL, profile="pessoal", web=False)
+    try:
+        def broken(message, turn):
+            raise RuntimeError("gancho quebrado")
+        svc.pre_turn_hooks.append(broken)
+        svc.dispatch_request("chat", {"message": "oi"})
+        assert any("Gancho do chat" in g["onde"] and "gancho quebrado" in g["erro"] for g in falhas.recent())
+        assert "🧯" in svc.extra_actions["health"]({})["text"]
+    finally:
+        svc.shutdown()
+        fake.httpd.shutdown()
+        engine.apply_profile("pessoal")
+        falhas.clear()

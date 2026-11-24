@@ -68,7 +68,16 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.57"
+BYTE_VERSION = "13.58"
+
+
+def _note_failure(where: str, err: BaseException) -> None:
+    """v13.57: falha engolida de propósito, mas registrada para o /saude (byte_agent/falhas.py)."""
+    try:
+        from .falhas import note
+        note(where, err)
+    except Exception:
+        pass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -236,8 +245,8 @@ class VectorEngine:
             vecs = self.remote_embedder([text[:2000]])
             if vecs and vecs[0]:
                 return self._project_to_dim(vecs[0])
-        except Exception:
-            pass
+        except Exception as err:
+            _note_failure("Memória por significado (embeddings)", err)
         self._neural_retry_after = time.monotonic() + 60.0      # fora do ar: usa o modo local por 1 min
         return None
 
@@ -247,7 +256,8 @@ class VectorEngine:
             return None
         try:
             return [self._project_to_dim(v) for v in self.remote_embedder([t[:2000] for t in texts])]
-        except Exception:
+        except Exception as err:
+            _note_failure("Memória por significado (embeddings)", err)
             return None
 
     def _try_ollama_neural_embed(self, text: str) -> Optional[List[float]]:
@@ -1493,8 +1503,8 @@ class UnifiedDatabase:
         for listener in list(getattr(self, "proactive_listeners", [])):     # v12.1: ex.: push pelo ntfy
             try:
                 listener(item)
-            except Exception:
-                pass
+            except Exception as err:
+                _note_failure("Entrega de aviso (ouvinte)", err)
         return item
 
     PROACTIVE_CHANNELS = ("painel", "telegram", "api", "app")      # "app": app Android (Kronus te liga), v13.22
@@ -4712,8 +4722,8 @@ class ProactiveAutonomyEngine:
             for job in list(self.background_jobs):       # pedidos explícitos (objetivos): valem mesmo sem iniciativas
                 try:
                     job()
-                except Exception:
-                    pass
+                except Exception as err:
+                    _note_failure(f"Tarefa de fundo ({getattr(job, '__name__', 'job')})", err)
             if not self.autonomous_mode_enabled or self.llm.connection_mode == "offline":
                 continue
             if not self.llm.ollama_gpu_warm:
@@ -4727,8 +4737,8 @@ class ProactiveAutonomyEngine:
                     and self._unanswered < self.max_unanswered):
                 try:
                     self.trigger_proactive_thought(reason="autonomous_idle_check")
-                except Exception:
-                    pass
+                except Exception as err:
+                    _note_failure("Iniciativa da autonomia", err)
 
     def process_due_reminders(self, now_epoch: Optional[float] = None) -> int:
         """Entrega os lembretes vencidos pela fila de mensagens (painel e Telegram). Lembrete simples vira
@@ -7043,6 +7053,7 @@ class ByteEcosystemService:
             except Exception as hook_err:
                 extra_block = None
                 agent_turn.setdefault("hook_errors", []).append(f"{type(hook_err).__name__}: {str(hook_err)[:160]}")
+                _note_failure(f"Gancho do chat ({getattr(hook, '__module__', '?').rsplit('.', 1)[-1]})", hook_err)
             if extra_block:
                 grounding.append(str(extra_block))
         gen = self.llm.generate(

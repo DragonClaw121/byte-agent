@@ -210,8 +210,9 @@ class PcHub:
         answer = vision(self.service, persona(self.service) + LOOK_RULES, question, image_url, max_tokens=700)
         try:
             self.service.context_manager.record_turn(f"[📸 tela do PC] {question}", answer, "VISÃO (PC)")
-        except Exception:
-            pass
+        except Exception as err:
+            from .falhas import note
+            note("Conversa: registro do que o PC fez", err)
         return answer or "(sem resposta)"
 
     # ---------------- assistente ao vivo: observa, anota e sugere
@@ -280,13 +281,64 @@ class PcHub:
             return "novo"
         return ""
 
+    # v13.57: quando a regex não decide, uma pergunta curta à IA (com a conversa recente) — só se a mensagem PODE ser
+    # um pedido de trabalho (cita cliente, e-mail, modelo...) ou se há um e-mail recente que ela pode estar ajustando.
+    MAYBE_WORK = re.compile(r"\b(e-?mails?|mensage\w*|cliente\w*|empresa|modelo|proposta|resposta|abordagem|follow|"
+                            r"escrev\w*|redig\w*|redij\w*|rascunh\w*|pesquis\w*|dossie|plano de conta|cnpj|"
+                            r"orcamento|renovac\w*|licenc\w*)\b")
+    INTENTS = ("email_novo", "ajuste_email", "pesquisa_cliente", "conversa")
+
+    def intent(self, text: str) -> str:
+        """'email_novo' | 'ajuste_email' | 'pesquisa_cliente' | 'conversa'."""
+        from .clientes import CLIENT_RE
+        from .modelos_email import fold
+        quick = self.email_request(text)
+        if quick:
+            return "email_novo" if quick == "novo" else "ajuste_email"
+        low = fold(text).strip()
+        if CLIENT_RE.search(low):
+            return "pesquisa_cliente"
+        last = getattr(self, "last_email", None)
+        recent_email = bool(last and time.time() - last["t"] < self.ADJUST_WINDOW_S)
+        if not low or len(low) > 1500 or not (self.MAYBE_WORK.search(low) or (recent_email and len(low) < 400)):
+            return "conversa"
+        try:
+            window = self.service.context_manager.get_window_list()[-6:]
+        except Exception:
+            window = []
+        history = "\n".join(f"{'Usuário' if m.get('role') == 'user' else 'Bit'}: {' '.join(str(m.get('content') or '').split())[:300]}"
+                            for m in window)
+        try:
+            raw = vision(self.service,
+                         "Classifique o pedido do usuário a um assistente de trabalho. Responda SÓ JSON {\"intencao\": \"...\"} "
+                         "com um destes valores: email_novo (quer que você ESCREVA um e-mail/mensagem novo para alguém), "
+                         "ajuste_email (quer MUDAR o e-mail que você acabou de escrever), pesquisa_cliente (quer pesquisar "
+                         "ou montar plano de conta de uma empresa/cliente), conversa (qualquer outra coisa: perguntas, "
+                         "ler/listar e-mails recebidos, tarefas, agenda, opinião).",
+                         f"CONVERSA RECENTE:\n{history or '(vazia)'}\n"
+                         + (f"(Você escreveu um e-mail há pouco: assunto \"{last['assunto']}\".)\n" if recent_email else "")
+                         + f"\nPEDIDO AGORA: {text.strip()[:800]}",
+                         None, json_format=True, max_tokens=40)
+            got = str(_json(raw).get("intencao") or "").strip().lower()
+        except Exception:
+            return "conversa"
+        if got == "ajuste_email" and not recent_email:
+            got = "email_novo"
+        return got if got in self.INTENTS else "conversa"
+
     def chat_email(self, text: str) -> Optional[Dict[str, Any]]:
-        """Pedido de e-mail na conversa: vai pelo mesmo caminho do Preparar (modelo, formato e contexto) e abre a janela."""
-        kind = self.email_request(text)
-        if not kind:
-            return None
-        previous = getattr(self, "last_email", None) if kind == "ajuste" else None
-        return self.prepare("", "email", text, previous=previous)
+        """Pedido na conversa do PC: e-mail (novo/ajuste) vai pelo Preparar (modelo, formato e contexto) e abre a janela;
+        pesquisa de cliente vira o plano de conta. Conversa comum: None (segue para o chat normal)."""
+        kind = self.intent(text)
+        if kind == "email_novo":
+            return self.prepare("", "email", text)
+        if kind == "ajuste_email":
+            return self.prepare("", "email", text, previous=getattr(self, "last_email", None))
+        if kind == "pesquisa_cliente" and getattr(self.service, "client_research", None) is not None:
+            res = self.client("", text)
+            res["mensagem"] = res.get("texto") or "Pesquisa do cliente pronta."
+            return res
+        return None
 
     def remember_email(self, ask: str, out: Dict[str, Any], adjusted: bool = False) -> str:
         self.last_email = {"t": time.time(), "assunto": out.get("assunto", ""), "corpo": out.get("corpo", ""),
@@ -423,8 +475,9 @@ class PcHub:
             summary = f"Apresentação preparada: {', '.join(out['arquivos'])}"
         try:
             self.service.context_manager.record_turn(f"[🖥️ preparar {kind} pelo PC] {ask[:300]}", summary, "VISÃO (PC)")
-        except Exception:
-            pass
+        except Exception as err:
+            from .falhas import note
+            note("Conversa: registro do que o PC fez", err)
         return out
 
     def client(self, session: str, ask: str, image_url: str = "") -> Dict[str, Any]:
@@ -466,8 +519,9 @@ class PcHub:
         try:
             self.service.context_manager.record_turn(f"[🖥️ assistente ao vivo] {st['objetivo']}",
                                                      summary + ("\nNotas:\n" + notes[-2500:] if notes else ""), "VISÃO (PC)")
-        except Exception:
-            pass
+        except Exception as err:
+            from .falhas import note
+            note("Conversa: registro do que o PC fez", err)
         return {"texto": summary, "guardado": saved}
 
 

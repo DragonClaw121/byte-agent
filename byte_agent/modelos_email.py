@@ -289,8 +289,9 @@ class EmailTemplates:
                 match = next((t for t in items if t["n"] == num), None)
                 if match is not None:
                     return match
-            except Exception:
-                pass
+            except Exception as err:
+                from .falhas import note
+                note("Escolha do modelo de e-mail (IA)", err)
         if asks_model:
             return scored[0][1] if scored else items[0]           # list() já vem do mais usado para o menos
         return scored[0][1] if scored and scored[0][0] >= 2.0 else None

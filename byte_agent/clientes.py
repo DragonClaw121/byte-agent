@@ -178,7 +178,9 @@ class ClientResearch:
         for url in REGISTRY_URLS:
             try:
                 data = web.fetcher.get_json(url.format(cnpj=cnpj_digits(cnpj)))
-            except Exception:
+            except Exception as err:
+                from .falhas import note
+                note("Pesquisa de cliente: cadastro do CNPJ", err)
                 continue
             if isinstance(data, dict) and (data.get("razao_social") or data.get("estabelecimento")):
                 return normalize_registry(data)
@@ -193,7 +195,9 @@ class ClientResearch:
         for query in (f'"{name}" CNPJ', f"{name} {city} CNPJ".strip()):
             try:
                 res = web.search(query, limit=8)
-            except Exception:
+            except Exception as err:
+                from .falhas import note
+                note("Pesquisa de cliente: busca do CNPJ", err)
                 continue
             for hit in res.get("results") or []:
                 for c in find_cnpjs(" ".join(str(hit.get(k) or "") for k in ("title", "snippet", "url"))):
