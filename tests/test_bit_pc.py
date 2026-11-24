@@ -104,3 +104,37 @@ def test_oft_without_classic_outlook_rtf_with_html_inside():
     assert html == ('<html><style>td {color:red}</style><body><table style="border:1px solid #0a5"><td>Olá, <b>[Nome]'
                     '—fim</td><img src="cid:image001.png@01DA"></table></body></html>')
     assert bit_pc.rtf_to_html("{\\rtf1\\ansi hello}") == ""
+
+
+def test_meeting_audio_conversion_mix_and_chunks():
+    """v1.8: som do PC (48 kHz estéreo) + microfone (44,1 kHz mono) -> mono 16 kHz, cortado no silêncio, sem enviar silêncio."""
+    import math
+    from array import array
+    tone = array("h")
+    for i in range(48000):                                             # 1 s, 48 kHz, estéreo
+        v = int(8000 * math.sin(2 * math.pi * 300 * i / 48000))
+        tone.extend((v, v))
+    state = {}
+    half1 = bit_pc.to_mono16k(tone[:48000].tobytes(), 2, 48000, state)
+    half2 = bit_pc.to_mono16k(tone[48000:].tobytes(), 2, 48000, state)
+    assert abs(len(half1) + len(half2) - 16000) <= 2
+    mic = bit_pc.to_mono16k(array("h", [1000] * 44100).tobytes(), 1, 44100)
+    assert abs(len(mic) - 16000) <= 2 and abs(mic[100] - 1000) <= 1
+    assert list(bit_pc.mix(array("h", [30000, -30000]), array("h", [10000, -10000]))) == [32767, -32768]
+    chunks = []
+    old = bit_pc.MEET_CHUNK_S
+    bit_pc.MEET_CHUNK_S = 2.0
+    try:
+        pc_src, mic_src = bit_pc.AudioSource("som do PC", 2, 48000), bit_pc.AudioSource("microfone", 1, 16000)
+        rec = bit_pc.MeetingRecorder([pc_src, mic_src], lambda wav, seq, t: chunks.append((wav, seq, t)))
+        for second in range(5):
+            if second < 3:                                             # 3 s de fala, 2 s de silêncio (PC mudo: nada chega)
+                pc_src.feed(tone.tobytes())
+            for _ in range(2):
+                rec.tick(0.5)
+        rec.flush()
+    finally:
+        bit_pc.MEET_CHUNK_S = old
+    assert chunks and chunks[0][0][:4] == b"RIFF" and [c[1] for c in chunks] == list(range(len(chunks)))
+    assert rec.skipped >= 1 and abs(rec.offset_s - 5.0) < 0.6                 # o silêncio não foi enviado, mas o tempo andou
+    assert bit_pc.quiet_cut(array("h", [5000] * 32000 + [0] * 8000 + [5000] * 8000)) in range(32000, 40001)

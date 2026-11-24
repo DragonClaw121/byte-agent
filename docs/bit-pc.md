@@ -114,6 +114,29 @@ pronto sai igual ao modelo.
   - **Só o texto:** copia o que está na caixa. As edições feitas na caixa valem para essa opção.
 - O Bit **nunca envia sozinho**: o envio é sempre seu, pelo Outlook. Scripts e códigos dentro do HTML são removidos.
 
+### Transcrever reunião (v1.8 do app, v13.62)
+Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:
+1. Dê um nome (opcional) e escolha o que ouvir:
+   - **som do PC**: os outros participantes do Teams, Meet ou Zoom, captado do alto-falante;
+   - **seu microfone**: a sua voz;
+   - os dois juntos (o padrão).
+2. **Avise os participantes** de que a reunião será transcrita.
+3. Uma janela mostra a transcrição chegando a cada ~25 segundos, com o tempo decorrido. Ela pode ser escondida sem
+   parar nada e não aparece nas fotos da tela do Bit.
+4. **■ Parar e fazer a ata** (ou o mesmo botão de novo): o Bit faz a ata com resumo, decisões, tarefas (o quê, quem e
+   prazo), pontos em aberto e próximos passos. Ela abre numa janela e o .docx fica em Documentos\Bit. As tarefas
+   chegam como um cartão "Criar N tarefas?" e nada é criado sem a sua aprovação.
+
+Detalhes:
+- **O áudio não fica guardado:** os pedaços vão para a transcrição e ficam só o texto e a ata. Trechos de silêncio nem são
+  enviados, porque a transcrição inventaria frases. Se a internet cair, cada trecho é reenviado até 3 vezes.
+- **Requisitos:** a transcrição usa o mesmo serviço de voz do Bit (`BYTE_STT_URL`, ver `voz.md`). O app precisa do
+  PyAudioWPatch: o instalador instala; **rode o instalador de novo** para atualizar.
+- **Fone de ouvido:** o som do PC sai do dispositivo padrão do Windows. Se os outros não aparecem na transcrição, confira
+  em Configurações → Sistema → Som qual é a saída padrão.
+- **Empresa:** gravar ou transcrever reuniões pode depender de política interna. Confira com a TI e avise sempre os
+  participantes.
+
 ### O Bit não aparece mais nas fotos da tela (v1.4)
 - **Captura direta:** o app fotografa a janela em uso diretamente pelo Windows (Outlook, Excel, navegador...). O que
   estiver por cima, como a barra, o balão e os avisos do Bit, não aparece, e nada pisca na tela.

@@ -779,6 +779,47 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
             image = clean_image(body.get("tela")) if body.get("tela") else ""
             h._send_json(200, hub.prepare(str(body.get("sessao") or ""), str(body.get("tipo") or ""),
                                           str(body.get("pedido") or ""), image))
+        elif sub == "reuniao" or sub.startswith("reuniao/"):         # v13.62: transcrever reunião pelo PC
+            meetings = getattr(service, "meetings", None)
+            if meetings is None:
+                h._send_json(404, {"error": "Reuniões indisponíveis neste agente."})
+                return
+            parts = [x for x in sub.split("/")[1:] if x]
+            if not parts and method == "POST":
+                body = read_body(h, 4096) or {}
+                h._send_json(200, meetings.start(str(body.get("titulo") or ""), source="pc"))
+                return
+            if not parts or not parts[0].isdigit():
+                h._send_json(404, {"error": "Reunião não encontrada."})
+                return
+            mid, action = int(parts[0]), (parts[1] if len(parts) > 1 else "")
+            if method == "POST" and action == "audio":
+                body = read_body(h, 12 * 1024 * 1024)
+                try:
+                    audio = base64.b64decode(str((body or {}).get("audio") or ""), validate=True)
+                except (ValueError, TypeError):
+                    audio = b""
+                if not audio[:4] == b"RIFF":
+                    h._send_json(400, {"error": "Envie o pedaço da reunião em WAV (base64)."})
+                    return
+                try:
+                    h._send_json(200, meetings.add_chunk(mid, audio, "audio/wav", seq=int((body or {}).get("seq", -1)),
+                                                         offset_s=float((body or {}).get("t") or 0)))
+                except KeyError:
+                    h._send_json(404, {"error": "Reunião não encontrada."})
+                return
+            if method == "POST" and action == "fim":
+                h._send_json(200, meetings.finish(mid))
+                return
+            if method == "GET" and not action:
+                m = meetings.get(mid)
+                if m is None:
+                    h._send_json(404, {"error": "Reunião não encontrada."})
+                    return
+                h._send_json(200, {"id": mid, "titulo": m["title"], "status": m["status"], "segundos": m["seconds"],
+                                   "ata": m["ata_text"], "arquivo": m["file"], "erro": m["error"]})
+                return
+            h._send_json(404, {"error": "Rota de reunião desconhecida."})
         elif sub.startswith("arquivo/") and method == "GET":
             provider = getattr(service, "file_provider", None)
             path = provider(sub.split("/", 1)[1]) if provider else None

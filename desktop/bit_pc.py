@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.7"
+VERSION = "1.8"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -1226,10 +1226,195 @@ def tk_safe(text: Any) -> str:
     return "\n".join(" ".join(line.split()) if line.strip() else "" for line in out.split("\n")).strip()
 
 
+# ================================================================== reunião: transcrição ao vivo (v1.8)
+# O som do PC (os outros participantes: Teams, Meet, Zoom) vem do "loopback" do WASAPI e a sua voz do microfone. Os
+# dois viram um áudio mono de 16 kHz, cortado em pedaços de ~25 s num silêncio, enviados ao Bit (transcrição na nuvem).
+# Conversões em Python puro (sem audioop, que saiu do Python 3.13).
+from array import array as _array
+
+MEET_RATE = 16000
+MEET_CHUNK_S = 25.0
+MEET_SILENCE_RMS = 120                 # abaixo disso o pedaço é silêncio: não é enviado (a transcrição inventaria frases)
+
+
+def to_mono16k(raw: bytes, channels: int, rate: int, state: Optional[Dict[str, Any]] = None) -> _array:
+    """PCM 16 bits (1 ou 2+ canais, qualquer taxa) -> mono 16 kHz. `state` guarda a fração que sobrou entre blocos."""
+    data = _array("h")
+    data.frombytes(raw[: len(raw) - len(raw) % (2 * max(1, channels))])
+    if channels > 1:
+        chans = [data[i::channels] for i in range(channels)]
+        data = _array("h", [sum(v) // channels for v in zip(*chans)])
+    if rate == MEET_RATE or not data:
+        return data
+    step = rate / MEET_RATE
+    state = state if state is not None else {}
+    pos = float(state.get("pos", 0.0))
+    width = max(1, int(round(step)))                             # média dos vizinhos: filtro passa-baixa simples
+    out = _array("h")
+    n = len(data)
+    while pos < n:
+        i = int(pos)
+        seg = data[i:i + width]
+        out.append(sum(seg) // len(seg))
+        pos += step
+    state["pos"] = pos - n
+    return out
+
+
+def mix(a: _array, b: _array) -> _array:
+    return _array("h", [max(-32768, min(32767, x + y)) for x, y in zip(a, b)])
+
+
+def rms(samples: Any) -> float:
+    if not samples:
+        return 0.0
+    return (sum(x * x for x in samples) / len(samples)) ** 0.5
+
+
+def quiet_cut(samples: _array, search_s: float = 6.0, window_s: float = 0.25) -> int:
+    """Onde cortar o pedaço: a janela mais silenciosa dos últimos `search_s` segundos (para não cortar uma palavra)."""
+    win = int(MEET_RATE * window_s)
+    start = max(0, len(samples) - int(MEET_RATE * search_s))
+    best, best_rms = len(samples), float("inf")
+    for i in range(start, len(samples) - win, win):
+        r = rms(samples[i:i + win:4])
+        if r < best_rms:
+            best, best_rms = i + win // 2, r
+    return best
+
+
+def wav_bytes(samples: _array) -> bytes:
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(MEET_RATE)
+        w.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+
+class AudioSource:
+    """Um fluxo (som do PC ou microfone) já convertido para mono 16 kHz, esperando o misturador."""
+
+    def __init__(self, name: str, channels: int, rate: int):
+        self.name, self.channels, self.rate = name, max(1, int(channels)), int(rate)
+        self.buf = _array("h")
+        self.state: Dict[str, Any] = {}
+        self.lock = threading.Lock()
+        self.got = 0
+
+    def feed(self, raw: bytes) -> None:
+        conv = to_mono16k(raw, self.channels, self.rate, self.state)
+        with self.lock:
+            self.buf.extend(conv)
+            self.got += len(conv)
+            if len(self.buf) > MEET_RATE * 3:                    # atrasou demais (o PC travou?): volta ao tempo real
+                del self.buf[: len(self.buf) - MEET_RATE]
+
+    def take(self, n: int) -> _array:
+        with self.lock:
+            out = self.buf[:n]
+            del self.buf[:n]
+        if len(out) < n:                                         # o loopback não manda nada quando o PC está mudo
+            out.extend(_array("h", bytes(2 * (n - len(out)))))
+        return out
+
+
+class MeetingRecorder:
+    """Mistura as fontes a cada `tick` (0,5 s) e entrega pedaços WAV de ~25 s: on_chunk(wav, seq, inicio_s)."""
+
+    def __init__(self, sources: List[AudioSource], on_chunk: Callable[[bytes, int, float], None]):
+        self.sources, self.on_chunk = sources, on_chunk
+        self.pending = _array("h")
+        self.seq, self.offset_s, self.skipped = 0, 0.0, 0
+        self.elapsed_s = 0.0
+
+    def tick(self, seconds: float = 0.5) -> None:
+        n = int(MEET_RATE * seconds)
+        block = None
+        for src in self.sources:
+            part = src.take(n)
+            block = part if block is None else mix(block, part)
+        if block is None:
+            return
+        self.pending.extend(block)
+        self.elapsed_s += seconds
+        if len(self.pending) >= MEET_RATE * MEET_CHUNK_S:
+            cut = quiet_cut(self.pending)
+            self._emit(self.pending[:cut])
+            del self.pending[:cut]
+
+    def flush(self) -> None:
+        if len(self.pending) > MEET_RATE * 0.5:
+            self._emit(self.pending[:])
+        self.pending = _array("h")
+
+    def _emit(self, samples: _array) -> None:
+        dur = len(samples) / MEET_RATE
+        if rms(samples[::8]) >= MEET_SILENCE_RMS:
+            self.on_chunk(wav_bytes(samples), self.seq, round(self.offset_s, 2))
+            self.seq += 1
+        else:
+            self.skipped += 1
+        self.offset_s += dur
+
+
+def open_meeting_sources(system: bool = True, mic: bool = True) -> Tuple[List[AudioSource], Callable[[], None], List[str]]:
+    """Abre o som do PC (WASAPI loopback do alto-falante padrão) e/ou o microfone padrão. Devolve (fontes, fechar,
+    avisos). Precisa do PyAudioWPatch (o instalador instala)."""
+    try:
+        import pyaudiowpatch as pyaudio                       # pip install PyAudioWPatch
+    except ImportError:
+        raise RuntimeError("Falta o componente de áudio: rode o instalador do Bit de novo (ele instala o PyAudioWPatch).")
+    pa = pyaudio.PyAudio()
+    sources, streams, notes = [], [], []
+
+    def open_stream(info: Dict[str, Any], name: str) -> None:
+        channels = max(1, min(2, int(info.get("maxInputChannels") or 1)))
+        rate = int(info.get("defaultSampleRate") or 48000)
+        src = AudioSource(name, channels, rate)
+
+        def cb(in_data: bytes, frames: int, t: Any, status: Any) -> Tuple[None, int]:
+            src.feed(in_data)
+            return (None, pyaudio.paContinue)
+        st = pa.open(format=pyaudio.paInt16, channels=channels, rate=rate, input=True, input_device_index=info["index"],
+                     frames_per_buffer=int(rate / 10), stream_callback=cb)
+        st.start_stream()
+        streams.append(st)
+        sources.append(src)
+    if system:
+        try:
+            open_stream(pa.get_default_wasapi_loopback(), "som do PC")
+        except Exception as err:
+            notes.append(f"Som do PC indisponível ({type(err).__name__}): só o microfone.")
+    if mic:
+        try:
+            open_stream(pa.get_default_input_device_info(), "microfone")
+        except Exception as err:
+            notes.append(f"Microfone indisponível ({type(err).__name__}).")
+
+    def close() -> None:
+        for st in streams:
+            try:
+                st.stop_stream()
+                st.close()
+            except Exception:
+                pass
+        try:
+            pa.terminate()
+        except Exception:
+            pass
+    if not sources:
+        close()
+        raise RuntimeError("Não achei nem o som do PC nem o microfone. " + " ".join(notes))
+    return sources, close, notes
+
+
 ICON_FONT = "Segoe MDL2 Assets"           # ícones do próprio Windows 10/11 (sem baixar nada)
 ICONS = {"preparar": ("\uE70F", "✎"), "chat": ("", "✉"), "olhar": ("", "◉"), "vivo": ("", "●"), "parar": ("", "■"),
          "voz": ("", "♪"), "mudo": ("", "♪"), "sino": ("", "!"), "abrir": ("", "⤢"),
-         "fechar": ("", "✕"), "arrastar": ("", "⋮"), "enviar": ("", "➜")}
+         "fechar": ("", "✕"), "arrastar": ("", "⋮"), "enviar": ("", "➜"), "reuniao": ("\uE720", "⏺")}
 
 
 class App:
@@ -1281,6 +1466,7 @@ class App:
         self.speak_var = tk.BooleanVar(value=bool(self.cfg.get("voz", False)))
         self.text_var = tk.BooleanVar(value=bool(self.cfg.get("texto", True)))
         self.frame: Optional[Any] = None
+        self.meeting: Optional[Dict[str, Any]] = None
         token = unprotect(str(self.cfg.get("token") or ""))
         if self.cfg.get("base") and token:
             self.api = self.api_factory(self.cfg["base"], token)
@@ -1373,6 +1559,9 @@ class App:
     def quit(self) -> None:
         try:
             self.stop_live(save=False)
+            if self.meeting is not None:                          # fechar o Bit no meio da reunião: para de ouvir
+                self.meeting["stop"].set()
+                self.meeting["close"]()
         finally:
             self.root.destroy()
 
@@ -1470,6 +1659,8 @@ class App:
         self.button(tools, "◉ Olhar minha tela", self.look).pack(side="left")
         self.live_btn = self.button(tools, "● Assistente ao vivo", self.toggle_live)
         self.live_btn.pack(side="left", padx=self.px(6))
+        self.meet_btn = self.button(tools, "⏺ Reunião", self.toggle_meeting)
+        self.meet_btn.pack(side="left")
         row = tk.Frame(f, bg=self.BG)
         row.pack(side="bottom", fill="x")
         self.entry = tk.Entry(row, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10))
@@ -2420,6 +2611,7 @@ class App:
         for key, cmd, tip in (("chat", lambda: self.bar_open_ask(), "Perguntar ao Bit (Ctrl+Alt+B)"),
                               ("olhar", lambda: self.look(self.bar_take_text()), "Olhar minha tela"),
                               ("vivo", self.toggle_live, "Assistente ao vivo: observa e prepara (Ctrl+Alt+L)"),
+                              ("reuniao", self.toggle_meeting, "Transcrever reunião (som do PC + microfone) e fazer a ata"),
                               ("preparar", lambda: self.bar_open_prepare(), "Preparar e-mail, planilha, slides, documento"),
                               ("voz", self.toggle_voice, "Orientação por voz: liga/desliga"),
                               ("sino", self.show_notices, "Avisos"),
@@ -2571,6 +2763,223 @@ class App:
         self.bar_buttons["voz"].configure(text=glyph if self.has_icons else fallback,
                                           fg=self.INK if self.speak_var.get() else self.MUTED)
         self.bell_count.configure(text=str(len(self.unread)) if self.unread else "")
+        if "reuniao" in self.bar_buttons:
+            self.bar_buttons["reuniao"].configure(fg=self.RED if self.meeting is not None else self.INK)
+
+    # ------------------------------------------------------------ reunião (v1.8)
+    def toggle_meeting(self) -> None:
+        if self.meeting is not None:
+            self.stop_meeting()
+        else:
+            self.ask_meeting()
+
+    def ask_meeting(self) -> None:
+        """Antes de começar: nome, o que ouvir e o aviso aos participantes."""
+        if self.api is None:
+            return
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Transcrever reunião — Bit")
+        win.configure(bg=self.BG)
+        win.resizable(False, False)
+        self.root.after(200, self.later, exclude_from_capture, win)
+        box = tk.Frame(win, bg=self.BG)
+        box.pack(fill="both", expand=True, padx=self.px(14), pady=self.px(12))
+        self.label(box, "Transcrever reunião", 13, bold=True).pack(anchor="w")
+        self.label(box, "Nome (opcional)", 9, self.MUTED).pack(anchor="w", pady=(self.px(8), 0))
+        name = tk.Entry(box, bg=self.CARD, fg=self.INK, insertbackground=self.INK, relief="flat", font=("Segoe UI", 10),
+                        width=36)
+        name.pack(fill="x", ipady=self.px(4))
+        system_var, mic_var = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
+        for text, var in (("Som do PC (os outros participantes: Teams, Meet, Zoom)", system_var),
+                          ("Meu microfone (a minha voz)", mic_var)):
+            tk.Checkbutton(box, text=text, variable=var, bg=self.BG, fg=self.INK, selectcolor=self.CARD,
+                           activebackground=self.BG, activeforeground=self.INK, font=("Segoe UI", 9),
+                           anchor="w").pack(fill="x", pady=(self.px(4), 0))
+        self.label(box, "Avise os participantes de que a reunião será transcrita. O áudio vai, em pedaços, para a "
+                        "transcrição do Bit e não fica guardado; ficam o texto e a ata (com as tarefas para você aprovar).",
+                   8, self.MUTED, wraplength=self.px(380)).pack(anchor="w", pady=(self.px(8), 0))
+        row = tk.Frame(box, bg=self.BG)
+        row.pack(fill="x", pady=(self.px(10), 0))
+
+        def go() -> None:
+            title, system, mic = name.get().strip(), system_var.get(), mic_var.get()
+            win.destroy()
+            if not (system or mic):
+                self.error("Escolha o som do PC, o microfone ou os dois.")
+                return
+            self.start_meeting(title, system, mic)
+        self.button(row, "Começar", go, primary=True).pack(side="left")
+        self.button(row, "Cancelar", win.destroy).pack(side="left", padx=self.px(6))
+        name.bind("<Return>", lambda e: go())
+        win.update_idletasks()
+        sw, sh = self.screen()
+        win.geometry(f"+{max(0, (sw - win.winfo_reqwidth()) // 2)}+{max(0, (sh - win.winfo_reqheight()) // 3)}")
+        win.lift()
+        name.focus_force()
+        self.meeting_dialog = win
+
+    def start_meeting(self, title: str = "", system: bool = True, mic: bool = True,
+                      sources: Optional[List[AudioSource]] = None) -> None:
+        if self.meeting is not None or self.api is None:
+            return
+
+        def work() -> Tuple[List[AudioSource], Callable[[], None], List[str], Dict[str, Any]]:
+            if sources is not None:
+                srcs, close, notes = sources, (lambda: None), []
+            else:
+                srcs, close, notes = open_meeting_sources(system, mic)
+            try:
+                res = self.api.call("POST", "reuniao", {"titulo": title})
+            except Exception:
+                close()
+                raise
+            return srcs, close, notes, res
+
+        def done(out: Tuple[List[AudioSource], Callable[[], None], List[str], Dict[str, Any]]) -> None:
+            srcs, close, notes, res = out
+            m: Dict[str, Any] = {"id": int(res["id"]), "title": str(res.get("title") or title or "Reunião"), "close": close,
+                                 "queue": queue.Queue(), "stop": threading.Event(), "t0": time.time(), "sent": 0,
+                                 "lost": 0, "lines": [], "notes": notes, "sources": [s.name for s in srcs]}
+            m["recorder"] = MeetingRecorder(srcs, lambda wav, seq, t: m["queue"].put((wav, seq, t)))
+            self.meeting = m
+            self.open_meeting_window(m)
+            threading.Thread(target=self.meeting_ticker, args=(m,), daemon=True, name="BitReuniaoAudio").start()
+            threading.Thread(target=self.meeting_uploader, args=(m,), daemon=True, name="BitReuniaoEnvio").start()
+            self.add_message(f"⏺ Transcrevendo \"{m['title']}\" ({' + '.join(m['sources'])})."
+                             + (" " + " ".join(notes) if notes else ""), "bit")
+            self.update_bar()
+        self.run_bg(work, done, lambda msg: self.error(f"Não consegui começar a transcrição: {msg}"))
+
+    def meeting_ticker(self, m: Dict[str, Any]) -> None:
+        step, nxt = 0.5, time.monotonic()
+        while not m["stop"].is_set():
+            nxt += step
+            m["stop"].wait(max(0.0, nxt - time.monotonic()))
+            try:
+                m["recorder"].tick(step)
+            except Exception as err:
+                m["notes"].append(f"áudio: {type(err).__name__}")
+        try:
+            m["recorder"].flush()
+        finally:
+            m["close"]()
+            m["ticker_done"] = True
+
+    def meeting_uploader(self, m: Dict[str, Any]) -> None:
+        while True:
+            try:
+                wav, seq, t = m["queue"].get(timeout=0.5)
+            except queue.Empty:
+                if m.get("ticker_done"):
+                    break
+                continue
+            body = {"audio": base64.b64encode(wav).decode("ascii"), "seq": seq, "t": t}
+            for attempt in range(4):
+                try:
+                    res = self.api.call("POST", f"reuniao/{m['id']}/audio", body, timeout=120)
+                    m["sent"] += 1
+                    line = str(res.get("texto") or "").strip()
+                    if line:
+                        m["lines"].append(line)
+                        self.events.put(("call", lambda ln=line: self.meeting_line(m, ln)))
+                    break
+                except Exception as err:
+                    if attempt == 3:
+                        m["lost"] += 1
+                        msg = str(err)
+                        self.events.put(("call", lambda: self.meeting_status(m, f"⚠ Um trecho não foi transcrito: {msg[:120]}")))
+                    else:
+                        time.sleep(2 * (attempt + 1))
+        self.events.put(("call", lambda: self.meeting_status(m, "Fazendo a ata…")))
+        try:
+            self.api.call("POST", f"reuniao/{m['id']}/fim", {})
+            for _ in range(150):                                   # até ~20 min (reuniões longas)
+                time.sleep(8 if not self.test_mode else 0.2)
+                st = self.api.call("GET", f"reuniao/{m['id']}")
+                if st.get("status") in ("pronta", "erro"):
+                    self.events.put(("call", lambda: self.meeting_done(m, st)))
+                    return
+            self.events.put(("call", lambda: self.meeting_status(m, "A ata está demorando: ela chega nos avisos do Bit.")))
+        except Exception as err:
+            msg = str(err)
+            self.events.put(("call", lambda: self.meeting_status(m, f"⚠ Não consegui pedir a ata: {msg[:160]}")))
+
+    def stop_meeting(self) -> None:
+        m = self.meeting
+        if m is None:
+            return
+        m["stop"].set()
+        self.meeting = None
+        self.meeting_status(m, "Encerrando: enviando o último trecho…")
+        if alive(m.get("stop_btn")):
+            m["stop_btn"].configure(state="disabled")
+        self.add_message(f"■ Reunião \"{m['title']}\" encerrada. Faço a ata e aviso aqui.", "bit")
+        self.update_bar()
+
+    def open_meeting_window(self, m: Dict[str, Any]) -> None:
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title(tk_safe(f"Reunião — {m['title']}"))
+        win.configure(bg=self.BG)
+        sw, sh = self.screen()
+        w, h = min(self.px(460), sw - self.px(40)), min(self.px(420), sh - self.px(90))
+        win.geometry(f"{w}x{h}+{max(0, sw - w - self.px(30))}+{self.px(60)}")
+        self.root.after(200, self.later, exclude_from_capture, win)
+        win.protocol("WM_DELETE_WINDOW", win.withdraw)                 # fechar a janela não para a transcrição
+        head = tk.Frame(win, bg=self.BG)
+        head.pack(fill="x", padx=self.px(10), pady=(self.px(8), 0))
+        m["clock"] = self.label(head, "● Transcrevendo 00:00", 10, self.RED, bold=True)
+        m["clock"].pack(side="left")
+        m["status"] = self.label(win, "Os trechos aparecem aqui a cada ~25 segundos.", 8, self.MUTED,
+                                 wraplength=w - self.px(30))
+        buttons = tk.Frame(win, bg=self.BG)
+        buttons.pack(side="bottom", fill="x", padx=self.px(10), pady=self.px(8))
+        m["stop_btn"] = self.button(buttons, "■ Parar e fazer a ata", self.stop_meeting, primary=True)
+        m["stop_btn"].pack(side="left")
+        self.button(buttons, "Esconder", win.withdraw).pack(side="right")
+        m["status"].pack(side="bottom", anchor="w", padx=self.px(10))
+        text = tk.Text(win, bg=self.CARD, fg=self.INK, wrap="word", relief="flat", font=("Segoe UI", 10), width=1, height=1,
+                       padx=self.px(8), pady=self.px(8), borderwidth=0, state="disabled")
+        text.pack(fill="both", expand=True, padx=self.px(10), pady=(self.px(6), 0))
+        m["text"], m["window"] = text, win
+        self.meeting_windows = [x for x in getattr(self, "meeting_windows", []) if alive(x)] + [win]
+        self.root.after(1000, self.meeting_clock, m)
+
+    def meeting_clock(self, m: Dict[str, Any]) -> None:
+        if not alive(m.get("clock")) or m["stop"].is_set():
+            return
+        s = int(time.time() - m["t0"])
+        m["clock"].configure(text=tk_safe(f"● Transcrevendo {s // 3600:d}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600
+                                          else f"● Transcrevendo {s // 60:02d}:{s % 60:02d}"))
+        self.root.after(1000, self.meeting_clock, m)
+
+    def meeting_line(self, m: Dict[str, Any], line: str) -> None:
+        text = m.get("text")
+        if alive(text):
+            text.configure(state="normal")
+            text.insert("end", tk_safe(line) + "\n")
+            text.see("end")
+            text.configure(state="disabled")
+
+    def meeting_status(self, m: Dict[str, Any], msg: str) -> None:
+        if alive(m.get("status")):
+            m["status"].configure(text=tk_safe(msg))
+        if m["stop"].is_set() and alive(m.get("clock")):
+            m["clock"].configure(text=tk_safe("■ Encerrada"), fg=self.MUTED)
+
+    def meeting_done(self, m: Dict[str, Any], st: Dict[str, Any]) -> None:
+        if st.get("status") == "erro":
+            self.meeting_status(m, f"⚠ A ata falhou: {str(st.get('erro') or '')[:160]}")
+            self.error(f"A ata da reunião falhou: {str(st.get('erro') or '')[:160]}")
+            return
+        self.meeting_status(m, "✔ Ata pronta.")
+        if alive(m.get("window")):
+            m["window"].destroy()
+        self.open_result({"tipo": "texto", "titulo": f"Ata — {m['title']}", "texto": str(st.get("ata") or "")})
+        if st.get("arquivo"):
+            self.run_bg(lambda: self.save_files([str(st["arquivo"])]), self.on_saved)
+        self.meeting_result = st
 
     def toggle_voice(self) -> None:
         self.speak_var.set(not self.speak_var.get())
@@ -2680,6 +3089,7 @@ TEST_HTML = ('<html><body><table style="border:2px solid #0a5"><tr><td style="co
 
 class FakeApi:
     saved: Optional[Dict[str, Any]] = None
+    meeting: Dict[str, Any] = {}
 
     def __init__(self, base: str, token: str = ""):
         self.base, self.token = base, token
@@ -2708,6 +3118,18 @@ class FakeApi:
             return {"tipo": "planilha", "titulo": "Orçamento", "arquivos": ["planilha_orcamento.xlsx"]}
         if sub == "ao-vivo/fim":
             return {"texto": "Encerrado."}
+        if sub == "reuniao":
+            FakeApi.meeting = {"chunks": 0, "fim": False}
+            return {"id": 9, "title": (body or {}).get("titulo") or "Reunião"}
+        if sub == "reuniao/9/audio":
+            FakeApi.meeting["chunks"] += 1
+            assert str((body or {}).get("audio") or "").startswith("UklGR")             # WAV em base64
+            return {"texto": f"[00:{int((body or {}).get('t') or 0):02d}] Trecho {FakeApi.meeting['chunks']} da reunião"}
+        if sub == "reuniao/9/fim":
+            FakeApi.meeting["fim"] = True
+            return {"id": 9, "status": "processando"}
+        if sub == "reuniao/9":
+            return {"id": 9, "status": "pronta", "ata": "📝 Ata — Reunião de teste\nResumo: tudo certo.", "arquivo": ""}
         if sub == "modelos":
             items = [{"n": 1, "nome": "Follow-up de orçamento", "uso": "3 dias depois da proposta", "assunto": "Proposta {{pedido}}",
                       "corpo": "Olá, {{nome}}!\n\nConseguiu avaliar a proposta?\n\nAbraço,", "usos": 2},
@@ -2900,6 +3322,55 @@ def autotest(out_path: str) -> int:
             shot("modelos")
             if alive(win):
                 win.destroy()
+            app.root.after(100, step_meet)
+
+        def step_meet() -> None:                                  # v1.8: transcrever reunião (com um som de teste)
+            global MEET_CHUNK_S
+            MEET_CHUNK_S = 1.0
+            if IS_WINDOWS:                                        # diagnóstico: o Windows do GitHub costuma não ter áudio
+                try:
+                    srcs, close, notes = open_meeting_sources()
+                    result["audio_real"] = [x.name for x in srcs] + notes
+                    close()
+                except Exception as err:
+                    result["audio_real"] = f"{type(err).__name__}: {str(err)[:160]}"
+            src = AudioSource("teste", 2, 48000)
+            import math
+
+            def feed() -> None:
+                for k in range(30):                               # 3 s de um "lá" (440 Hz) em estéreo, 48 kHz
+                    block = _array("h")
+                    for i in range(4800):
+                        v = int(6000 * math.sin(2 * math.pi * 440 * (k * 4800 + i) / 48000))
+                        block.extend((v, v))
+                    src.feed(block.tobytes())
+                    time.sleep(0.1)
+            threading.Thread(target=feed, daemon=True).start()
+            app.start_meeting("Reunião de teste", sources=[src])
+            app.root.after(2600, step_meet2)
+
+        def step_meet2() -> None:
+            app.pump()
+            m = app.meeting
+            if m is None or not alive(m.get("window")):
+                problems.append("reunião: a janela da transcrição não abriu")
+            else:
+                fits(m["window"], "reunião")
+                shot("reuniao")
+                app.stop_meeting()
+            app.root.after(2500, step_meet3)
+
+        def step_meet3() -> None:
+            app.pump()
+            got = getattr(FakeApi, "meeting", {}) or {}
+            result["reuniao"] = dict(got)
+            if not got.get("chunks"):
+                problems.append("reunião: nenhum trecho de áudio foi enviado")
+            if not got.get("fim"):
+                problems.append("reunião: a ata não foi pedida no fim")
+            atas = [w for w in app.result_windows if alive(w) and "Ata" in str(w.title())]
+            if not atas:
+                problems.append("reunião: a ata não abriu")
             app.root.after(100, step3c)
 
         def step3c() -> None:
@@ -2926,6 +3397,7 @@ def autotest(out_path: str) -> int:
             return run
         step1, step2, step2b, step3 = guarded(step1), guarded(step2), guarded(step2b), guarded(step3)
         step3b, step3c = guarded(step3b), guarded(step3c)
+        step_meet, step_meet2, step_meet3 = guarded(step_meet), guarded(step_meet2), guarded(step_meet3)
         app.root.after(900, step1)
         app.root.after(60000, lambda: (problems.append("tempo esgotado (60 s)"), app.root.destroy()))
         app.run()

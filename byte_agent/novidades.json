@@ -68,5 +68,11 @@
    "Painel web separado do motor (manutenção mais segura)",
    "Notas de versão nos avisos de atualização"
   ]
+ },
+ {
+  "versao": "13.62",
+  "itens": [
+   "Bit no PC 1.8: botão ⏺ Reunião transcreve ao vivo (som do PC + microfone) e faz a ata no fim"
+  ]
  }
 ]

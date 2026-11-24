@@ -3,7 +3,8 @@
 #     irm https://raw.githubusercontent.com/DragonClaw121/byte-agent/main/desktop/instalar.ps1 | iex
 # O que ele faz:
 #   1. Python 3.12 oficial (python.org, assinado pela Python Software Foundation), só para o seu usuário;
-#   2. as bibliotecas mss (captura de tela), pillow (imagens) e olefile (modelos .oft do Outlook), do PyPI;
+#   2. as bibliotecas mss (captura de tela), pillow (imagens), olefile (modelos .oft do Outlook) e PyAudioWPatch
+#      (áudio das reuniões: som do PC e microfone), do PyPI;
 #   3. o app (bit_pc.py) em %LOCALAPPDATA%\BitPC e os atalhos "Bit no PC" no Menu Iniciar e na Área de Trabalho.
 # Rodar de novo atualiza o app.
 
@@ -34,8 +35,8 @@ function Install-BitPC {
         Write-Host "    já instalado"
     }
 
-    Write-Host "[Bit no PC] 2/3 Bibliotecas (captura de tela e imagens)..." -ForegroundColor Cyan
-    & $py -m pip install --disable-pip-version-check --no-warn-script-location -q "mss==9.0.2" "pillow==11.0.0" "olefile==0.47"
+    Write-Host "[Bit no PC] 2/3 Bibliotecas (captura de tela, imagens e áudio das reuniões)..." -ForegroundColor Cyan
+    & $py -m pip install --disable-pip-version-check --no-warn-script-location -q "mss==9.0.2" "pillow==11.0.0" "olefile==0.47" "PyAudioWPatch==0.2.12.9"
     if ($LASTEXITCODE -ne 0) { throw "O pip não conseguiu instalar as bibliotecas (internet ou proxy da empresa?)." }
 
     Write-Host "[Bit no PC] 3/3 O app e os atalhos..." -ForegroundColor Cyan

@@ -326,3 +326,29 @@ def test_client_analysis_conversation_from_the_field(bit, monkeypatch):
     assert hooks[0]("puxa o histórico de compras no ERP", {})
     svc.context_manager.record_turn("oi", "Olá! Tudo certo.", "TESTE")
     assert hooks[0]("pode sim", {}) is None and hooks[0]("me lembra amanhã às 9h", {}) is None
+
+
+def test_meeting_from_the_pc(bit):
+    """v13.62: o Bit no PC transcreve a reunião (som do PC + microfone) pelas rotas /pc/<a>/reuniao."""
+    import wave
+    svc, _ = bit
+    token = pair(svc)
+    svc.meetings._transcribe = lambda audio, mime, prompt: "Vamos fechar a proposta até sexta."
+    svc.meetings._llm = lambda messages, max_tokens: json.dumps({"resumo": "Proposta.", "decisoes": [], "tarefas": [],
+                                                                  "pendencias": [], "proximos_passos": []})
+    status, res = call(svc, "POST", "reuniao", token, {"titulo": "Cliente EMS"})
+    assert status == 200 and res["title"] == "Cliente EMS"
+    mid = res["id"]
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000), w.writeframes(b"\x10\x00" * 16000)
+    body = {"audio": base64.b64encode(buf.getvalue()).decode(), "seq": 0, "t": 0}
+    status, res = call(svc, "POST", f"reuniao/{mid}/audio", token, body)
+    assert status == 200 and "fechar a proposta" in res["texto"]
+    assert call(svc, "POST", f"reuniao/{mid}/audio", token, body)[1].get("repetido")         # reenvio ignorado
+    assert call(svc, "POST", f"reuniao/{mid}/audio", token, {"audio": "bm9wZQ==", "seq": 1})[0] == 400
+    assert call(svc, "POST", f"reuniao/{mid}/audio", "", body)[0] in (401, 403)              # sem o token do PC: não
+    svc.meetings.finish(mid, background=False)
+    status, res = call(svc, "GET", f"reuniao/{mid}", token)
+    assert status == 200 and res["status"] == "pronta" and res["ata"]
+    assert call(svc, "GET", "reuniao/999", token)[0] == 404
