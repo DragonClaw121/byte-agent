@@ -47,6 +47,14 @@ Comandos → 🔗 Endereço do login do Google): ele mostra o endereço exato e 
 
 Salve, espere alguns minutos (o Google demora para aplicar) e mande `/google entrar` de novo.
 
+### Erro 403: access_denied (link "projects used in dev/test stage")
+O app está em **Teste** e a conta não está na lista de testadores. No Google Cloud → **Google Auth Platform → Público**:
+- **Publicar aplicativo** (status **Em produção**). É o recomendado, porque em "Teste" o login cai a cada 7 dias. Não
+  precisa pedir verificação: no login aparece "O Google não verificou este app" → **Avançado → Acessar**;
+- ou, para continuar em Teste: **Usuários de teste → Adicionar usuários** com o seu e-mail.
+
+Conta Google Workspace da empresa: o administrador pode bloquear apps de terceiros; aí é a TI que libera.
+
 ## Uso
 - `/compromissos` mostra Google, Outlook e iCal juntos. O resumo da manhã, o aviso de compromisso, o "hora de sair" e
   os horários livres também usam o Google.
