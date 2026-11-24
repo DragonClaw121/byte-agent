@@ -27,7 +27,23 @@ O script pede o endereço e um apelido (ex.: `pessoal`, `trabalho`) e descobre s
   ```
   /email entrar outlook
   ```
-  Abra o link, digite o código e entre com a conta. O Bit avisa quando terminar.
+  Abra o link, entre com a conta e aceite as permissões. O Bit avisa quando terminar.
+
+### Login da Microsoft pelo navegador (v13.54)
+O login antigo (abrir microsoft.com/devicelogin e digitar um código) é o "código de dispositivo". A Microsoft e muitas
+empresas passaram a bloquear esse método ("método de entrada desatualizado"). Agora o login é pelo navegador: o Bit
+manda um link da própria Microsoft, você entra, aceita, e a Microsoft volta para `https://<endereço do agente>/oauth/microsoft`.
+Para ligar, rode uma vez no Cloud Shell:
+```
+bash microsoft-app.sh
+```
+O script cadastra esse endereço de volta no aplicativo "Byte Email" (como "aplicativo móvel e da área de trabalho": sem
+segredo) e grava `BYTE_MS_LOGIN=navegador`. Depois, `/email entrar outlook` (ou `/microsoft entrar`) já manda o link novo.
+Enquanto o script não roda, continua o login por código. Proteções: link de uso único, PKCE e prazo de 10 minutos.
+
+- **Conta da empresa (Microsoft 365):** se aparecer "aprovação do administrador", é a TI que libera o aplicativo. Sem a
+  liberação, o login não passa, e é assim que deve ser.
+- Mensagens de erro da Microsoft (AADSTS...) chegam traduzidas, com o que fazer.
 
 Depois, com o Bit ativo (`/agente bit`), confira tudo:
 ```
@@ -63,7 +79,8 @@ Nessas consultas, só o **domínio** sai do servidor, nunca o seu endereço.
 1. No portal da Azure, abra **Microsoft Entra ID** → **Registros de aplicativo** → **Novo registro**.
 2. Nome: **Byte Email**. Tipos de conta: **"Contas em qualquer diretório organizacional e contas pessoais da Microsoft"**.
    Clique em **Registrar**.
-3. Em **Autenticação**, ligue **"Permitir fluxos de clientes públicos"** e salve.
+3. Em **Autenticação**, ligue **"Permitir fluxos de clientes públicos"**. Em **Adicionar plataforma** →
+   **Aplicativos móveis e da área de trabalho**, cadastre `https://<endereço do agente>/oauth/microsoft`. Salve.
 4. Copie o **ID do aplicativo (cliente)**. Ele não é segredo. Grave-o no contêiner (troque `<ID>` pelo valor):
    ```
    az containerapp update -g byte-rg -n byte --set-env-vars BYTE_MS_CLIENT_ID=<ID> -o none
@@ -96,6 +113,12 @@ e-mail de abordagem do plano de cliente.
 - **Como o Bit usa:** escolhe o modelo pela situação (nome e "quando usar"), mantém o texto e o tom, preenche os
   `{{campos}}` e marca `[PREENCHER: ...]` no que não souber. Sem modelo adequado, escreve no seu estilo e com a sua
   assinatura.
+- **Pedindo na conversa do Bit no PC (v13.54):** "faz o e-mail no meu modelo pra esse cliente" vira o mesmo
+  **Preparar e-mail**: o Bit lê a conversa recente (quem é "esse cliente", o que você já corrigiu), o último cliente
+  pesquisado e as memórias, escolhe o modelo (pelo nome citado ou, se você disser "meu modelo"/"o modelo que eu uso",
+  sempre um dos seus) e abre a janela com o e-mail formatado. Depois é só pedir ajustes na conversa ("deixa mais curto",
+  "troca o produto para Canva"): ele ajusta o mesmo e-mail, no mesmo modelo.
+- **Campos `[Nome]`:** além de `{{nome}}`, valem campos entre colchetes começando por maiúscula (`[Nome]`, `[SOFTWARE]`).
 - **Formato do Outlook (v13.52):** os modelos podem guardar o HTML (tabelas, cores, imagens). No painel, copie o e-mail
   no Outlook e cole no campo do texto: o formato vem junto, mas as imagens não passam pelo navegador. No Bit no PC, use
   **Colar do Outlook (com formato)**, **Importar do Outlook** ou **Importar arquivo…** (`.oft`, `.msg`, `.eml`,

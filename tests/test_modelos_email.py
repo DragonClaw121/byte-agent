@@ -179,3 +179,16 @@ def test_bracket_fields_like_the_outlook_templates(bit):
     out, how = bit.email_templates.render_html(bit.email_templates.get(tpl["n"]), "", "", {"nome": "Ana", "SOFTWARE": "Notion"})
     assert how == "campos" and "<b>Ana</b>" in out and "<b>Notion</b>" in out and "[SEU NOME]" in out
     assert modelos_email.fill_fields("Oi [Nome] [Cargo]", {"Nome": "Ana"}, html=True) == "Oi Ana [Cargo]"
+
+
+def test_choose_by_name_or_my_template_reference(bit):
+    t = bit.email_templates
+    t.save("Customer Success", "Olá, [Nome]! Como está o [SOFTWARE]?", "pós-venda de licença")
+    assert t.choose("faz um e-mail no modelo que eu uso pra ASBEC")["nome"] == "Customer Success"   # o único
+    assert t.choose("faz um e-mail pra ASBEC") is None                                          # nada a ver: estilo
+    assert t.choose("um e-mail sem modelo nenhum pra ASBEC") is None
+    t.save("Cobrança", COBRANCA, "fatura vencida em aberto")
+    assert t.choose("e-mail pra ASBEC no customer success")["nome"] == "Customer Success"      # citou o nome
+    picked = []
+    got = t.choose("e-mail pra ASBEC no meu modelo", llm=lambda s, u: picked.append(s) or "0")
+    assert got is not None and "nunca 0" in picked[0]                                          # pediu modelo: sempre um

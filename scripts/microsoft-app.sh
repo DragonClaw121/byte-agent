@@ -47,9 +47,34 @@ fi
 [ -n "$CLIENT" ] || { echo "Sem o ID do aplicativo não dá para continuar."; exit 1; }
 VARS+=("BYTE_MS_CLIENT_ID=$CLIENT")
 
+# v13.54: login pelo navegador (o login por código, que a Microsoft e as empresas bloqueiam, fica só como reserva).
+# O endereço de volta é cadastrado como "Aplicativo móvel e da área de trabalho" (cliente público: sem segredo).
+FQDN="$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)"
+PUBLICO="$(env_value BYTE_ENDERECO_PUBLICO)"
+BASE="${PUBLICO:-https://$FQDN}"
+if [ -n "$FQDN$PUBLICO" ]; then
+  VOLTA="${BASE%/}/oauth/microsoft"
+  say "Cadastrando o endereço de volta do login: $VOLTA"
+  ATUAIS="$(az ad app show --id "$CLIENT" --query "publicClient.redirectUris" -o tsv 2>/dev/null | tr '\t' '\n' || true)"
+  if printf '%s\n' "$ATUAIS" | grep -qxF "$VOLTA"; then
+    echo "    já estava cadastrado"
+    VARS+=("BYTE_MS_LOGIN=navegador")
+  else
+    # shellcheck disable=SC2086
+    az ad app update --id "$CLIENT" --public-client-redirect-uris $ATUAIS "$VOLTA" -o none \
+      && { echo "    cadastrado"; VARS+=("BYTE_MS_LOGIN=navegador"); } \
+      || echo "    aviso: não consegui cadastrar. No portal: Registros de aplicativo → Byte Email → Autenticação →" \
+              "Adicionar plataforma → Aplicativos móveis e da área de trabalho → $VOLTA"
+  fi
+else
+  echo "    aviso: não achei o endereço público do contêiner; o login fica pelo código (reserva)."
+fi
+
 say "Aplicando (o contêiner reinicia em ~1 minuto)"
 az containerapp update -g "$RG" -n "$APP" --set-env-vars "${VARS[@]}" -o none
 say "Pronto. No Telegram do agente (Bit, Matrix ou Kronus):"
 echo "    /microsoft entrar          agenda do Outlook e OneDrive"
 echo "    /microsoft entrar teams    também as transcrições do Teams (conta de empresa)"
 echo "    E-mail Outlook/Hotmail: bash email-conta.sh"
+echo "    O login agora é por um link (abre a página da Microsoft); não é mais o código de microsoft.com/devicelogin."
+echo "    Conta de empresa: se aparecer \"aprovação do administrador\", é a TI que libera o aplicativo."

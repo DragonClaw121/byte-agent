@@ -30,6 +30,15 @@ comercio servicos servico industria industrial brasil brasileira nacional associ
 MAX_READ = 6
 
 
+LAST_CLIENT = "clientes.ultimo"
+
+
+def last_client(db: Any, max_age_s: float = 3 * 86400) -> Dict[str, Any]:
+    """O último cliente pesquisado (para "o e-mail desse cliente"), se for recente."""
+    item = db.get_setting(LAST_CLIENT, {}) or {}
+    return item if isinstance(item, dict) and time.time() - float(item.get("t") or 0) < max_age_s else {}
+
+
 def fold(text: Any) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", str(text or "").lower()) if not unicodedata.combining(c))
 
@@ -346,6 +355,13 @@ class ClientResearch:
         self.service.db.record_audit("client_research", "pesquisar_cliente", "success",
                                      {"cadastro": bool(reg), "fontes": len(sources), "interno": bool(internal_all)})
         out["texto"] = self.message(out, web_notes)
+        try:                                                     # v13.54: "o e-mail para ESSE cliente" logo depois
+            self.service.db.set_setting(LAST_CLIENT, {
+                "t": time.time(), "cliente": display, "cnpj": out["cnpj"], "foco": str(ident.get("foco") or "")[:200],
+                "resumo": out["resumo"][:1500], "dados_internos": internal_all[:2500],
+                "email": {"assunto": out["email"]["assunto"], "corpo": out["email"]["corpo"][:2500]}})
+        except Exception:
+            pass
         return out
 
     @staticmethod

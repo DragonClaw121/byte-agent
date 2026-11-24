@@ -474,12 +474,34 @@ class MailHub:
     def _xoauth2(address: str, token: str) -> bytes:
         return f"user={address}\x01auth=Bearer {token}\x01\x01".encode()
 
+    def _ms_connected(self, acc_id: str, address: str, data: Dict[str, Any]) -> None:
+        self.vault.put(f"ms:{address.lower()}", data["refresh_token"])
+        self._tokens[address.lower()] = (data.get("access_token", ""), time.time() + float(data.get("expires_in") or 3600))
+        self.pending_logins.pop(acc_id, None)
+        self.db.record_audit("email_oauth_login", "caixas", "success", {"account": acc_id})
+        self.notify(f"✅ Conta {acc_id} ({address}) conectada pela Microsoft. Teste com /email testar {acc_id}.")
+
     def start_microsoft_login(self, acc_id: str) -> Dict[str, Any]:
-        """Login pelo celular (fluxo de código de dispositivo). Um vigia espera você confirmar e guarda o acesso."""
+        """v13.54: login pelo navegador (link + volta para /oauth/microsoft). Sem endereço público, o antigo login por
+        código de dispositivo (que muitas empresas bloqueiam)."""
         acc = self.get(acc_id)
         if acc.auth != "microsoft":
             raise ValueError(f"A conta {acc.id} usa senha, não login da Microsoft.")
         client = self._ms_client()
+        browser = getattr(self, "browser_login", None)
+        if browser is not None and browser.available():
+            def failed(msg: str) -> None:
+                self.pending_logins.pop(acc.id, None)
+                self.notify(f"⚠️ Login da conta {acc.id} não concluído: {msg}")
+            started = browser.start(MS_SCOPES + " openid profile", acc.address,
+                                    lambda data: self._ms_connected(acc.id, acc.address, data), failed)
+            self.pending_logins[acc.id] = {"account": acc.id, "address": acc.address, "browser": started["state"]}
+            text = (f"🔑 Login da Microsoft para {acc.address}\nAbra este link, entre com {acc.address} e aceite as "
+                    f"permissões (ler e enviar e-mail):\n{started['url']}\nO link vale 10 minutos. Eu aviso aqui quando terminar."
+                    "\n(Conta de empresa: se pedir \"aprovação do administrador\", é a TI que libera o aplicativo.)"
+                    + ("" if self.vault.persistent else "\n⚠️ Sem BYTE_CHAVE_TOKENS o acesso fica só na memória: depois de "
+                                                        "reiniciar a nuvem, será preciso entrar de novo."))
+            return {"text": text, "url": started["url"]}
         code, body = self.getter(f"{MS_AUTHORITY}/devicecode", data=urllib.parse.urlencode(
             {"client_id": client, "scope": MS_SCOPES}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
         data = json.loads(body.decode("utf-8", errors="replace") or "{}")
@@ -494,6 +516,8 @@ class MailHub:
         text = (f"🔑 Login da Microsoft para {acc.address}\n1. Abra {data.get('verification_uri', 'https://microsoft.com/devicelogin')}\n"
                 f"2. Digite o código: {data.get('user_code')}\n3. Entre com {acc.address} e aceite as permissões "
                 "(ler e enviar e-mail).\nO código vale 15 minutos. Eu aviso aqui quando terminar."
+                "\nSe a Microsoft recusar (\"método de entrada desatualizado\" ou bloqueado pela empresa), rode "
+                "scripts/microsoft-app.sh no Cloud Shell: ele ativa o login pelo navegador."
                 + ("" if self.vault.persistent else "\n⚠️ Sem BYTE_CHAVE_TOKENS o acesso fica só na memória: depois de "
                                                      "reiniciar a nuvem, será preciso entrar de novo."))
         return {"text": text, "user_code": data.get("user_code"), "verification_uri": data.get("verification_uri")}
@@ -506,11 +530,7 @@ class MailHub:
                 "device_code": state["device_code"]}).encode(), headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
             data = json.loads(body.decode("utf-8", errors="replace") or "{}")
             if code == 200 and data.get("refresh_token"):
-                self.vault.put(f"ms:{state['address'].lower()}", data["refresh_token"])
-                self._tokens[state["address"].lower()] = (data.get("access_token", ""), time.time() + float(data.get("expires_in") or 3600))
-                self.pending_logins.pop(state["account"], None)
-                self.db.record_audit("email_oauth_login", "caixas", "success", {"account": state["account"]})
-                self.notify(f"✅ Conta {state['account']} ({state['address']}) conectada pela Microsoft. Teste com /email testar {state['account']}.")
+                self._ms_connected(state["account"], state["address"], data)
                 return True
             err = data.get("error")
             if err == "authorization_pending":
@@ -760,6 +780,16 @@ def install(service: Any, data_dir: Path, personal: bool = False) -> MailHub:
     hub = MailHub(service.db, read, vault, legacy=None if personal else getattr(service, "email_client", None), personal=personal)
     hub.notify = lambda text: service.db.enqueue_proactive_message("email", text, brain_used="E-MAIL")
     service.mail_hub = hub
+    from . import ms_login                                    # v13.54: login da Microsoft pelo navegador
+    folder = ms_login.handoff_dir(Path(data_dir).expanduser().parent.parent if personal else data_dir)
+
+    def ms_form(url: str, form: Dict[str, str]) -> Tuple[int, Dict[str, Any]]:
+        code, body = hub.getter(url, data=urllib.parse.urlencode(form).encode(),
+                                headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
+        return code, ms_login.parse_form_reply(body)
+    hub.browser_login = ms_login.BrowserLogin(folder, hub._ms_client, read, ms_form)
+    if not personal:
+        ms_login.register_route(service, folder)
 
     def tool_list(args: Dict[str, Any], turn: Dict[str, Any]) -> str:
         try:

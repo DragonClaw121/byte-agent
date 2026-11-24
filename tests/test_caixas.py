@@ -126,6 +126,10 @@ class FakeNet:
                 if self.token_polls == 1:
                     return 400, b'{"error": "authorization_pending"}'
                 return 200, json.dumps({"access_token": "acesso-ms", "refresh_token": "renova-1", "expires_in": 3600}).encode()
+            if form["grant_type"][0] == "authorization_code":            # v13.54: login pelo navegador (PKCE)
+                assert form["code"][0] == "CODIGO" and len(form["code_verifier"][0]) >= 43
+                assert form["redirect_uri"][0] == "https://byte.exemplo.io/oauth/microsoft"
+                return 200, json.dumps({"access_token": "acesso-ms", "refresh_token": "renova-nav", "expires_in": 3600}).encode()
             assert form["refresh_token"][0].startswith("renova")
             return 200, json.dumps({"access_token": "acesso-ms", "refresh_token": "renova-2", "expires_in": 3600}).encode()
         return 404, b""
@@ -296,3 +300,43 @@ def test_telegram_email_commands(svc):
     finally:
         bridge.stop()
         tg.httpd.shutdown()
+
+
+class Page:
+    def __init__(self):
+        self.html = ""
+
+    def _send_html(self, html):
+        self.html = html
+
+
+def test_microsoft_login_by_browser_instead_of_device_code(svc, monkeypatch):
+    """v13.54: o código de dispositivo é bloqueado por muitas empresas ("método desatualizado"): login pelo navegador."""
+    from urllib.parse import parse_qs as qs, urlparse
+    hub = svc.mail_hub
+    hub.browser_login.background = False
+    assert "devicelogin" in hub.start_microsoft_login("outlook")["text"]      # sem o endereço cadastrado: o antigo
+    assert "microsoft-app.sh" in hub.start_microsoft_login("outlook")["text"]
+    monkeypatch.setenv("BYTE_ENDERECO_PUBLICO", "https://byte.exemplo.io")
+    monkeypatch.setenv("BYTE_MS_LOGIN", "navegador")
+    notes = []
+    hub.notify = notes.append
+    out = hub.start_microsoft_login("outlook")
+    url = urlparse(out["url"])
+    q = {k: v[0] for k, v in qs(url.query).items()}
+    assert url.path.endswith("/oauth2/v2.0/authorize") and "devicelogin" not in out["text"]
+    assert q["redirect_uri"] == "https://byte.exemplo.io/oauth/microsoft" and q["code_challenge_method"] == "S256"
+    assert q["login_hint"] == "ana@outlook.com" and "IMAP.AccessAsUser.All" in q["scope"]
+    page = Page()
+    svc.public_routes["/oauth/microsoft"](page, "GET", "/oauth/microsoft", f"state={q['state']}&code=CODIGO")
+    assert "Pronto" in page.html
+    assert hub.browser_login.wait(q["state"], sleep=lambda s: None)
+    assert hub.vault.get("ms:ana@outlook.com") == "renova-nav" and notes[-1].startswith("✅ Conta outlook")
+    page2 = Page()                                                    # uso único
+    svc.public_routes["/oauth/microsoft"](page2, "GET", "/oauth/microsoft", f"state={q['state']}&code=OUTRO")
+    assert "venceu ou já foi usado" in page2.html
+    out = hub.start_microsoft_login("outlook")                        # a empresa exige a TI: explica em português
+    q = {k: v[0] for k, v in qs(urlparse(out["url"]).query).items()}
+    svc.public_routes["/oauth/microsoft"](Page(), "GET", "/oauth/microsoft",
+                                          f"state={q['state']}&error=access_denied&error_description=AADSTS65001+consent")
+    assert not hub.browser_login.wait(q["state"], sleep=lambda s: None) and "TI" in notes[-1]

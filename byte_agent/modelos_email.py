@@ -48,6 +48,8 @@ def words(text: Any) -> set:
 # campos do modelo: {{nome}} ou, como muita gente escreve no Outlook, [Nome] / [SOFTWARE] (começando por maiúscula)
 FIELD_RE = re.compile(r"\{\{\s*([\w .-]{1,40})\s*\}\}|\[([A-ZÀ-Ý][\wÀ-ÿ .-]{0,30})\]")
 NOT_FIELDS = {"SEU NOME", "PREENCHER"}
+NO_MODEL = re.compile(r"\b(sem|nenhum|nao use|nao usa|nao usar|sem usar|fora do)\b.{0,15}\bmodelo")
+MODEL_REF = re.compile(r"\b(modelos?|templates?|padrao|meu formato|formato que (eu )?(ja )?uso)\b")
 
 
 def fields_of(text: str) -> List[str]:
@@ -215,7 +217,7 @@ class EmailTemplates:
 
     # ---------------- o formato (HTML) do modelo no e-mail pronto
     def render_html(self, tpl: Dict[str, Any], subject: str, body: str, fields: Dict[str, Any],
-                    llm: Optional[Callable[[str, str], str]] = None) -> Tuple[str, str]:
+                    llm: Optional[Callable[[str, str], str]] = None, rewrite: bool = False) -> Tuple[str, str]:
         """(html pronto, como foi feito). Com {{campos}}: troca direto no HTML (o formato fica idêntico). Sem campos e com
         HTML não muito grande: a LLM troca SÓ os textos e a estrutura é conferida. Senão: '' (fica só o texto)."""
         html = str(tpl.get("html") or "")
@@ -223,7 +225,9 @@ class EmailTemplates:
             return "", ""
         if fields_of(html):
             out = fill_fields(html, fields, html=True)
-            return self.add_signature_html(out), "campos"
+            if not rewrite or llm is None:
+                return self.add_signature_html(out), "campos"
+            html = out                    # v13.54: ajuste pedido ("mais curto", "troca o parágrafo"): os textos também mudam
         light, images = hide_images(html)
         if llm is None or len(light) > LLM_HTML_LIMIT:
             return "", "grande"
@@ -247,11 +251,21 @@ class EmailTemplates:
         return html + sig_html
 
     # ---------------- escolher e orientar
-    def choose(self, situation: str, llm: Optional[Callable[[str, str], str]] = None) -> Optional[Dict[str, Any]]:
-        """O modelo que combina com a situação. Sem nenhum parecido, None (aí vale só o estilo)."""
+    def choose(self, situation: str, llm: Optional[Callable[[str, str], str]] = None,
+               request: str = "") -> Optional[Dict[str, Any]]:
+        """O modelo que combina com a situação. Sem nenhum parecido, None (aí vale só o estilo).
+        v13.54: `request` é o que o USUÁRIO escreveu: se ele cita o nome de um modelo, é esse; se diz "no meu modelo",
+        "o modelo que eu uso"..., sempre sai um modelo (o único, o que combina ou o mais usado)."""
         items = self.list()
         if not items:
             return None
+        said = fold(request or situation)
+        named = [t for t in items if len(fold(t["nome"])) >= 4 and fold(t["nome"]) in said]
+        if named:
+            return max(named, key=lambda t: len(t["nome"]))
+        asks_model = bool(MODEL_REF.search(said)) and not NO_MODEL.search(said)
+        if asks_model and len(items) == 1:
+            return items[0]
         want = words(situation)
         scored: List[Tuple[float, Dict[str, Any]]] = []
         for t in items:
@@ -261,19 +275,24 @@ class EmailTemplates:
             if score:
                 scored.append((score, t))
         scored.sort(key=lambda x: -x[0])
-        if llm is not None and len(items) > 1 and (not scored or len(scored) > 1):
-            menu = "\n".join(f"{t['n']}: {t['nome']} — {t['uso'] or 'sem descrição'}" for t in items[:40])
+        if llm is not None and len(items) > 1 and (asks_model or not scored or len(scored) > 1):
+            menu = "\n".join(f"{t['n']}: {t['nome']} — {t['uso'] or 'sem descrição'} (assunto: {t['assunto'] or '-'})"
+                             for t in items[:40])
+            rule = ("O usuário pediu um dos modelos dele: responda SÓ o número do que mais serve (nunca 0)." if asks_model else
+                    "Responda SÓ o número do modelo, ou 0 se nenhum servir de verdade.")
             try:
-                raw = llm("Escolha o modelo de e-mail do usuário que serve para a situação. Responda SÓ o número do modelo, ou 0 "
-                          "se nenhum servir de verdade.", f"SITUAÇÃO: {situation[:1500]}\n\nMODELOS:\n{menu}")
+                raw = llm("Escolha o modelo de e-mail do usuário que serve para a situação. " + rule,
+                          f"PEDIDO DO USUÁRIO: {(request or situation)[:600]}\nSITUAÇÃO: {situation[:1500]}\n\nMODELOS:\n{menu}")
                 num = int(re.findall(r"\d+", str(raw or "0"))[0]) if re.findall(r"\d+", str(raw or "")) else -1
-                if num == 0:
+                if num == 0 and not asks_model:
                     return None
                 match = next((t for t in items if t["n"] == num), None)
                 if match is not None:
                     return match
             except Exception:
                 pass
+        if asks_model:
+            return scored[0][1] if scored else items[0]           # list() já vem do mais usado para o menos
         return scored[0][1] if scored and scored[0][0] >= 2.0 else None
 
     def style(self) -> str:
@@ -294,15 +313,23 @@ class EmailTemplates:
             out.append("despedidas: " + " | ".join(close[:5]))
         return "; ".join(out)
 
-    def guidance(self, situation: str, llm: Optional[Callable[[str, str], str]] = None) -> Tuple[Optional[Dict[str, Any]], str]:
-        """(modelo escolhido, bloco para o prompt de quem escreve o e-mail)."""
-        tpl = self.choose(situation, llm)
+    def guidance(self, situation: str, llm: Optional[Callable[[str, str], str]] = None, request: str = "",
+                 tpl_n: Optional[int] = None) -> Tuple[Optional[Dict[str, Any]], str]:
+        """(modelo escolhido, bloco para o prompt de quem escreve o e-mail). tpl_n: um modelo já decidido (ajustes)."""
+        tpl = None
+        if tpl_n is not None:
+            try:
+                tpl = self.get(tpl_n)
+            except ValueError:
+                tpl = None
+        if tpl is None:
+            tpl = self.choose(situation, llm, request)
         sig = self.signature()
         parts: List[str] = []
         if tpl is not None:
             parts.append(
                 f"MODELO DO USUÁRIO A SEGUIR (\"{tpl['nome']}\"): use-o como base. Mantenha o texto, a estrutura, as expressões "
-                "e o tom dele; preencha os {{campos}} e os trechos que variam com os dados da situação; mude só o que a "
+                "e o tom dele; preencha os campos ({{nome}} ou [Nome]) e os trechos que variam com os dados da situação; mude só o que a "
                 "situação exige. Dado que não existir, escreva [PREENCHER: o que falta] (não invente)."
                 f"\n<modelo>\nAssunto: {tpl['assunto'] or '(defina)'}\n{tpl['corpo']}\n</modelo>")
         else:
@@ -364,9 +391,18 @@ def install(service: Any) -> EmailTemplates:
             return None
         if not templates.list() and not templates.signature():
             return None
-        tpl, block = templates.guidance(message)
+        recent = []
+        try:                                                     # v13.54: "esse cliente", "aquele modelo"... vêm da conversa
+            recent = [str(m.get("content") or "")[:400] for m in service.context_manager.get_window_list()[-6:]
+                      if m.get("role") == "user"][-3:]
+        except Exception:
+            pass
+        tpl, block = templates.guidance("\n".join(recent + [message]), request=message)
         if tpl is not None:
             turn.setdefault("email_template", tpl["n"])
+            if tpl.get("tem_html"):
+                block += ("\n(Este modelo tem o formato do Outlook — tabelas, cores, imagens. Para o e-mail sair formatado, "
+                          "o usuário pode pedir pelo Bit no PC, que abre pronto no Outlook.)")
         return block or None
 
     service.pre_turn_hooks.append(hook)

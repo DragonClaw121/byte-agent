@@ -118,6 +118,18 @@ class Microsoft:
 
     def start_login(self, kind: str = "base") -> Dict[str, Any]:
         kind = "teams" if str(kind).lower().startswith("team") else "base"
+        what = "agenda, OneDrive e transcrições do Teams" if kind == "teams" else "agenda e OneDrive"
+        browser = getattr(self, "browser_login", None)
+        if browser is not None and browser.available():             # v13.54: login pelo navegador
+            def failed(msg: str) -> None:
+                self.pending.pop(kind, None)
+                self.notify("⚠️ Login da Microsoft não concluído: " + msg)
+            started = browser.start(SCOPES[kind] + " openid profile", "", lambda data: self._connected(kind, data), failed)
+            self.pending[kind] = {"kind": kind, "browser": started["state"]}
+            return {"text": f"🔑 Login da Microsoft ({what})\nAbra este link, entre com a sua conta e aceite as permissões:\n"
+                            f"{started['url']}\nO link vale 10 minutos. Eu aviso aqui quando terminar.\n"
+                            "(Conta de empresa: se pedir \"aprovação do administrador\", é a TI que libera o aplicativo.)",
+                    "url": started["url"]}
         code, data = self._form(f"{AUTHORITY}/devicecode", {"client_id": self._client(), "scope": SCOPES[kind]})
         if code != 200 or not data.get("device_code"):
             raise PermissionError(f"A Microsoft recusou o pedido de login: {str(data.get('error_description') or data.get('error') or code)[:240]}")
@@ -129,7 +141,9 @@ class Microsoft:
         what = "agenda, OneDrive e transcrições do Teams" if kind == "teams" else "agenda e OneDrive"
         return {"text": f"🔑 Login da Microsoft ({what})\n1. Abra {data.get('verification_uri', 'https://microsoft.com/devicelogin')}\n"
                         f"2. Digite o código: {data.get('user_code')}\n3. Entre com a sua conta e aceite as permissões.\n"
-                        "O código vale 15 minutos. Eu aviso aqui quando terminar."
+                        "O código vale 15 minutos. Eu aviso aqui quando terminar.\n"
+                        "Se a Microsoft recusar (\"método de entrada desatualizado\" ou bloqueado pela empresa), rode "
+                        "scripts/microsoft-app.sh no Cloud Shell: ele ativa o login pelo navegador."
                         + ("\n(Em conta de empresa, as transcrições do Teams podem pedir a aprovação da TI.)" if kind == "teams" else ""),
                 "user_code": data.get("user_code")}
 
@@ -139,24 +153,7 @@ class Microsoft:
             code, data = self._form(f"{AUTHORITY}/token", {"grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                                                            "client_id": self._client(), "device_code": state["device_code"]})
             if code == 200 and data.get("refresh_token"):
-                token = data.get("access_token", "")
-                c2, me = self.http("GET", f"{GRAPH}/me?$select=userPrincipalName,mail,displayName", None, {"Authorization": f"Bearer {token}"})
-                info = json.loads(me.decode("utf-8", "replace") or "{}") if c2 == 200 else {}
-                upn = str(info.get("mail") or info.get("userPrincipalName") or "").strip()
-                if not upn:
-                    self.notify("⚠️ Login da Microsoft feito, mas não consegui ler a conta (/me).")
-                    return False
-                accs = [a for a in self.accounts() if a["upn"].lower() != upn.lower()]
-                accs.append({"id": re.sub(r"[^a-z0-9]", "", upn.split("@")[0].lower())[:20] or "ms", "upn": upn,
-                             "name": str(info.get("displayName") or ""), "kind": state["kind"]})
-                self.db.set_setting(SETTING, accs)
-                self.vault.put(f"graph:{upn.lower()}", data["refresh_token"])
-                self._tokens[upn.lower()] = (token, self.clock() + float(data.get("expires_in") or 3600))
-                self.pending.pop(state["kind"], None)
-                self.db.record_audit("graph_login", "microsoft", "success", {"kind": state["kind"]})
-                self.notify(f"✅ Microsoft conectada ({upn}): agenda do Outlook e OneDrive"
-                            + (" e transcrições do Teams" if state["kind"] == "teams" else "") + ". Veja /compromissos.")
-                return True
+                return self._connected(state["kind"], data)
             err = data.get("error")
             if err == "authorization_pending":
                 continue
@@ -168,6 +165,27 @@ class Microsoft:
             return False
         self.pending.pop(state["kind"], None)
         return False
+
+    def _connected(self, kind: str, data: Dict[str, Any]) -> bool:
+        """Tokens recebidos (navegador ou código): descobre a conta (/me) e guarda o acesso."""
+        token = data.get("access_token", "")
+        c2, me = self.http("GET", f"{GRAPH}/me?$select=userPrincipalName,mail,displayName", None, {"Authorization": f"Bearer {token}"})
+        info = json.loads(me.decode("utf-8", "replace") or "{}") if c2 == 200 else {}
+        upn = str(info.get("mail") or info.get("userPrincipalName") or "").strip()
+        if not upn:
+            self.notify("⚠️ Login da Microsoft feito, mas não consegui ler a conta (/me).")
+            return False
+        accs = [a for a in self.accounts() if a["upn"].lower() != upn.lower()]
+        accs.append({"id": re.sub(r"[^a-z0-9]", "", upn.split("@")[0].lower())[:20] or "ms", "upn": upn,
+                     "name": str(info.get("displayName") or ""), "kind": kind})
+        self.db.set_setting(SETTING, accs)
+        self.vault.put(f"graph:{upn.lower()}", data["refresh_token"])
+        self._tokens[upn.lower()] = (token, self.clock() + float(data.get("expires_in") or 3600))
+        self.pending.pop(kind, None)
+        self.db.record_audit("graph_login", "microsoft", "success", {"kind": kind})
+        self.notify(f"✅ Microsoft conectada ({upn}): agenda do Outlook e OneDrive"
+                    + (" e transcrições do Teams" if kind == "teams" else "") + ". Veja /compromissos.")
+        return True
 
     def token(self, acc: Dict[str, Any]) -> str:
         key = acc["upn"].lower()
@@ -357,6 +375,11 @@ def install(service: Any, data_dir: Path) -> Microsoft:
                                                          _engine._read_secret(("BYTE_CHAVE_TOKENS",)))
     ms = Microsoft(service, vault, _engine._read_secret)
     service.microsoft = ms
+    from . import ms_login                                    # v13.54: login pelo navegador (rota em caixas.install)
+    folder = ms_login.handoff_dir(data_dir)
+    ms.browser_login = ms_login.BrowserLogin(folder, ms._client, _engine._read_secret, ms._form)
+    if "/oauth/microsoft" not in (getattr(service, "public_routes", None) or {}):
+        ms_login.register_route(service, folder)
 
     def provider(start: datetime, end: datetime) -> List[Dict[str, Any]]:
         if not ms.accounts():

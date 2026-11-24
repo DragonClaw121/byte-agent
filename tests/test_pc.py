@@ -2,6 +2,7 @@
 import base64
 import io
 import json
+import time
 
 import pytest
 
@@ -201,3 +202,55 @@ def test_client_research_from_the_pc_uses_the_screen_and_live_notes(bit, monkeyp
     status, res = call(svc, "POST", "conversa", token, {"texto": "Me auxilie com uma pesquisa profunda sobre esse cliente", "tela": JPEG})
     assert res["preparado"]["tipo"] == "cliente" and seen["image"].startswith("data:image/jpeg")   # a ficha na tela foi junto
     assert "pesquisar_cliente" in svc.extra_tools and "client_research" in svc.extra_actions
+
+
+def test_email_asked_in_the_pc_chat_uses_context_template_and_adjusts(bit):
+    """v13.54: "faz o e-mail no meu modelo para esse cliente" na conversa = Preparar e-mail, com a conversa, o último
+    cliente pesquisado e o modelo do usuário; "deixa mais curto" ajusta o mesmo e-mail, no mesmo modelo."""
+    svc, calls = bit
+    token = pair(svc)
+    svc.email_templates.save("Customer Success", "Olá, [Nome]! Como está o uso do [SOFTWARE]?\n\nAbraço,", "pós-venda",
+                             "L.spot | [SOFTWARE]",
+                             html="<table><tr><td>Olá, <b>[Nome]</b>! Como está o uso do <b>[SOFTWARE]</b>?</td></tr></table>")
+    svc.db.set_setting("clientes.ultimo", {"t": time.time(), "cliente": "ASBEC", "cnpj": "00.000.000/0001-91",
+                                           "resumo": "Comprou 40 licenças de Notion em março.", "dados_internos": "contato: Júlia"})
+    svc.context_manager.record_turn("A Júlia da ASBEC é a responsável pelas licenças.", "Anotado!", "TESTE")
+    for text in ("me lembra amanhã às 9h", "leia meus e-mails não lidos", "responda o e-mail da Ana"):
+        assert svc.pc_hub.email_request(text) == ""
+    assert svc.pc_hub.email_request("Faz um e-mail no modelo que eu uso pra esse cliente") == "novo"
+
+    def answer(system, text):
+        assert "CONVERSA RECENTE" in text and "Júlia da ASBEC" in text and "ÚLTIMO CLIENTE PESQUISADO" in text
+        assert "Comprou 40 licenças" in text and "MODELO DO USUÁRIO A SEGUIR (\"Customer Success\")" in system
+        assert '"Nome": "valor"' in system and "USE O CONTEXTO" in system
+        return json.dumps({"titulo": "CS ASBEC", "assunto": "L.spot | Notion", "campos": {"Nome": "Júlia", "SOFTWARE": "Notion"},
+                           "corpo": "Olá, Júlia! Como está o uso do Notion?\n\nAbraço,"})
+    original = pc.vision
+    pc.vision = lambda service, system, text, image_url, json_format=False, max_tokens=500: (
+        answer(system, text) if "PEDIDO:" in text else original(service, system, text, image_url, json_format, max_tokens))
+    try:
+        status, res = call(svc, "POST", "conversa", token, {"texto": "Faz um e-mail no modelo que eu uso pra esse cliente"})
+    finally:
+        pc.vision = original
+    assert status == 200 and res["preparado"]["modelo"] == "Customer Success"
+    assert "<b>Júlia</b>" in res["preparado"]["corpo_html"] and "<b>Notion</b>" in res["preparado"]["corpo_html"]
+    assert "Customer Success" in res["mensagens"][0]["text"] and "formato do Outlook" in res["mensagens"][0]["text"]
+    assert "Preparei o e-mail" in svc.context_manager.get_window_list()[-1]["content"]
+
+    assert svc.pc_hub.email_request("deixa mais curto e tira a pergunta") == "ajuste"
+    seen = []
+
+    def adjust(system, text, max_tokens):
+        seen.append(text)
+        if max_tokens == 9000:                                 # troca dos textos no HTML (ajuste)
+            return text.split("<modelo_html>\n")[1].split("\n</modelo_html>")[0].replace("Como está o uso do", "Tudo certo com o")
+        assert "E-MAIL ANTERIOR" in text and "Olá, Júlia! Como está o uso do Notion?" in text
+        return json.dumps({"titulo": "CS ASBEC", "assunto": "L.spot | Notion", "campos": {"Nome": "Júlia", "SOFTWARE": "Notion"},
+                           "corpo": "Olá, Júlia! Tudo certo com o Notion?\n\nAbraço,"})
+    pc.vision = lambda service, system, text, image_url, json_format=False, max_tokens=500: adjust(system, text, max_tokens)
+    try:
+        status, res = call(svc, "POST", "conversa", token, {"texto": "deixa mais curto e tira a pergunta"})
+    finally:
+        pc.vision = original
+    assert res["preparado"]["modelo"] == "Customer Success" and "Ajustei" in res["mensagens"][0]["text"]
+    assert "Tudo certo com o <b>Notion</b>" in res["preparado"]["corpo_html"]
