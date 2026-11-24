@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.9"
+VERSION = "1.10"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -873,6 +873,14 @@ def write_eml(to: str, subject: str, text: str, html: str) -> str:
 NEW_OUTLOOK_PASTE_PS = r"""param($src, $out)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
+Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class BitWin {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+}
+"@
 $d = Get-Content -Raw -Encoding UTF8 $src | ConvertFrom-Json
 $A = [System.Windows.Automation.AutomationElement]
 $T = [System.Windows.Automation.TreeScope]
@@ -880,35 +888,54 @@ $CT = [System.Windows.Automation.ControlType]
 $cond = New-Object System.Windows.Automation.OrCondition(
   (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::Edit)),
   (New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, $CT::Document)))
-function Done($ok, $why) { ConvertTo-Json @{ok = $ok; motivo = $why} | Set-Content -Encoding UTF8 $out; exit 0 }
+function Norm($t) { return ((([string]$t) -replace '\s+', ' ').Trim()).ToLower() }
+$want = Norm $d.assunto
+$seen = @{}
+$state = @{ janela = $false; assunto = '' }
+function Done($ok, $why) {
+  $info = @{ ok = $ok; motivo = $why; janela = $state.janela; assunto_visto = $state.assunto; campos = @($seen.Keys | Select-Object -First 15) }
+  ConvertTo-Json -InputObject $info -Depth 3 | Set-Content -Encoding UTF8 $out
+  exit 0
+}
 $deadline = (Get-Date).AddSeconds([double]$d.espera)
 while ((Get-Date) -lt $deadline) {
   $ids = @(Get-Process olk -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   if ($ids.Count -gt 0) {
     foreach ($w in $A::RootElement.FindAll($T::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
       if ($ids -notcontains $w.Current.ProcessId) { continue }
+      $state.janela = $true
       $subjectOk = $false; $body = $null
       foreach ($e in $w.FindAll($T::Descendants, $cond)) {
         $n = [string]$e.Current.Name
+        if ($n) { $seen[$n.Substring(0, [Math]::Min(60, $n.Length))] = 1 }
         if ($n -match 'assunto|subject') {
           $v = ''
           try { $v = $e.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value } catch { }
-          if ($v.Trim() -eq ([string]$d.assunto).Trim()) { $subjectOk = $true }
-        } elseif (-not $body -and $n -match 'corpo|body') { $body = $e }
+          $nv = Norm $v
+          if ($nv) { $state.assunto = $nv }
+          if ($nv -eq $want -or ($want.Length -ge 12 -and $nv.StartsWith($want.Substring(0, 12)))) { $subjectOk = $true }
+        } elseif (-not $body -and $n -match 'corpo|body|mensagem|message') { $body = $e }
       }
       if ($subjectOk -and $body) {
+        try { [BitWin]::SetForegroundWindow([IntPtr]$w.Current.NativeWindowHandle) | Out-Null } catch { }
+        Start-Sleep -Milliseconds 300
         $body.SetFocus()
-        Start-Sleep -Milliseconds 400
-        if ($ids -notcontains $A::FocusedElement.Current.ProcessId) { Done $false 'foco' }
+        Start-Sleep -Milliseconds 500
+        # o corpo é uma página web (processo msedgewebview2): o que vale é a JANELA da frente ser do Outlook
+        $fpid = [uint32]0
+        [BitWin]::GetWindowThreadProcessId([BitWin]::GetForegroundWindow(), [ref]$fpid) | Out-Null
+        if ($ids -notcontains [int]$fpid) { Done $false 'foco' }
         [System.Windows.Forms.SendKeys]::SendWait('^v')
-        Start-Sleep -Milliseconds 600
+        Start-Sleep -Milliseconds 800
         Done $true 'colado'
       }
     }
   }
   Start-Sleep -Milliseconds 800
 }
-Done $false 'sem_janela'
+if (-not $state.janela) { Done $false 'sem_janela' }
+if ($state.assunto) { Done $false 'assunto_diferente' }
+Done $false 'sem_campos'
 """
 
 
@@ -963,17 +990,39 @@ def copy_formatted(html: str, text: str, flavor: str) -> bool:
     return clipboard_set_html(html if flavor == "novo" else images_to_files(html), text)
 
 
+OUTLOOK_REASONS = {"foco": "o Outlook não ficou na frente", "sem_janela": "não achei a janela do Outlook novo",
+                   "assunto_diferente": "achei um e-mail, mas com outro assunto",
+                   "sem_campos": "não achei os campos do e-mail", "erro": "o PowerShell falhou"}
+LAST_OUTLOOK: Dict[str, Any] = {}
+
+
+def outlook_log(info: Dict[str, Any]) -> None:
+    """Diagnóstico do último "Abrir no Outlook" (novo): %APPDATA%\\BitPC\\outlook-novo.log, sem o texto do e-mail."""
+    LAST_OUTLOOK.clear()
+    LAST_OUTLOOK.update(info)
+    try:
+        with open(os.path.join(config_dir(), "outlook-novo.log"), "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + json.dumps(info, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
 def open_new_outlook(to: str, subject: str, text: str, html: str) -> str:
-    """E-mail novo no Outlook novo: 'novo' (já colado com formato) ou 'novo_colar' (aberto; o formato está copiado)."""
+    """E-mail novo no Outlook novo: 'novo' (já colado com formato) ou 'novo_colar' (aberto; o formato está copiado).
+    v1.10: o motivo de não colar fica em LAST_OUTLOOK e no outlook-novo.log."""
     copy_formatted(html, text, "novo")
     os.startfile("mailto:" + urllib.parse.quote(to.strip(), safe="@,;") + "?subject=" + urllib.parse.quote(subject))  # type: ignore[attr-defined]
     if not subject.strip():
+        outlook_log({"ok": False, "motivo": "sem_assunto"})
         return "novo_colar"                                 # sem assunto não dá para ter certeza de qual e-mail é
     try:
         res = _powershell(NEW_OUTLOOK_PASTE_PS, {"assunto": subject, "espera": 25}, timeout=50)
-    except Exception:
+    except Exception as err:
+        outlook_log({"ok": False, "motivo": "erro", "erro": f"{type(err).__name__}: {str(err)[:200]}"})
         return "novo_colar"
-    return "novo" if isinstance(res, dict) and res.get("ok") else "novo_colar"
+    info = res if isinstance(res, dict) else {"ok": False, "motivo": "erro"}
+    outlook_log(info)
+    return "novo" if info.get("ok") else "novo_colar"
 
 
 def open_html_mail(to: str, subject: str, text: str, html: str, flavor: str = "") -> str:
@@ -2139,13 +2188,17 @@ class App:
             subject = fields["assunto"].get() if "assunto" in fields else ""
             messages = {
                 "novo": "✔ Abri no Outlook novo e colei o e-mail com o formato do modelo. Revise e envie de lá.",
-                "novo_colar": "✔ Abri o e-mail novo no Outlook e o corpo formatado já está copiado: clique no corpo e "
-                              "Ctrl+V. (Se abriu no Outlook errado: Configurações do Windows → Apps → Apps padrão → "
-                              "Outlook (new) → MAILTO.)",
+                "novo_colar": "✔ Abri o e-mail novo no Outlook, mas não consegui colar sozinho{motivo}. O corpo formatado "
+                              "JÁ ESTÁ COPIADO: clique no corpo do e-mail e Ctrl+V. (Se abriu no Outlook errado: "
+                              "Configurações do Windows → Apps → Apps padrão → Outlook (new) → MAILTO.)",
                 "outlook": "✔ Abri no Outlook, com o formato do modelo. Revise e envie de lá.",
                 "eml": "✔ Abri um rascunho já formatado (.eml). Se abrir como e-mail recebido, use \"Copiar formatado\"."}
-            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html, kind),
-                        lambda how: status.configure(text=messages.get(how, messages["eml"])))
+            def opened(how: str) -> None:
+                why = OUTLOOK_REASONS.get(str(LAST_OUTLOOK.get("motivo") or ""), "")
+                status.configure(text=messages.get(how, messages["eml"]).replace("{motivo}", f" ({why})" if why else ""))
+                if how == "novo_colar":                          # o aviso também aparece fora da janela (no Outlook)
+                    self.notice("No Outlook: clique no corpo do e-mail e aperte Ctrl+V — o e-mail formatado já está copiado.")
+            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html, kind), opened)
 
         def switch_outlook() -> None:
             self.cfg["outlook"] = "classico" if flavor() == "novo" else "novo"

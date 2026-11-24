@@ -88,5 +88,11 @@
   "itens": [
    "Resumo da manhã mostra os próximos passos com os clientes (das fichas)"
   ]
+ },
+ {
+  "versao": "13.65",
+  "itens": [
+   "Bit no PC 1.10: \"Abrir no Outlook\" (novo) cola o e-mail mesmo com o corpo rodando como página web; quando não consegue, avisa o motivo e deixa o e-mail copiado"
+  ]
  }
 ]

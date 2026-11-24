@@ -147,3 +147,13 @@ def test_meeting_window_titles():
     assert m("Zoom Meeting") == "Zoom" and m("Meet - abc-defg-hij - Google Chrome") == "Google Meet"
     assert m("Webex") == "Webex"
     assert m("Chat | Microsoft Teams") == "" and m("Caixa de entrada - Outlook") == "" and m("") == ""
+
+
+def test_new_outlook_diagnostics_are_logged(tmp_path, monkeypatch):
+    """v1.10: quando o Bit não consegue colar no Outlook novo, o motivo vai para a janela e para outlook-novo.log."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    bit_pc.outlook_log({"ok": False, "motivo": "foco", "campos": ["Para", "Adicionar um assunto"]})
+    assert bit_pc.LAST_OUTLOOK["motivo"] == "foco" and "foco" in bit_pc.OUTLOOK_REASONS
+    log = (tmp_path / "BitPC" / "outlook-novo.log").read_text(encoding="utf-8")
+    assert '"motivo": "foco"' in log and "Adicionar um assunto" in log
+    assert "msedgewebview2" in bit_pc.NEW_OUTLOOK_PASTE_PS and "GetForegroundWindow" in bit_pc.NEW_OUTLOOK_PASTE_PS

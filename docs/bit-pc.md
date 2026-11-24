@@ -109,6 +109,8 @@ pronto sai igual ao modelo.
     - **Outlook clássico:** pelo próprio Outlook (automação COM);
     - o Bit escolhe pelo Outlook que está aberto; para fixar, clique em **Outlook: novo/clássico (trocar)** na janela;
     - se o e-mail abrir no Outlook errado: Configurações do Windows → Apps → Apps padrão → Outlook (new) → `MAILTO`;
+    - se não colar sozinho, a janela diz o motivo e um aviso lembra o `Ctrl+V` (o e-mail formatado fica copiado). O
+      diagnóstico, sem o texto do e-mail, fica em `%APPDATA%\BitPC\outlook-novo.log` (v1.10);
     - sem nenhum dos dois, abre um rascunho `.eml`;
   - **Ver:** mostra no navegador como vai ficar;
   - **Só o texto:** copia o que está na caixa. As edições feitas na caixa valem para essa opção.
