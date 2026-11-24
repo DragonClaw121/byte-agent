@@ -94,5 +94,11 @@
   "itens": [
    "Bit no PC 1.10: \"Abrir no Outlook\" (novo) cola o e-mail mesmo com o corpo rodando como página web; quando não consegue, avisa o motivo e deixa o e-mail copiado"
   ]
+ },
+ {
+  "versao": "13.66",
+  "itens": [
+   "Segurança: o código que o agente roda (com aprovação) só recebe o ambiente mínimo, sem nenhuma senha ou chave"
+  ]
  }
 ]

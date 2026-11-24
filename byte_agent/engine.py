@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.65"
+BYTE_VERSION = "13.66"
 
 
 def _note_failure(where: str, err: BaseException) -> None:
@@ -5005,11 +5005,18 @@ class MultiFrameGameTerminal:
         self._fast: Optional[Dict[str, Any]] = None   # worker persistente do modo rápido
         self._init_default_state()
 
-    _SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+    # v13.66: também os nomes em português (BYTE_EMAIL_SENHA_*, BYTE_CHAVE_*) e outros formatos de credencial
+    _SECRET_ENV_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS\b|PWD|CREDENTIAL|CREDENCIAL|SENHA|CHAVE|AUTH|"
+                                r"COOKIE|PRIVATE|SEGREDO|CONNECTION_?STRING|DSN|_URL_?SECRET|SAS)", re.IGNORECASE)
+    _SAFE_ENV = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "TEMP", "TMP", "PYTHONIOENCODING", "SYSTEMROOT",
+                 "USERPROFILE", "APPDATA", "LOCALAPPDATA", "DISPLAY", "SDL_VIDEODRIVER", "SDL_AUDIODRIVER"}
 
     def _child_env(self) -> Dict[str, str]:
-        """Ambiente do subprocesso sem variáveis com cara de credencial (API keys, tokens, senhas)."""
-        return {k: v for k, v in os.environ.items() if not self._SECRET_ENV_RE.search(k)}
+        """Ambiente do subprocesso: só o necessário para rodar (v13.66: lista do que PODE passar, em vez de tentar
+        adivinhar o que é segredo; e mesmo nessa lista, nada com cara de credencial)."""
+        return {k: v for k, v in os.environ.items()
+                if (k.upper() in self._SAFE_ENV or k.upper().startswith(("LC_", "PYTHON", "SDL_")))
+                and not self._SECRET_ENV_RE.search(k)}
 
     def _run_bounded(self, argv: List[str], timeout_s: float) -> Tuple[int, str, str, bool]:
         """Executa argv e devolve (returncode, stdout, stderr, estourou_tempo).
