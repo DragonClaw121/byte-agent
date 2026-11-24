@@ -226,7 +226,7 @@ dados são salvos antes). Commit com teste falhando nunca é instalado. Para lig
 ```
 az containerapp update -g byte-rg -n byte --set-env-vars BYTE_GITHUB_REPO=DragonClaw121/byte-agent -o none
 ```
-- `BYTE_GITHUB_INTERVALO_H` muda o intervalo (padrão 6; `0` = só ao ligar). `BYTE_GITHUB_BRANCH` muda o branch.
+- `BYTE_GITHUB_INTERVALO_H` muda o intervalo (padrão 1 hora desde a v13.57; `0` = só ao ligar). `BYTE_GITHUB_BRANCH` muda o branch.
 - Para forçar agora: mande `/atualizar` no Telegram (v13.17), ou reinicie a revisão (ela confere ao ligar). Ao terminar,
   a Byte avisa no Telegram: "✅ Atualizei: v13.16 → v13.17".
 - A cópia baixada fica no compartilhamento (`byte-agent-github.zip`, versão em `github-versao.txt`): se o GitHub
@@ -256,9 +256,9 @@ O script guarda o token nos Segredos, põe o Bit em `BYTE_AGENTES` e aumenta o c
 mesmos: memórias, tarefas e contas de e-mail.
 
 - A Matrix não troca mais para quem roda à parte: `/agente bit` responde que ele tem o bot próprio.
-- **Byte:** `bash agentes-separados.sh byte` só quando a live estiver pronta (Fase 4). Ela usa um bot próprio
-  (`VTUBER_TELEGRAM_*`), porque o manifesto dela aponta para o bot da Matrix, e dois processos no mesmo bot se
-  derrubam.
+- **Byte (v13.57):** roda sempre à parte, com painel, API e `/u/byte` próprios (`BYTE_BYTE=0` desliga). Sem bot
+  próprio, o Telegram dela fica desligado; para ligar, `bash agentes-separados.sh byte` com o token de um bot novo
+  (`VTUBER_TELEGRAM_*`). Ela nunca usa o bot da Matrix: dois processos no mesmo bot se derrubam.
 - Os links dos painéis de cada agente aparecem nos logs:
   ```
   az containerapp logs show -g byte-rg -n byte --tail 80 | grep Painel
@@ -324,3 +324,17 @@ Na aba **Agenda** do painel, a seção **📝 Reuniões** tem:
 - a **lista das reuniões**, com a ata e o botão **⬇️ Baixar a ata (.docx)**;
 - o estado da transcrição, o atalho para conectar as transcrições do Teams e o OneDrive ou Drive automático (ligar e
   desligar).
+
+
+## Cópias de segurança e memória (v13.57)
+- **Cópias:** a cada 5 minutos o supervisor salva `byte-dados.tar.gz` (e guarda a anterior). Agora também guarda, em
+  `copias/`, **uma cópia por dia** dos últimos 7 dias e uma por semana das 4 semanas anteriores. Se a cópia principal
+  estiver corrompida, o boot usa a anterior e, depois, as diárias. A cópia é montada no disco local, e não mais na
+  memória, e só substitui a anterior depois de conferida. `/saude` mostra quantas cópias diárias existem.
+- **Memória:** `/saude` mostra a memória do servidor (como a Azure conta) e a de cada agente; `/saude todos` mostra a de
+  todos. Acima de 80%, a Matrix avisa (no máximo a cada 12 h). Para dar folga:
+  ```
+  az containerapp update -g byte-rg -n byte --cpu 1 --memory 2Gi
+  ```
+- **Atualização:** a nuvem confere o GitHub a cada **1 hora** (antes, 6). Continua instalando só versões com os testes
+  verdes.

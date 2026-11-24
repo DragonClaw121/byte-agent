@@ -164,6 +164,66 @@ def _ago(seconds: Optional[int]) -> str:
     return f"há {seconds // 3600} h"
 
 
+MEMORY_WARN = 0.80                       # v13.57: acima disso o /saude avisa; acima de 90% o servidor arrisca reiniciar
+
+
+def _read_int(path: str) -> Optional[int]:
+    try:
+        with open(path) as fh:
+            raw = fh.read().strip()
+        return None if raw in ("", "max") else int(raw)
+    except (OSError, ValueError):
+        return None
+
+
+def memory_usage(cgroup_root: str = "/sys/fs/cgroup", proc_status: str = "/proc/self/status") -> Dict[str, Any]:
+    """Memória do contêiner inteiro (cgroup v2 ou v1) e deste processo (RSS), em MB. Fora de contêiner: só o processo."""
+    used = _read_int(f"{cgroup_root}/memory.current")
+    limit = _read_int(f"{cgroup_root}/memory.max")
+    if used is None:                                         # cgroup v1
+        used = _read_int(f"{cgroup_root}/memory/memory.usage_in_bytes")
+        limit = _read_int(f"{cgroup_root}/memory/memory.limit_in_bytes")
+    if limit is not None and limit > 1 << 50:                # "sem limite" no v1 é um número gigante
+        limit = None
+    if used is not None:                                     # como a Azure conta: sem o cache de arquivos ocioso
+        for stat in (f"{cgroup_root}/memory.stat", f"{cgroup_root}/memory/memory.stat"):
+            try:
+                with open(stat) as fh:
+                    vals = dict(line.split()[:2] for line in fh if len(line.split()) >= 2)
+            except OSError:
+                continue
+            inactive = int(vals.get("inactive_file") or vals.get("total_inactive_file") or 0)
+            used = max(0, used - inactive)
+            break
+    rss = None
+    try:
+        with open(proc_status) as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) * 1024
+                    break
+    except (OSError, ValueError):
+        pass
+    mb = lambda v: None if v is None else round(v / 1048576)      # noqa: E731
+    share = round(used / limit, 3) if used and limit else None
+    return {"container_mb": mb(used), "limit_mb": mb(limit), "share": share, "process_mb": mb(rss)}
+
+
+def backups_info() -> Optional[Dict[str, Any]]:
+    """Cópias diárias dos dados (só na nuvem, onde o supervisor as guarda)."""
+    import os
+    from pathlib import Path
+    base = os.environ.get("BYTE_DADOS_PERSISTENTES", "").strip()
+    if not base:
+        return None
+    try:
+        from .nuvem import list_backups
+        items = list_backups(Path(base))
+    except Exception:
+        return None
+    return {"count": len(items), "latest": items[0]["dia"] if items else "", "oldest": items[-1]["dia"] if items else ""}
+
+
 def health(service: Any) -> Dict[str, Any]:
     from . import engine
     sched = getattr(service, "scheduler", None)
@@ -190,9 +250,10 @@ def health(service: Any) -> Dict[str, Any]:
         "llm": {"ready": bool(llm.llm_ready()), "model": f"{getattr(llm, 'active_provider', '?')}:{getattr(llm, 'active_model', '?')}"},
         "memory_engine": service.db.vector_engine.engine_id(), "tokens_today": tokens, "token_budget": budget,
         "pending_approvals": pending, "db_kb": size_kb, "jobs": jobs,
-        "cache": {"hits": SHARED.hits, "misses": SHARED.misses},
+        "cache": {"hits": SHARED.hits, "misses": SHARED.misses}, "ram": memory_usage(), "backups": backups_info(),
     }
-    out["ok"] = out["llm"]["ready"] and not any(j["failures"] >= ALERT_AFTER for j in jobs)
+    out["ok"] = out["llm"]["ready"] and not any(j["failures"] >= ALERT_AFTER for j in jobs) \
+        and (out["ram"]["share"] or 0) < 0.9
     return out
 
 
@@ -201,6 +262,18 @@ def format_health(h: Dict[str, Any]) -> str:
     lines = [f"{'🟢' if h['ok'] else '🟠'} {h['agent']} v{h['version']} · no ar há {up // 3600} h {up % 3600 // 60} min",
              f"🧠 Modelo: {h['llm']['model']} ({'pronto' if h['llm']['ready'] else 'FORA DO AR'})",
              f"🔎 Memória: {'por significado (Azure)' if 'azure' in h['memory_engine'] else 'por palavras' if h['memory_engine'] == 'hash-v1' else h['memory_engine']}"]
+    ram = h.get("ram") or {}
+    if ram.get("share") is not None:
+        lines.append(f"{'⚠️' if ram['share'] >= MEMORY_WARN else '🧮'} Memória do servidor: {ram['container_mb']} de "
+                     f"{ram['limit_mb']} MB ({round(ram['share'] * 100)}%)"
+                     + (f" · este agente: {ram['process_mb']} MB" if ram.get("process_mb") else "")
+                     + (" — perto do limite: suba o contêiner para 2 GiB ou desligue um agente" if ram["share"] >= MEMORY_WARN else ""))
+    elif ram.get("process_mb"):
+        lines.append(f"🧮 Memória deste agente: {ram['process_mb']} MB")
+    bk = h.get("backups")
+    if bk is not None:
+        lines.append(f"💾 Cópias diárias dos dados: {bk['count']}" + (f" (de {bk['oldest']} a {bk['latest']})" if bk["count"] else
+                                                                       " — a primeira sai no próximo salvamento"))
     if h["tokens_today"] is not None:
         lines.append(f"💸 Tokens hoje: {h['tokens_today']:,}".replace(",", ".")
                      + (f" de {h['token_budget']:,} da autonomia".replace(",", ".") if h.get("token_budget") else ""))
@@ -238,7 +311,9 @@ def publish_health(service: Any) -> None:
     agent_id = ((engine.ACTIVE_AGENT or {}).get("id") or "matrix").lower()
     data = {"agent": h["agent"], "version": h["version"], "ok": h["ok"], "at": time.time(), "llm_ready": h["llm"]["ready"],
             "failing": [j["label"] for j in h["jobs"] if j["failures"] >= ALERT_AFTER],
-            "pending_approvals": h["pending_approvals"], "tokens_today": h["tokens_today"]}
+            "pending_approvals": h["pending_approvals"], "tokens_today": h["tokens_today"],
+            "process_mb": h["ram"]["process_mb"], "container_share": h["ram"]["share"],
+            "container_mb": h["ram"]["container_mb"], "limit_mb": h["ram"]["limit_mb"]}
     tmp = folder / f".{agent_id}.tmp"
     tmp.write_text(json.dumps(data, ensure_ascii=False))
     tmp.replace(folder / f"{agent_id}.json")
@@ -276,8 +351,31 @@ def format_family(items: List[Dict[str, Any]], now: Optional[float] = None) -> s
         else:
             icon, state = "🟢", "tudo certo"
         extra = f" · {it['pending_approvals']} aprovação(ões) esperando" if it.get("pending_approvals") else ""
+        extra += f" · {it['process_mb']} MB" if it.get("process_mb") else ""
         lines.append(f"{icon} {it['agent']} v{it.get('version', '?')}: {state}{extra}")
+    fresh = [it for it in items if not it["stale"] and it.get("container_share") is not None]
+    if fresh:
+        top = max(fresh, key=lambda it: float(it.get("at") or 0))
+        share = float(top["container_share"])
+        lines.append(f"{'⚠️' if share >= MEMORY_WARN else '🧮'} Servidor: {top.get('container_mb')} de {top.get('limit_mb')} MB "
+                     f"de memória ({round(share * 100)}%)" + (" — perto do limite" if share >= MEMORY_WARN else ""))
     return "\n".join(lines)
+
+
+def memory_alert(service: Any) -> Optional[str]:
+    """Na Matrix: avisa (no máximo a cada 12 h) quando o contêiner passa de 80% da memória."""
+    ram = memory_usage()
+    if ram["share"] is None or ram["share"] < MEMORY_WARN:
+        return None
+    last = float(service.db.get_setting("saude.alerta_memoria", 0) or 0)
+    if time.time() - last < 12 * 3600:
+        return None
+    service.db.set_setting("saude.alerta_memoria", time.time())
+    text = (f"⚠️ A memória do servidor está em {round(ram['share'] * 100)}% ({ram['container_mb']} de {ram['limit_mb']} MB). "
+            "Perto de 100% o contêiner reinicia sozinho. Veja /saude todos; para folga, suba para 2 GiB "
+            "(az containerapp update -g byte-rg -n byte --cpu 1 --memory 2Gi) ou desligue um agente.")
+    service.db.enqueue_proactive_message("saude", text, brain_used="SAÚDE")
+    return text
 
 
 def install(service: Any, share: bool = True) -> Scheduler:
@@ -287,6 +385,9 @@ def install(service: Any, share: bool = True) -> Scheduler:
     service.proactive_engine.background_jobs.append(sched.tick)
     if share and family_dir() is not None:                         # na nuvem: cada agente conta como está, a Matrix lê todos
         sched.add("saude_compartilhada", 240, lambda: publish_health(service), label="Saúde compartilhada")
+        from . import engine as _engine
+        if ((_engine.ACTIVE_AGENT or {}).get("id") or "matrix").lower() == "matrix":
+            sched.add("memoria_servidor", 600, lambda: memory_alert(service), label="Memória do servidor")
 
     def act_health(payload: Dict[str, Any]) -> Dict[str, Any]:
         if payload.get("todos"):

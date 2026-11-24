@@ -90,3 +90,21 @@ def test_family_health_shared_through_storage(tmp_path, monkeypatch):
         svc.proactive_engine.stop()
         fake.httpd.shutdown()
         engine.apply_profile("pessoal")
+
+
+def test_memory_usage_reads_the_container_limits(tmp_path):
+    """v13.57: memória do contêiner (como a Azure conta: sem o cache ocioso) e alerta acima de 80%."""
+    from byte_agent import relogio as r
+    (tmp_path / "memory.current").write_text(str(900 * 1048576))
+    (tmp_path / "memory.max").write_text(str(1024 * 1048576))
+    (tmp_path / "memory.stat").write_text(f"anon 1\ninactive_file {100 * 1048576}\n")
+    status = tmp_path / "status"
+    status.write_text("Name: python\nVmRSS:\t  153600 kB\n")
+    ram = r.memory_usage(str(tmp_path), str(status))
+    assert ram == {"container_mb": 800, "limit_mb": 1024, "share": 0.781, "process_mb": 150}
+    (tmp_path / "memory.max").write_text("max")
+    assert r.memory_usage(str(tmp_path), str(status))["share"] is None
+    text = r.format_health({"ok": True, "agent": "Matrix", "version": "x", "uptime_s": 60, "memory_engine": "hash-v1",
+                            "llm": {"ready": True, "model": "azure:m"}, "tokens_today": None, "pending_approvals": 0,
+                            "jobs": [], "ram": {"container_mb": 900, "limit_mb": 1024, "share": 0.88, "process_mb": 150}})
+    assert "⚠️ Memória do servidor: 900 de 1024 MB (88%)" in text and "2 GiB" in text

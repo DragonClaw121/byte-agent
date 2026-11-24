@@ -1,6 +1,7 @@
 """v13.4: Byte em contêiner (Azure Container Apps): dados persistentes e supervisor."""
 import json
 import io
+from datetime import date
 import sqlite3
 import sys
 import tarfile
@@ -42,6 +43,27 @@ def test_snapshot_and_restore_with_the_database_open(tmp_path):
     rows = sqlite3.connect(str(new_home / ".byte-agent" / "byte.db")).execute("SELECT texto FROM memorias").fetchall()
     assert rows == [("gosta de café",), ("mora em SP",)]
     assert (new_home / ".byte-agents" / "kronus" / "notas.txt").read_text() == "oi"
+
+
+def test_daily_and_weekly_copies_and_corrupted_snapshot_falls_back(tmp_path):
+    """v13.57: 7 cópias diárias + 4 semanais; cópia principal corrompida -> restaura a anterior, sem travar o boot."""
+    import time as _time
+    home, store = tmp_path / "home", tmp_path / "store"
+    conn = make_home(home)
+    day0 = _time.mktime((2026, 10, 1, 12, 0, 0, 0, 0, -1))
+    for i in range(40):                                        # 40 dias seguidos, várias cópias por dia
+        for h in (0, 3600):
+            nuvem.snapshot(home, store, now=day0 + i * 86400 + h)
+    conn.close()
+    days = [b["dia"] for b in nuvem.list_backups(store)]
+    assert days[:7] == [f"2026-11-{d:02d}" for d in range(9, 2, -1)] and len(days) == 7 + 4
+    assert len(set(date.fromisoformat(d).isocalendar()[:2] for d in days[7:])) == 4      # uma por semana
+    (store / nuvem.SNAPSHOT).write_bytes((store / nuvem.SNAPSHOT).read_bytes()[:200])   # cortada ao meio
+    restored = nuvem.restore(tmp_path / "novo", store)
+    assert restored.name == nuvem.SNAPSHOT + ".anterior"
+    assert (tmp_path / "novo" / ".byte-agents" / "kronus" / "notas.txt").read_text() == "oi"
+    (store / (nuvem.SNAPSHOT + ".anterior")).write_bytes(b"lixo")
+    assert nuvem.restore(tmp_path / "novo2", store).parent.name == nuvem.BACKUP_DIR     # cai na diária
 
 
 def test_first_start_restores_the_notebook_backup_and_ignores_unsafe_entries(tmp_path):
@@ -367,8 +389,11 @@ def test_each_agent_in_its_own_process():
     envs = nuvem.child_envs(env, procs)
     assert envs["principal"]["BYTE_AGENTES_SEPARADOS"] == "kronus,bit,byte"
     assert envs["byte"] == {"BYTE_TELEGRAM_TOKEN": "123:abc", "BYTE_TELEGRAM_CHAT_IDS": "42"}
-    assert list(nuvem.commands({"BYTE_MODEL": "x"})) == ["principal", "kronus"]             # padrão de antes
+    assert list(nuvem.commands({"BYTE_MODEL": "x"})) == ["principal", "kronus", "byte"]     # v13.57: a Byte sempre
+    assert list(nuvem.commands({"BYTE_MODEL": "x", "BYTE_BYTE": "0"})) == ["principal", "kronus"]
     assert "bit" not in nuvem.child_envs({}, nuvem.commands({"BYTE_MODEL": "x"}))
+    no_bot = nuvem.child_envs({}, nuvem.commands({"BYTE_MODEL": "x", "BYTE_AGENTES": "kronus,bit"}))
+    assert no_bot["byte"]["BYTE_TELEGRAM_TOKEN"] == ""          # sem bot próprio: Telegram desligado (nunca o da Matrix)
 
 
 def test_panel_tokens_cover_every_agent(tmp_path):
@@ -392,7 +417,8 @@ def test_matrix_gets_the_panel_links_of_agents_running_apart(tmp_path):
         links = _json.loads(sup.child_env["principal"]["BYTE_PAINEIS"])
         tokens = nuvem.panel_tokens(tmp_path / "store")
         assert links == {"kronus": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['kronus']}",
-                         "bit": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['bit']}"}
+                         "bit": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['bit']}",
+                         "byte": f"https://byte.x.azurecontainerapps.io/ui?token={tokens['byte']}"}
         assert sup.child_env["bit"]["BYTE_UI_TOKEN"] == tokens["bit"]
     finally:
         sup.router.stop()

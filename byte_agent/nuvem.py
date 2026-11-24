@@ -9,7 +9,7 @@ rede. Então este supervisor:
      armazenamento (bancos SQLite copiados pela API de backup, troca atômica do arquivo);
   4. religa um processo que cair;
   6. com BYTE_GITHUB_REPO=dono/repositorio, atualiza sozinho: ao ligar e a cada BYTE_GITHUB_INTERVALO_H horas (padrão
-     6; 0 = só ao ligar) procura o commit mais novo do branch (BYTE_GITHUB_BRANCH, padrão main) cujos testes PASSARAM
+     1 desde a v13.57; 0 = só ao ligar) procura o commit mais novo do branch (BYTE_GITHUB_BRANCH, padrão main) cujos testes PASSARAM
      no GitHub, baixa, instala e reinicia os agentes. Commit com teste falhando nunca é instalado. A cópia baixada
      fica no armazenamento (byte-agent-github.zip): se o GitHub estiver fora do ar, a Byte liga com ela.
   5. com BYTE_PAINEL_REMOTO=1, abre os painéis pelo endereço HTTPS do contêiner: um roteador na porta pública manda
@@ -26,7 +26,6 @@ from __future__ import annotations
 import hmac
 import http.client
 import http.server
-import io
 import json
 import os
 import re
@@ -45,6 +44,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SNAPSHOT = "byte-dados.tar.gz"
@@ -78,14 +78,42 @@ def _safe_members(tar: tarfile.TarFile) -> List[tarfile.TarInfo]:
     return ok
 
 
+BACKUP_DIR = "copias"                                         # v13.57: cópias diárias e semanais
+KEEP_DAILY, KEEP_WEEKLY = 7, 4
+
+
+def _readable(path: Path) -> bool:
+    """O .tar.gz abre e lista até o fim (um arquivo cortado ao meio falha aqui, não no meio da restauração)."""
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            return bool(_safe_members(tar))
+    except (OSError, tarfile.TarError, EOFError):
+        return False
+
+
+def restore_candidates(store: Path) -> List[Path]:
+    """Em ordem de preferência: a cópia atual, a anterior (5 min antes), as diárias/semanais e os `byte backup`."""
+    found = [store / SNAPSHOT, store / (SNAPSHOT + ".anterior")]
+    folder = store / BACKUP_DIR
+    if folder.is_dir():
+        found += sorted(folder.glob("byte-dados-*.tar.gz"), key=lambda p: p.name, reverse=True)
+    found += sorted(store.glob("byte-20*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return [p for p in found if p.is_file()]
+
+
 def restore(home: Path, store: Path) -> Optional[Path]:
-    """Restaura o snapshot do supervisor; se ainda não existir, o backup mais novo gerado por `byte backup`."""
-    candidates = [store / SNAPSHOT] if (store / SNAPSHOT).is_file() else sorted(
-        store.glob("byte-20*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True)[:1]
+    """Restaura a cópia mais nova que esteja inteira (v13.57: se a principal estiver corrompida, usa a anterior, depois as
+    diárias); sem nenhuma, o backup mais novo gerado por `byte backup`."""
+    candidates = restore_candidates(store)
     if not candidates:
         log(f"Nenhum dado salvo em {store}: começando do zero.")
         return None
-    source = candidates[0]
+    source = next((c for c in candidates if _readable(c)), None)
+    if source is None:
+        log("⚠️ Nenhuma cópia dos dados abre (todas corrompidas?): começando do zero, sem apagar as cópias.")
+        return None
+    if source != candidates[0]:
+        log(f"⚠️ {candidates[0].name} está corrompida: restaurando de {source.name}.")
     with tarfile.open(source, "r:gz") as tar:
         members = _safe_members(tar)
         for m in members:
@@ -118,34 +146,79 @@ def _add_file(tar: tarfile.TarFile, path: Path, arcname: str) -> None:
     tar.add(str(path), arcname=arcname)
 
 
-def snapshot(home: Path, store: Path) -> Optional[Path]:
-    """Salva os dados em store/byte-dados.tar.gz (escreve num temporário e troca de uma vez; guarda a cópia anterior)."""
+def snapshot(home: Path, store: Path, now: Optional[float] = None) -> Optional[Path]:
+    """Salva os dados em store/byte-dados.tar.gz. v13.57: monta a cópia num arquivo temporário do disco local (não mais
+    na memória: com 1 GiB e 4 agentes, a cópia em memória era um pico perigoso), confere se abre e só então troca;
+    guarda a anterior e, uma vez por dia, uma cópia em copias/ (7 diárias + 4 semanais)."""
     store.mkdir(parents=True, exist_ok=True)
-    buf = io.BytesIO()
     count = 0
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for d in DATA_DIRS:
-            root = home / d
-            if not root.is_dir():
-                continue
-            for path in sorted(root.rglob("*")):
-                rel = path.relative_to(home)
-                if any(p in SKIP_DIRS for p in rel.parts) or path.name.endswith(SKIP_SUFFIXES) or not path.is_file():
+    with tempfile.TemporaryDirectory(prefix="byte-copia-") as work:
+        local = Path(work) / SNAPSHOT
+        with tarfile.open(local, mode="w:gz") as tar:
+            for d in DATA_DIRS:
+                root = home / d
+                if not root.is_dir():
                     continue
-                try:
-                    _add_file(tar, path, str(rel))
-                    count += 1
-                except (OSError, sqlite3.Error) as err:
-                    log(f"Aviso: {rel} não entrou na cópia ({type(err).__name__}).")
-    if not count:
-        return None
-    final = store / SNAPSHOT
-    tmp = store / (SNAPSHOT + ".novo")
-    tmp.write_bytes(buf.getvalue())
-    if final.exists():
-        os.replace(final, store / (SNAPSHOT + ".anterior"))
-    os.replace(tmp, final)
+                for path in sorted(root.rglob("*")):
+                    rel = path.relative_to(home)
+                    if any(p in SKIP_DIRS for p in rel.parts) or path.name.endswith(SKIP_SUFFIXES) or not path.is_file():
+                        continue
+                    try:
+                        _add_file(tar, path, str(rel))
+                        count += 1
+                    except (OSError, sqlite3.Error) as err:
+                        log(f"Aviso: {rel} não entrou na cópia ({type(err).__name__}).")
+        if not count:
+            return None
+        if not _readable(local):
+            log("⚠️ A cópia nova saiu corrompida: mantive a anterior.")
+            return None
+        final = store / SNAPSHOT
+        tmp = store / (SNAPSHOT + ".novo")
+        shutil.copyfile(local, tmp)
+        if final.exists():
+            os.replace(final, store / (SNAPSHOT + ".anterior"))
+        os.replace(tmp, final)
+    try:
+        keep_daily(store, final, now)
+    except OSError as err:
+        log(f"Aviso: cópia diária não saiu ({type(err).__name__}).")
     return final
+
+
+def keep_daily(store: Path, final: Path, now: Optional[float] = None) -> Optional[Path]:
+    """Uma cópia por dia em copias/byte-dados-AAAA-MM-DD.tar.gz; guarda as 7 últimas e, das mais velhas, uma por semana
+    (as 4 últimas semanas). Assim um erro que apague dados não leva junto todas as cópias em 10 minutos."""
+    stamp = time.localtime(time.time() if now is None else now)
+    folder = store / BACKUP_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    today = folder / f"byte-dados-{time.strftime('%Y-%m-%d', stamp)}.tar.gz"
+    made = None
+    if not today.exists():
+        tmp = folder / (today.name + ".novo")
+        shutil.copyfile(final, tmp)
+        os.replace(tmp, today)
+        made = today
+    days = sorted(folder.glob("byte-dados-*.tar.gz"), key=lambda p: p.name, reverse=True)
+    keep = set(days[:KEEP_DAILY])
+    weeks: Dict[str, Path] = {}
+    for p in days[KEEP_DAILY:]:
+        try:
+            year, week, _ = date(*time.strptime(p.name[11:21], "%Y-%m-%d")[:3]).isocalendar()
+        except ValueError:
+            continue
+        weeks.setdefault(f"{year}-{week}", p)                  # a mais nova de cada semana
+    keep |= set(list(weeks.values())[:KEEP_WEEKLY])
+    for p in days:
+        if p not in keep:
+            p.unlink(missing_ok=True)
+    return made
+
+
+def list_backups(store: Path) -> List[Dict[str, Any]]:
+    folder = store / BACKUP_DIR
+    items = sorted(folder.glob("byte-dados-*.tar.gz"), key=lambda p: p.name, reverse=True) if folder.is_dir() else []
+    return [{"dia": p.name[11:21], "kb": p.stat().st_size // 1024} for p in items]
 
 
 # ---------------------------------------------------------------- processos
@@ -162,6 +235,7 @@ def public_port(env: Dict[str, str]) -> int:
 
 # v13.32 (R0.3): cada agente no seu processo, para todos trabalharem ao mesmo tempo (antes Bit e Byte só funcionavam
 # quando "ativos" no processo da Matrix). BYTE_AGENTES escolhe quem roda à parte: padrão "kronus"; ex.: "kronus,bit".
+# A Byte roda à parte sempre (v13.57), a menos que BYTE_BYTE=0.
 SEPARATE_AGENTS = {"kronus": KRONUS_INTERNAL_PORT, "bit": 8774, "byte": 8775}
 
 
@@ -170,6 +244,10 @@ def separate_agents(env: Dict[str, str]) -> List[str]:
     wanted = [a.strip().lower() for a in raw.replace(";", ",").split(",") if a.strip()]
     if env.get("BYTE_KRONUS", "1") == "0":
         wanted = [a for a in wanted if a != "kronus"]
+    # v13.57: a Byte sempre tem a instância dela (painel, API e /u/byte), mesmo sem bot próprio do Telegram: sem
+    # VTUBER_TELEGRAM_TOKEN o Telegram dela fica desligado (nunca usa o bot da Matrix). BYTE_BYTE=0 desliga.
+    if env.get("BYTE_BYTE", "1") != "0" and "byte" not in wanted:
+        wanted.append("byte")
     return [a for a in SEPARATE_AGENTS if a in wanted]
 
 
@@ -654,9 +732,9 @@ def main() -> int:
     restore(home, store)
     interval = max(10.0, float(env.get("BYTE_SINCRONIZAR_MIN", "5") or 5) * 60.0)
     try:
-        hours = float(env.get("BYTE_GITHUB_INTERVALO_H", "6") or 0)
+        hours = float(env.get("BYTE_GITHUB_INTERVALO_H", "1") or 0)
     except ValueError:
-        hours = 6.0
+        hours = 1.0
     update_every = max(0.25, hours) * 3600.0 if hours > 0 else 0.0
     return Supervisor(home, store, workdir, env, interval, updater=updater, update_interval_s=update_every).run()
 
