@@ -249,7 +249,7 @@ class Alerts:
         today = datetime.fromtimestamp(now).date()
         cfg = config(self.db)
         marks = sorted({int(x) for x in cfg["renovacao_dias"] if int(x) >= 0}, reverse=True)
-        sent, out = self._sent(), []
+        sent, out, actions = self._sent(), [], []
         for item in upcoming(book, max(marks or [0]), today=today):
             left = item["dias"]
             if left < 0:
@@ -265,6 +265,9 @@ class Alerts:
                 continue
             sent[key] = now
             when = "hoje" if left == 0 else "amanhã" if left == 1 else f"em {left} dias"
+            if len(actions) < 3:                                  # v13.68: um toque prepara o e-mail de renovação
+                actions.append({"label": f"✉️ Renovação — {item['cliente']}"[:40],
+                                "data": f"cs:ren:{item['n']}:{item['data'].replace('-', '')}"})
             out.append(f"🔁 {item['cliente']}: {KIND_LABEL[item['tipo']]}"
                        + (f" de {item['descricao']}" if item["descricao"] else "") + f" {when} ({human(item['data'])}"
                        + (", data estimada" if item.get("estimada") else "") + ").")
@@ -274,16 +277,18 @@ class Alerts:
                 idle = stale(book, int(cfg["sem_contato_dias"]), now)
                 self.db.set_setting("fichas.sem_contato_em", now)
                 if idle:
+                    for i in idle[:3 - min(3, len(actions))]:
+                        actions.append({"label": f"✉️ Follow-up — {i['cliente']}"[:40], "data": f"cs:fup:{i['n']}"})
                     lines = [f"• {i['cliente']} — " + (f"{i['dias']} dias sem contato" if not i["nunca"]
                                                      else f"sem contato registrado há {i['dias']} dias") for i in idle[:8]]
                     out.append(f"📇 Clientes sem contato há {cfg['sem_contato_dias']}+ dias:\n" + "\n".join(lines)
                                + ("\n…e mais." if len(idle) > 8 else "")
-                               + "\nPeça \"e-mail de follow-up para <cliente> no meu modelo\" que eu preparo.")
+                               + "\nToque num botão abaixo (ou peça \"e-mail de follow-up para <cliente>\") que eu preparo.")
         cutoff = now - 400 * 86400
         self.db.set_setting(SETTING_SENT, {k: v for k, v in sent.items() if v > cutoff})
         if out:
             text = "\n\n".join(out)
             if any(m.startswith("🔁") for m in out):
-                text += "\n\nQuer que eu prepare o e-mail de renovação? Peça no Bit (ex.: \"e-mail de renovação para a EMS\")."
-            self.db.enqueue_proactive_message("clientes", text, brain_used="CLIENTES")
+                text += "\n\nQuer que eu prepare o e-mail de renovação? Toque no botão (ele só prepara: o envio é seu)."
+            self.db.enqueue_proactive_message("clientes", text, brain_used="CLIENTES", actions=actions)
         return out

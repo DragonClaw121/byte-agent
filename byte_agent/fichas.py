@@ -372,6 +372,31 @@ def install(service: Any) -> ClientBook:
     service.extra_actions.update({"client_cards": act_list, "client_card": act_get, "client_note": act_note,
                                   "client_card_delete": act_delete, "client_date": act_date, "client_renewals": act_renewals,
                                   "client_alerts": act_alerts})
+    def act_action(p: Dict[str, Any]) -> Dict[str, Any]:
+        """v13.68: botão de um aviso de cliente — "ren:<n>:<AAAAMMDD>" (renovação) ou "fup:<n>" (follow-up). Só PREPARA
+        o e-mail (no modelo do usuário, com a ficha); o envio é sempre dele."""
+        from .fichas_datas import human
+        kind, _, rest = str(p.get("data") or "").partition(":")
+        num, _, day = rest.partition(":")
+        card = book.get(num)
+        if kind == "ren":
+            item = next((d for d in card["datas"] if d["data"].replace("-", "") == day), None)
+            what = (f"de {item['descricao']} " if item and item.get("descricao") else "") + \
+                   (f"que renova em {human(item['data'])}" if item else "")
+            ask = f"Escreva o e-mail de renovação {what} para o cliente {card['nome']}, no meu modelo."
+        elif kind == "fup":
+            ask = f"Escreva um e-mail de follow-up para o cliente {card['nome']} (estamos sem contato há um tempo), no meu modelo."
+        else:
+            raise ValueError("Ação desconhecida.")
+        hub = getattr(service, "pc_hub", None)
+        if hub is None:
+            raise ValueError("Preparar e-mail está disponível no Bit (trabalho).")
+        res = hub.prepare("", "email", " ".join(ask.split()))
+        text = (f"✉️ {res.get('mensagem') or 'E-mail preparado.'}\n\nAssunto: {res.get('assunto', '')}\n\n{res.get('corpo', '')}"
+                + ("\n\n(No Bit do PC ele abre no formato do seu modelo, pronto para o Outlook.)" if res.get("corpo_html") else ""))
+        return {"text": text, "preparado": res}
+
+    service.extra_actions["client_action"] = act_action
     from .fichas_datas import Alerts
     alerts = Alerts(service)
     service.client_alerts = alerts

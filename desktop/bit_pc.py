@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.11"
+VERSION = "1.12"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -1681,7 +1681,11 @@ class App:
                 elif kind == "ao_vivo":
                     self.toggle_live()
                 elif kind == "aviso":
-                    self.notice(str(payload))
+                    if isinstance(payload, tuple):                    # v1.12: aviso com botões (ação e 👍/👎)
+                        text, buttons = payload
+                        self.notice(text, buttons=buttons)
+                    else:
+                        self.notice(str(payload))
         except queue.Empty:
             pass
         except Exception as err:                                  # um erro numa janela não pode parar o app
@@ -2685,11 +2689,19 @@ class App:
                 continue
             try:
                 for it in self.api.call("GET", "avisos", timeout=30).get("avisos") or []:
-                    self.events.put(("aviso", str(it.get("text") or "")))
+                    self.events.put(("aviso", (str(it.get("text") or ""), list(it.get("botoes") or []))))
             except Exception:
                 pass
 
-    def notice(self, text: str, action: Optional[Tuple[str, Callable[[], None]]] = None) -> None:
+    def press_data(self, data: str, label: str) -> None:
+        """Botão de um aviso (v1.12): manda para o Bit como se fosse um botão da conversa."""
+        if self.api is None:
+            return
+        self.add_message(label, "eu")
+        self.run_bg(lambda: self.api.call("POST", "conversa", {"botao": data}, timeout=300), self.on_reply)
+
+    def notice(self, text: str, action: Optional[Tuple[str, Callable[[], None]]] = None,
+               buttons: Optional[List[Dict[str, str]]] = None) -> None:
         if not text.strip():
             return
         self.add_message("● " + text, "aviso")
@@ -2711,6 +2723,22 @@ class App:
             tk.Button(inner, text=tk_safe(label), command=lambda t=toast: (self.close_toast(t), cmd()), relief="flat",
                       cursor="hand2", bg=self.PRI, fg="#0d1020", font=("Segoe UI", 9, "bold"), borderwidth=0,
                       padx=self.px(10), pady=self.px(3)).pack(anchor="w", padx=self.px(10), pady=(0, self.px(10)))
+        feedback = [b for b in buttons or [] if str(b.get("data") or "").startswith("fb:")]
+        for b in [b for b in buttons or [] if b not in feedback][:3]:   # v1.12: "✉️ Renovação — EMS"
+            tk.Button(inner, text=tk_safe(b.get("label") or "Abrir"), relief="flat", cursor="hand2", bg=self.PRI,
+                      fg="#0d1020", font=("Segoe UI", 9, "bold"), borderwidth=0, padx=self.px(10), pady=self.px(3),
+                      command=lambda t=toast, d=str(b.get("data")), lb=str(b.get("label")): (self.close_toast(t),
+                                                                                             self.press_data(d, lb))
+                      ).pack(anchor="w", padx=self.px(10), pady=(0, self.px(6)))
+        if feedback:
+            row = tk.Frame(inner, bg=self.CARD)
+            row.pack(anchor="w", padx=self.px(10), pady=(0, self.px(8)))
+            for b in feedback[:2]:
+                tk.Button(row, text=tk_safe(b.get("label") or "?"), relief="flat", cursor="hand2", bg=self.HOVER,
+                          fg=self.INK, font=("Segoe UI", 8), borderwidth=0, padx=self.px(8), pady=self.px(2),
+                          command=lambda t=toast, d=str(b.get("data")), lb=str(b.get("label")): (self.close_toast(t),
+                                                                                                 self.press_data(d, lb))
+                          ).pack(side="left", padx=(0, self.px(6)))
         close.bind("<Button-1>", lambda e=None, t=toast: self.close_toast(t))
         body.bind("<Button-1>", lambda e=None, t=toast: (self.close_toast(t), self.hotkey_open()))
         self.toasts.append(toast)
@@ -3378,6 +3406,14 @@ def autotest(out_path: str) -> int:
             app.add_message("📅 Reunião com o time às 15h 👉 sala 2", "bit", [{"label": "✅ Aprovar", "data": "ok:1"}])
             app.notice("⏰ Lembrete: enviar o relatório mensal para a diretoria antes das 18h 📊 (planilha na pasta Vendas)")
             app.notice("🤖 Resumo da manhã: 3 reuniões, 5 e-mails importantes e chuva às 17h ☔")
+            app.notice("🔁 EMS S/A: renovação de Figma Enterprise em 30 dias (10/03/2027).",       # v1.12: botões
+                       buttons=[{"label": "✉️ Renovação — EMS S/A", "data": "cs:ren:1:20270310"},
+                                {"label": "👍 Ajudou", "data": "fb:+:clientes"},
+                                {"label": "👎 Não ajudou", "data": "fb:-:clientes"}])
+            labels = [t for toast in app.toasts for t in texts(toast)]
+            result["aviso_botoes"] = [x for x in labels if "Renovação" in x or "ajudou" in x.lower()]
+            if len(result["aviso_botoes"]) < 3:
+                problems.append(f"aviso com botões: {result['aviso_botoes']}")
             for t in app.toasts:
                 fits(t, "aviso")
             app.root.update()

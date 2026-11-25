@@ -54,6 +54,7 @@ HELP_TEXT = (
     "/cliente <nome ou CNPJ> | <compras que você sabe> — pesquisa do cliente (cadastro, web) e plano de abordagem em .docx\n"
     "/clientes — fichas dos clientes | /ficha <nome ou nº> — tudo o que sei do cliente | /nota_cliente <nome> | <nota>\n"
     "/data_cliente <cliente> | renovação <produto> | <dd/mm/aaaa> | /renovacoes — as próximas | /alertas_clientes\n"
+    "/avisos — quais avisos ajudam (👍/👎) e silenciar uma categoria\n"
     "/modelos_email — seus modelos de e-mail | /modelo_email <nome> | <situação> (texto na linha de baixo) | /assinatura <texto>\n"
     "/agente — mostra quem está ativo | /agente matrix | trabalho | byte | bit | kronus — troca (/perfil também serve)\n"
     "/ler <arquivo> [pergunta] — resume um .docx/.pdf/.txt enviado\n"
@@ -357,7 +358,12 @@ class TelegramBridge:
             for chat_id in self.allowed:
                 # rotinas (ex.: triagem da manhã) podem trazer rascunhos de e-mail: chegam com os botões de aprovação
                 message = str(item.get("message", ""))
-                self.send_with_cards(chat_id, message, prefix="🤖 ")
+                from .avisos import keyboard
+                markup = keyboard(item) if not EMAIL_CARD_RE.search(message) else None
+                if markup is not None:                            # v13.68: botões de ação e 👍/👎
+                    self.send(chat_id, "🤖 " + message, reply_markup=markup)
+                else:
+                    self.send_with_cards(chat_id, message, prefix="🤖 ")
                 generated = re.findall(r"Arquivos gerados em entregas/: ([^\n]+)", message)
                 if generated:                                     # v13.36: a ata (.docx) chega junto
                     self._send_outputs(chat_id, [n.strip() for n in generated[-1].split(",")])
@@ -568,6 +574,27 @@ class TelegramBridge:
             self._api("answerCallbackQuery", {"callback_query_id": cb.get("id")})
         except Exception:
             pass
+        if verb == "fb":                                          # v13.68: 👍/👎 e silenciar uma categoria de aviso
+            notices = getattr(self.service, "notices", None)
+            sign, _, cat = action_id.partition(":")
+            if notices is None:
+                return
+            if sign == "mute":
+                self.send(chat_id, notices.mute(cat, 30))
+            elif sign == "keep":
+                self.send(chat_id, "Ok, continuo avisando.")
+            else:
+                res = notices.vote(cat, sign == "+")
+                markup = ({"inline_keyboard": [[{"text": "🔕 Silenciar 30 dias", "callback_data": f"fb:mute:{cat}"},
+                                                {"text": "Manter", "callback_data": f"fb:keep:{cat}"}]]}
+                          if res["offer_mute"] else None)
+                self.send(chat_id, res["text"], reply_markup=markup)
+            return
+        if verb == "cs":                                          # v13.68: ação de um aviso de cliente (preparar e-mail)
+            res = self.service.dispatch_request("client_action", {"data": action_id})
+            self.send(chat_id, ("⚠️ " + re.sub(r"^\w*(Error|Exception): ", "", str(res["error"]))) if res.get("error")
+                      else str(res.get("text") or "Pronto."))
+            return
         shown = self._pending_cards.pop(action_id, None)
         if shown is None and verb == "ok" and hasattr(self.service, "pending_shown"):
             shown = self.service.pending_shown(action_id)       # v13.31: a nuvem reiniciou: o cartão vem do banco
@@ -914,6 +941,10 @@ class TelegramBridge:
             words = arg.lower().split()
             conta = next((w for w in words if w != "todas"), None)
             self._work(chat_id, "work_triage", {"unread_only": "todas" not in words, "conta": conta}, "Lendo as caixas de entrada...")
+        elif cmd == "/avisos":                                     # v13.68: retorno e silêncio por categoria de aviso
+            res = self.service.dispatch_request("notices_command", {"arg": arg})
+            self.send(chat_id, ("⚠️ " + re.sub(r"^\w*(Error|Exception): ", "", str(res["error"]))) if res.get("error")
+                      else str(res.get("text") or ""))
         elif cmd == "/saude":
             try:
                 text = self._dispatch("health", {"todos": arg.strip().lower() in {"todos", "todas", "agentes"}}).get("text")

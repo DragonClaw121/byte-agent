@@ -170,33 +170,30 @@ Teste rápido do avatar e da voz, sem Twitch: `python -m byte_agent --say "[feli
 
 ## Estado do roteiro
 
-| Passo | Situação |
-|---|---|
-| 1. Projeto versionado com testes | feito (o motor ainda é um arquivo único; ver abaixo) |
-| 2. Rodar fora do Colab, sempre ligada | feito (`headless.py`, Docker, systemd) |
-| 3. Canal em qualquer lugar | feito (Telegram) |
-| 4. Chamado de ferramentas nativo do Ollama | feito, híbrido (ver "Ferramentas") |
-| 5. Lembretes e rotinas com horário real | feito |
-| 5b. Calendário externo, busca e leitura web, arquivos | pendente |
-| Live: Twitch + VTube Studio + voz | feito (testado só com servidores simulados) |
-| Perfil de trabalho: e-mails, análises, apresentações | feito (testado com e-mail e LLM simulados) |
-| Pesquisa na web (busca, leitura, pesquisa profunda) | feito, só leitura ([docs/internet.md](docs/internet.md)) |
-| Microsoft Graph (e-mail corporativo com login da empresa) | pendente: depende de app registrado pela TI |
-| Vários usuários na mesma Byte | pendente |
-| Núcleo replicável (manifestos de agentes) | feito; um agente por processo |
-| API para relógio/celular | feito (pull de notificações; push pendente) |
-| Legenda da VTuber no OBS | feito |
-| Asana, Notion, Teams (escrita com aprovação), push via ntfy | feito |
-| Planilha XLSX com fórmulas, leitura de DOCX/PDF | feito |
-| Avaliação de modelos (`avaliar`) | feito |
-| Troca de agentes pelo painel e pelo Telegram (`/agente`) | feito |
-| Comando de voz (painel, Telegram, página /voz, live da Byte) | feito (transcrição e fala dependem de serviço configurado) |
-| Vários agentes num único processo | pendente |
-| Fala da VTuber enquanto gera (TTS por frase) | pendente |
-| 6. Sandbox de execução e permissões por ferramenta | pendente |
-| 7. Cliente leve em cada máquina | pendente |
+Atualizado na v13.68. As notas das versões aparecem no próprio aviso de atualização (`byte_agent/novidades.json`).
 
-**Sobre dividir `engine.py` em módulos:** ainda não foi feito de propósito. O `MetacognitiveSelfEvolver` troca funções
+| Área | Situação |
+|---|---|
+| Projeto versionado com testes e CI (Linux, Windows real, Android) | feito |
+| Nuvem (Azure Container Apps): um processo por agente, cópias diárias, atualização só com testes verdes | feito |
+| Canais: Telegram, painel web, API, app Android (Kronus e convidados), Bit no PC (Windows) | feito |
+| Lembretes, rotinas, gatilhos, resumos da manhã e da semana, rotina aprendida | feito |
+| Agenda e arquivos: Google e Microsoft (Outlook, OneDrive, Teams), iCal | feito |
+| E-mail: várias caixas, triagem, modelos com o formato do Outlook, abrir no Outlook clássico e novo | feito |
+| Pesquisa na web, pesquisa de cliente (CNPJ + plano de conta) e ficha do cliente com datas e alertas | feito |
+| Reuniões: transcrição ao vivo (celular e PC) e ata com tarefas, ligada à ficha do cliente | feito |
+| Permissões por tipo de ação, aprovações persistentes, avaliações, falhas visíveis no `/saude` | feito |
+| Vários usuários (convidados com espaço próprio, e-mail próprio e app genérico) | feito |
+| Avisos com botões de ação e 👍/👎 (silenciar o que não ajuda) | feito (v13.68) |
+| Microsoft Graph com a conta da empresa (rascunho direto no Outlook) | aguarda a aprovação da TI |
+| Live da Byte (Twitch + VTube Studio + voz) | código pronto e testado só com simulações; falta o "Estúdio" no PC (a nuvem não alcança o VTube Studio) |
+| Fala da VTuber enquanto gera (TTS por frase) | pendente |
+| Objetivos de trabalho recorrentes e autonomia graduada (escada de confiança) | pendente |
+| Sandbox real para o código aprovado (contêiner separado, sem o disco de dados) | pendente (hoje: subprocesso sem segredos no ambiente) |
+| Empresas: instância por empresa, administração, LGPD, login corporativo | futuro (quando houver clientes) |
+
+**Sobre dividir `engine.py` em módulos:** o painel (HTML/JS) já saiu para `byte_agent/painel/painel.html` (v13.61);
+o resto continua no motor de propósito. O `MetacognitiveSelfEvolver` troca funções
 em tempo de execução pelo dicionário global do módulo; uma divisão mecânica quebraria esse recurso em silêncio.
 A ordem segura é: extrair o HTML/JS do painel para arquivos próprios, depois `VectorEngine`/`HybridContextReader`,
 depois o roteador, rodando `pytest` a cada extração.

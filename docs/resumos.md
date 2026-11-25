@@ -81,3 +81,15 @@ As tarefas concluídas somem da agenda e são apagadas depois de 90 dias.
 No app do Kronus (1.12 ou mais novo), em "📞 Kronus pode me ligar", ligue **"Resumo da manhã e fechamento da semana
 (lidos em voz)"**. Vem desligado. O resumo toca como chamada recebida e, ao atender, o Kronus lê uma versão falada,
 curta e sem listas. A versão escrita continua chegando no Telegram.
+
+
+## Avisos com retorno e com ação (v13.68)
+- **👍 / 👎:** os avisos de **clientes**, **rotina**, **gatilhos**, **iniciativas** (quando o agente puxa assunto) e
+  **resumos** chegam com 👍 Ajudou / 👎 Não ajudou, no Telegram, no app e no Bit do PC. No 2º 👎 seguido da mesma
+  categoria (em 30 dias), o agente oferece silenciá-la por 30 dias. Lembretes que você pediu, aprovações, atas, saúde
+  e atualizações sempre chegam.
+- **`/avisos`** mostra as categorias, o placar e o que está silenciado. `/avisos silenciar rotina 15` e
+  `/avisos ligar rotina` mudam à mão. Um aviso silenciado não chega em canal nenhum.
+- **Botões de ação:** os alertas de renovação e de clientes sem contato trazem "✉️ Renovação — <cliente>" e
+  "✉️ Follow-up — <cliente>". Um toque prepara o e-mail no seu modelo, com a ficha do cliente. No Bit do PC, ele abre
+  pronto para o Outlook. A ação só prepara: o envio é sempre seu.

@@ -48,7 +48,7 @@ def test_notes_commands_contact_and_alerts(bit):
     assert "Miro" in app.run("/renovacoes 365")[0]["text"]
     assert "⚠️" in app.run("/data_cliente EMS | renovação | amanhã talvez")[0]["text"]
     msgs = []
-    bit.db.enqueue_proactive_message = lambda kind, text, brain_used="": msgs.append(text)
+    bit.db.enqueue_proactive_message = lambda kind, text, brain_used="", actions=None: msgs.append(text)
     alerts = bit.client_alerts
     first = alerts.tick()
     assert any("EMS S/A: renovação de Figma Enterprise em 25 dias" in m for m in first)
@@ -74,7 +74,7 @@ def test_last_contact_and_stale_clients(bit):
     with bit.db.connection() as conn:
         conn.execute("UPDATE client_cards SET contato = ? WHERE n = ?", (time.time() - 60 * 86400, old["n"]))
     msgs = []
-    bit.db.enqueue_proactive_message = lambda kind, text, brain_used="": msgs.append(text)
+    bit.db.enqueue_proactive_message = lambda kind, text, brain_used="", actions=None: msgs.append(text)
     bit.db.set_setting("fichas.sem_contato_em", 0)
     bit.client_alerts.tick()
     assert msgs and "Rio Biofarma — 60 dias sem contato" in msgs[-1]

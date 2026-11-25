@@ -68,7 +68,7 @@ import ssl
 import tempfile
 
 BYTE_HARDENING_PATCHSET = "v9.1-auditoria-2026-11"
-BYTE_VERSION = "13.67"
+BYTE_VERSION = "13.68"
 
 
 def _note_failure(where: str, err: BaseException) -> None:
@@ -922,6 +922,8 @@ class UnifiedDatabase:
             cols_p = {r["name"] for r in conn.execute("PRAGMA table_info(proactive_outbox)").fetchall()}
             if "brain_used" not in cols_p:
                 conn.execute("ALTER TABLE proactive_outbox ADD COLUMN brain_used TEXT NOT NULL DEFAULT 'LLM'")
+            if "actions" not in cols_p:                       # v13.68: botões do aviso (ex.: preparar e-mail)
+                conn.execute("ALTER TABLE proactive_outbox ADD COLUMN actions TEXT NOT NULL DEFAULT ''")
 
             cols_m = {r["name"] for r in conn.execute("PRAGMA table_info(memories)").fetchall()}
             if "embedding_engine" not in cols_m:
@@ -1491,15 +1493,29 @@ class UnifiedDatabase:
                 claimed.append(item)
         return claimed
 
-    def enqueue_proactive_message(self, trigger_type: str, message: str, brain_used: str = "LLM") -> Dict[str, Any]:
+    def enqueue_proactive_message(self, trigger_type: str, message: str, brain_used: str = "LLM",
+                                  actions: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        """actions (v13.68): botões do aviso [{"label", "data"}] — viram botões no Telegram, no app e no Bit do PC.
+        proactive_filters (v13.68): o usuário pode silenciar categorias de aviso (/avisos)."""
         now = self.now_iso()
+        for keep in list(getattr(self, "proactive_filters", [])):
+            try:
+                if not keep(trigger_type, message, brain_used):
+                    return {"id": None, "trigger_type": trigger_type, "brain_used": brain_used, "message": message.strip(),
+                            "created_at": now, "muted": True}
+            except Exception as err:
+                _note_failure("Filtro de avisos", err)
+        acts = [{"label": str(a.get("label") or "")[:40], "data": str(a.get("data") or "")[:64]}
+                for a in (actions or []) if isinstance(a, dict) and a.get("data")][:4]
         with self.connection() as conn:
             cur = conn.execute(
-                "INSERT INTO proactive_outbox (trigger_type, brain_used, message, delivered, created_at) VALUES (?, ?, ?, 0, ?)",
-                (trigger_type, brain_used, message.strip(), now)
+                "INSERT INTO proactive_outbox (trigger_type, brain_used, message, delivered, created_at, actions) "
+                "VALUES (?, ?, ?, 0, ?, ?)",
+                (trigger_type, brain_used, message.strip(), now, json.dumps(acts, ensure_ascii=False) if acts else "")
             )
             pid = cur.lastrowid
-        item = {"id": pid, "trigger_type": trigger_type, "brain_used": brain_used, "message": message.strip(), "created_at": now}
+        item = {"id": pid, "trigger_type": trigger_type, "brain_used": brain_used, "message": message.strip(), "created_at": now,
+                "actions": acts}
         for listener in list(getattr(self, "proactive_listeners", [])):     # v12.1: ex.: push pelo ntfy
             try:
                 listener(item)
@@ -1519,10 +1535,15 @@ class UnifiedDatabase:
         cutoff = datetime.fromtimestamp(time.time() - self.PROACTIVE_MAX_AGE_S, timezone.utc).isoformat()
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT o.id, o.trigger_type, o.brain_used, o.message, o.created_at FROM proactive_outbox o "
+                "SELECT o.id, o.trigger_type, o.brain_used, o.message, o.created_at, o.actions FROM proactive_outbox o "
                 "WHERE o.created_at >= ? AND NOT EXISTS (SELECT 1 FROM proactive_delivery d WHERE d.message_id = o.id "
                 "AND d.channel = ?) ORDER BY o.id ASC LIMIT 200", (cutoff, channel)).fetchall()
             items = [dict(r) for r in rows]
+            for it in items:
+                try:
+                    it["actions"] = json.loads(it.get("actions") or "[]")
+                except ValueError:
+                    it["actions"] = []
             if items:
                 conn.executemany("INSERT OR IGNORE INTO proactive_delivery (message_id, channel) VALUES (?, ?)",
                                  [(i["id"], channel) for i in items])

@@ -109,5 +109,13 @@
    "E-mails: o texto do seu modelo fica palavra por palavra, sem negritos inventados; campos picados pelo Outlook voltam a funcionar",
    "Bit no PC 1.11: imagens com fundo transparente não ficam mais com fundo branco no Outlook"
   ]
+ },
+ {
+  "versao": "13.68",
+  "itens": [
+   "Avisos de renovação e de clientes sem contato com botão: um toque prepara o e-mail (Telegram, app e Bit no PC)",
+   "👍/👎 nos avisos: no 2º 👎 seguido, ofereço silenciar aquela categoria por 30 dias; /avisos mostra e muda",
+   "Bit no PC 1.12: os avisos mostram os botões"
+  ]
  }
 ]

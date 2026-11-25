@@ -697,8 +697,14 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
         elif sub == "avisos" and method == "GET":
             from .telegram_bridge import EMAIL_CARD_RE
             items = service.db.pop_undelivered_proactive_messages("app")
-            h._send_json(200, {"avisos": [{"type": i["trigger_type"], "text": EMAIL_CARD_RE.sub("", str(i["message"])).strip()}
-                                          for i in items]})
+            from .avisos import keyboard
+            out = []
+            for i in items:
+                kb = keyboard(i) or {}
+                out.append({"type": i["trigger_type"], "text": EMAIL_CARD_RE.sub("", str(i["message"])).strip(),
+                            "botoes": [{"label": b["text"], "data": b["callback_data"]}       # v13.68: ação e 👍/👎
+                                       for row in kb.get("inline_keyboard") or [] for b in row]})
+            h._send_json(200, {"avisos": out})
         elif sub == "conversa" and method == "POST":
             body = read_body(h)
             if body is None:
@@ -709,6 +715,16 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
                 h._send_json(400, {"error": "Captura de tela inválida (use JPEG ou PNG)."})
                 return
             text = str(body.get("texto") or "").strip()[:4000]
+            button = str(body.get("botao") or "")
+            if button.startswith("cs:"):                            # v13.68: "✉️ Renovação — EMS" num aviso do PC
+                res = service.dispatch_request("client_action", {"data": button[3:]})
+                if res.get("error"):
+                    h._send_json(400, {"error": re.sub(r"^\w*(Error|Exception): ", "", str(res["error"]))[:300]})
+                    return
+                prep = res.get("preparado") or {}
+                h._send_json(200, {"mensagens": [{"text": prep.get("mensagem") or "E-mail preparado.", "buttons": []}],
+                                   "preparado": prep})
+                return
             if image:
                 from .clientes import CLIENT_RE, fold
                 if CLIENT_RE.search(fold(text)) and getattr(service, "client_research", None) is not None:
