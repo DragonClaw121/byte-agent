@@ -68,6 +68,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete app-bit-pc --yes --cleanup-tag || true
-          gh release create app-bit-pc dist/BitPC.exe --target "$GITHUB_SHA" --title "Bit no PC para Windows (build $GITHUB_RUN_NUMBER)" \
-            --notes "Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app."
+          # Atualiza a release existente (não apaga antes: se o GitHub falhar no meio, o link antigo continua valendo)
+          # e tenta de novo quando a API do GitHub devolve erro temporário (5xx).
+          TITLE="Bit no PC para Windows (build $GITHUB_RUN_NUMBER)"
+          NOTES="Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app."
+          for i in 1 2 3 4 5; do
+            if gh release view app-bit-pc >/dev/null 2>&1; then
+              gh release upload app-bit-pc dist/BitPC.exe --clobber && gh release edit app-bit-pc --title "$TITLE" --notes "$NOTES" && exit 0
+            else
+              gh release create app-bit-pc dist/BitPC.exe --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES" && exit 0
+            fi
+            echo "GitHub falhou (tentativa $i); tentando de novo..."
+            sleep $((i * 20))
+          done
+          exit 1
