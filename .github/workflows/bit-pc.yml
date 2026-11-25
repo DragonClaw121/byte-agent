@@ -70,12 +70,13 @@ jobs:
         run: |
           # Atualiza a release existente (não apaga antes: se o GitHub falhar no meio, o link antigo continua valendo),
           # tenta de novo em erro temporário (5xx) e só termina quando o link público do BitPC.exe existe de verdade.
+          set +e +o pipefail                                  # um 5xx do GitHub não pode encerrar o passo na 1ª tentativa
           TITLE="Bit no PC para Windows (build $GITHUB_RUN_NUMBER)"
           NOTES="Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app."
           # rascunhos deixados por uma falha anterior do GitHub atrapalham: saem
           gh api "repos/$GITHUB_REPOSITORY/releases" --jq '.[] | select(.draft and .tag_name=="app-bit-pc") | .id' \
             | while read -r id; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" || true; done
-          for i in 1 2 3 4 5; do
+          for i in 1 2 3 4 5 6 7 8; do
             if gh api "repos/$GITHUB_REPOSITORY/releases/tags/app-bit-pc" >/dev/null 2>&1; then
               gh release upload app-bit-pc dist/BitPC.exe --clobber && gh release edit app-bit-pc --title "$TITLE" --notes "$NOTES" --draft=false
             else
@@ -88,6 +89,6 @@ jobs:
               exit 0
             fi
             echo "GitHub falhou (tentativa $i); tentando de novo..."
-            sleep $((i * 20))
+            sleep $((i * 15))
           done
           exit 1
