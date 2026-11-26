@@ -326,9 +326,34 @@ class Briefings:
 
         local = getattr(self.service, "local", None)
         here = local.current() if local is not None else None
-        if cfg["cidade"] or here:
+        custom = self.weather is not fetch_weather                  # (testes injetam uma previsão)
+        if local is not None and not custom:
+            # v13.70: o clima sai sempre que der para saber onde você está (sem cadastro) e com a chuva realista
             try:
-                if here:                                          # v13.28: onde você ESTÁ (app) vale mais que a cidade fixa
+                lw = local.weather(cfg["cidade"] if (cfg["cidade"] and not here) else "", 1)
+                d0 = (lw.get("dias") or [{}])[0]
+                if d0:
+                    rain = d0.get("chuva_texto") or ""
+                    sections.append(f"🌤️ {lw['lugar']}: {d0['min']}–{d0['max']} °C, {d0['ceu']}" + (f", {rain}" if rain else ""))
+                    soon = lw.get("chuva_proximas_horas") or {}
+                    if soon.get("vai_chover") and soon.get("por_volta_de"):
+                        sections[-1] += f" (mais provável por volta das {soon['por_volta_de']})"
+                    speech.append(f"Em {lw['lugar'].split(' (')[0]}, entre {d0['min']} e {d0['max']} graus, {d0['ceu']}"
+                                  + (f", {rain}." if rain else "."))
+                    facts.append(f"Clima: {d0['min']} a {d0['max']} °C, {d0['ceu']}" + (f", {rain}." if rain else "."))
+            except ValueError as err:
+                if "Não sei onde" in str(err):
+                    sections.append("🌤️ Para o clima aparecer aqui, me diga sua cidade (/resumo cidade Campinas, SP) ou deixe "
+                                    "o app do Kronus ou o Bit no PC usarem a sua localização.")
+                else:
+                    self.last_error = f"clima: {str(err)[:120]}"
+                    sections.append(f"🌤️ Não consegui ver o clima: {str(err)[:120]}")
+            except Exception as err:
+                self.last_error = f"clima: {type(err).__name__}: {str(err)[:120]}"
+                sections.append("🌤️ O serviço de clima não respondeu agora.")
+        elif cfg["cidade"] or here:
+            try:
+                if here and local is not None:
                     lw = local.weather("", 1)
                     d0 = (lw.get("dias") or [{}])[0]
                     w = {"cidade": lw["lugar"], "min": d0.get("min"), "max": d0.get("max"), "chuva": d0.get("chuva"),

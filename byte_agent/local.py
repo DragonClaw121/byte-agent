@@ -7,6 +7,13 @@
 
 Localização: o app do celular manda a posição APROXIMADA (rede/Wi-Fi, ~1 km) só se você ligar a opção no app. O servidor
 guarda só a ÚLTIMA posição (sem histórico) e descobre a cidade/bairro pelo OpenStreetMap (coordenadas arredondadas).
+
+v13.70 — o clima deixa de precisar de cadastro e de inventar chuva:
+  - onde: a cidade pedida > onde você está (app do Kronus ou Bit no PC, compartilhado entre os agentes) > a cidade do
+    resumo > a última cidade conhecida > o que você contou ("moro em Americana");
+  - cidade certa: busca no Brasil (BYTE_PAIS), aceita "Campinas, SP", prefere o estado onde você costuma estar e a maior;
+  - chuva realista: a chance do dia é a MÉDIA das horas (não o pico de uma hora) e só conta se houver chuva prevista em
+    milímetros; dia seco aparece como "sem chuva".
 """
 from __future__ import annotations
 
@@ -17,9 +24,17 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+import os
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 SETTING = "localizacao_atual"
+LAST_CITY = "localizacao_ultima_cidade"
+UFS = {"AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
+       "ES": "Espírito Santo", "GO": "Goiás", "MA": "Maranhão", "MT": "Mato Grosso", "MS": "Mato Grosso do Sul",
+       "MG": "Minas Gerais", "PA": "Pará", "PB": "Paraíba", "PR": "Paraná", "PE": "Pernambuco", "PI": "Piauí",
+       "RJ": "Rio de Janeiro", "RN": "Rio Grande do Norte", "RS": "Rio Grande do Sul", "RO": "Rondônia", "RR": "Roraima",
+       "SC": "Santa Catarina", "SP": "São Paulo", "SE": "Sergipe", "TO": "Tocantins"}
+RAIN_MM = 0.3                            # abaixo disso no dia (ou na janela), não é chuva de verdade
 FRESH_S = 6 * 3600.0                     # posição mais velha que isso não vale como "onde você está"
 WEATHER = {0: "céu limpo", 1: "quase limpo", 2: "parcialmente nublado", 3: "nublado", 45: "neblina", 48: "neblina",
            51: "garoa", 53: "garoa", 55: "garoa forte", 56: "garoa gelada", 57: "garoa gelada", 61: "chuva fraca", 63: "chuva",
@@ -27,6 +42,49 @@ WEATHER = {0: "céu limpo", 1: "quase limpo", 2: "parcialmente nublado", 3: "nub
            80: "pancadas de chuva", 81: "pancadas de chuva", 82: "temporal", 85: "neve", 86: "neve", 95: "trovoadas",
            96: "trovoadas com granizo", 99: "trovoadas com granizo"}
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+
+
+def _fold(text: Any) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(text or "").lower()) if not unicodedata.combining(c))
+
+
+def split_city(text: str) -> Tuple[str, str]:
+    """'Campinas, SP' / 'Campinas - SP' / 'Campinas/SP' / 'Campinas (São Paulo)' -> ('Campinas', 'São Paulo')."""
+    raw = " ".join(str(text or "").split())
+    m = re.match(r"^(.+?)\s*(?:,|-|/|\()\s*([^,()/-]+?)\)?\s*$", raw)
+    if not m:
+        return raw, ""
+    name, state = m.group(1).strip(), m.group(2).strip()
+    if state.upper() in UFS:
+        return name, UFS[state.upper()]
+    if any(_fold(state) == _fold(v) for v in UFS.values()):
+        return name, next(v for v in UFS.values() if _fold(v) == _fold(state))
+    return raw, ""
+
+
+def rain_info(prob_max: Any, prob_mean: Any, mm: Any, code: Any) -> Tuple[Optional[int], str]:
+    """(chance realista %, texto). A chance "máxima" da Open-Meteo é o pico de UMA hora e passa de 90% à toa em dia
+    seco: aqui vale a média do dia, e sem chuva prevista em milímetros não há "chance de chuva"."""
+    wet = code is not None and int(code) >= 51
+    try:
+        mm_f = float(mm) if mm is not None else None
+    except (TypeError, ValueError):
+        mm_f = None
+    base = prob_mean if prob_mean is not None else prob_max
+    chance = int(round(float(base))) if base is not None else None
+    if mm_f is not None and mm_f < RAIN_MM and not wet:
+        return (min(chance, 10) if chance is not None else None), "sem chuva"
+    if mm_f is not None and mm_f < 2:
+        return chance, f"chuva fraca possível ({mm_f:.1f} mm)" + (f", chance {chance}%" if chance is not None else "")
+    if mm_f is not None:
+        return chance, f"chuva: {mm_f:.0f} mm" + (f", chance {chance}%" if chance is not None else "")
+    return chance, (f"chance de chuva {chance}%" if chance is not None else "")
+
+
+def shared_dir() -> Optional[str]:
+    base = os.environ.get("BYTE_DADOS_PERSISTENTES", "").strip()
+    return os.path.join(base, "local") if base else None
 
 
 def get_json(url: str, timeout: float = 10.0) -> Any:
@@ -70,6 +128,19 @@ class Local:
             except Exception:
                 pass
         self.db.set_setting(SETTING, here)
+        if here.get("cidade"):
+            self.db.set_setting(LAST_CITY, {"cidade": here["cidade"], "estado": here.get("estado", ""), "at": here["at"],
+                                            "lat": here["lat"], "lon": here["lon"]})
+        folder = shared_dir()                                     # v13.70: os outros agentes também sabem onde você está
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+                tmp = os.path.join(folder, ".atual.tmp")
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(here, fh, ensure_ascii=False)
+                os.replace(tmp, os.path.join(folder, "atual.json"))
+            except OSError:
+                pass
         return self.describe(here)
 
     def _reverse(self, lat: float, lon: float) -> Dict[str, str]:
@@ -80,11 +151,43 @@ class Local:
         return {"cidade": city, "bairro": a.get("suburb") or a.get("neighbourhood") or a.get("city_district") or "",
                 "estado": a.get("state") or ""}
 
+    def _shared(self) -> Optional[Dict[str, Any]]:
+        folder = shared_dir()
+        if not folder:
+            return None
+        try:
+            with open(os.path.join(folder, "atual.json"), encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) and "lat" in data else None
+        except (OSError, ValueError):
+            return None
+
+    def latest(self) -> Optional[Dict[str, Any]]:
+        """A posição mais nova: a deste agente ou a compartilhada (Kronus/Bit no PC), sem olhar a idade."""
+        own, shared = self.db.get_setting(SETTING) or None, self._shared()
+        cands = [x for x in (own, shared) if isinstance(x, dict) and x.get("lat") is not None]
+        return max(cands, key=lambda x: float(x.get("at") or 0)) if cands else None
+
     def current(self) -> Optional[Dict[str, Any]]:
-        loc = self.db.get_setting(SETTING) or None
+        loc = self.latest()
         if not loc or self.clock() - float(loc.get("at") or 0) > FRESH_S:
             return None
         return loc
+
+    def city_from_memories(self) -> str:
+        """O que você já contou: "moro em Americana", "sou de Campinas"."""
+        try:
+            mems = self.db._get_cached_memories()
+        except Exception:
+            return ""
+        rx = re.compile(r"\b(?:[Mm]or[ao]|[Vv]iv[eo]|[Rr]esid[eo]|[Mm]inha cidade (?:é|e)|[Ss]ou de|[Éé] de|[Ee]st(?:ou|á) morando)"
+                        r"\s+(?:em|no|na|de)?\s*"
+                        r"([A-ZÀ-Ý][\wÀ-ÿ'.]+(?:\s+(?:d[aeo]s?\s+)?[A-ZÀ-Ý][\wÀ-ÿ'.]+){0,3}(?:\s*[,-]\s*[A-Z]{2}\b)?)")
+        for mem in sorted(mems, key=lambda m: -int(m.get("id") or 0)):
+            m = rx.search(str(mem.get("content") or ""))
+            if m:
+                return m.group(1).strip()
+        return ""
 
     def describe(self, loc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if not loc:
@@ -97,12 +200,29 @@ class Local:
 
     # ---------------- clima
     def _geocode(self, city: str) -> Dict[str, Any]:
+        """v13.70: a cidade CERTA — no Brasil (BYTE_PAIS), no estado dito ("Campinas, SP") ou no estado onde você costuma
+        estar, e a maior quando há várias com o mesmo nome (antes: o primeiro resultado do mundo)."""
+        name, state = split_city(city)
+        country = os.environ.get("BYTE_PAIS", "BR").strip().upper()
+        params = {"name": name, "count": 10, "language": "pt", "format": "json"}
         res = self.getter("https://geocoding-api.open-meteo.com/v1/search?" +
-                          urllib.parse.urlencode({"name": city, "count": 1, "language": "pt", "format": "json"}))
-        hit = ((res or {}).get("results") or [None])[0]
-        if not hit:
-            raise ValueError(f"Não encontrei a cidade '{city}'. Tente só o nome, sem estado (ex.: Santa Bárbara d'Oeste).")
-        return {"lat": hit["latitude"], "lon": hit["longitude"], "nome": hit.get("name") or city,
+                          urllib.parse.urlencode(dict(params, countryCode=country) if country else params))
+        hits: List[Dict[str, Any]] = list((res or {}).get("results") or [])
+        if not hits and country:                                 # cidade de fora do país
+            res = self.getter("https://geocoding-api.open-meteo.com/v1/search?" + urllib.parse.urlencode(params))
+            hits = list((res or {}).get("results") or [])
+        if not hits:
+            raise ValueError(f"Não encontrei a cidade '{city}'. Confira o nome (dá para dizer o estado: \"Campinas, SP\").")
+        if state:
+            same = [h for h in hits if _fold(h.get("admin1")) == _fold(state)]
+            hits = same or hits
+        else:
+            usual = _fold((self.latest() or self.db.get_setting(LAST_CITY) or {}).get("estado") or "")
+            same = [h for h in hits if usual and _fold(h.get("admin1")) == usual]
+            hits = same or hits
+        exact = [h for h in hits if _fold(h.get("name")) == _fold(name)] or hits
+        hit = max(exact, key=lambda h: int(h.get("population") or 0))
+        return {"lat": hit["latitude"], "lon": hit["longitude"], "nome": hit.get("name") or name,
                 "estado": hit.get("admin1") or ""}
 
     def where(self, city: str = "") -> Dict[str, Any]:
@@ -117,8 +237,15 @@ class Local:
         fallback = self.default_city()
         if fallback:
             return dict(self._geocode(fallback), fonte="cidade do resumo")
-        raise ValueError("Não sei onde você está: diga a cidade, ligue '📍 Compartilhar minha localização' no app do Kronus "
-                         "ou defina a cidade com /resumo cidade <nome>.")
+        last = self.latest() or self.db.get_setting(LAST_CITY) or None     # v13.70: a última posição conhecida
+        if last and last.get("lat") is not None:
+            return {"lat": last["lat"], "lon": last["lon"], "nome": last.get("cidade") or "onde você estava",
+                    "estado": last.get("estado", ""), "fonte": "a última localização conhecida"}
+        told = self.city_from_memories()
+        if told:
+            return dict(self._geocode(told), fonte="a cidade que você me contou")
+        raise ValueError("Não sei onde você está: diga a cidade (\"clima em Campinas, SP\"), defina com /resumo cidade "
+                         "<nome>, ou deixe o app do Kronus ou o Bit no PC usarem a sua localização.")
 
     def weather(self, city: str = "", days: int = 1) -> Dict[str, Any]:
         place = self.where(city)
@@ -126,8 +253,9 @@ class Local:
         res = self.getter("https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
             "latitude": place["lat"], "longitude": place["lon"], "timezone": "auto", "forecast_days": max(days, 1),
             "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation",
-            "hourly": "precipitation_probability", "forecast_hours": 12,
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"}))
+            "hourly": "precipitation_probability,precipitation", "forecast_hours": 12,
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+                     "precipitation_probability_mean,precipitation_sum,precipitation_hours"}))
         cur, daily, hourly = res.get("current") or {}, res.get("daily") or {}, res.get("hourly") or {}
         out: Dict[str, Any] = {"lugar": place["nome"] + (f" ({place['estado']})" if place.get("estado") else ""),
                                "fonte_do_lugar": place["fonte"]}
@@ -135,13 +263,18 @@ class Local:
             out["agora"] = {"temperatura": round(float(cur.get("temperature_2m", 0))), "sensacao": round(float(cur.get("apparent_temperature", 0))),
                             "umidade": cur.get("relative_humidity_2m"), "vento_kmh": round(float(cur.get("wind_speed_10m", 0) or 0)),
                             "ceu": WEATHER.get(int(cur.get("weather_code") or 0), "")}
-        probs = [p for p in (hourly.get("precipitation_probability") or []) if p is not None]
         times = hourly.get("time") or []
-        if probs:
-            peak = max(probs)
-            idx = probs.index(peak)
-            out["chuva_proximas_horas"] = {"max_probabilidade": peak,
-                                           "por_volta_de": str(times[idx])[11:16] if idx < len(times) else ""}
+        probs = hourly.get("precipitation_probability") or []
+        mms = hourly.get("precipitation") or []
+        hours = [(str(t)[11:16], p, (mms[i] if i < len(mms) else None)) for i, (t, p) in enumerate(zip(times, probs))
+                 if p is not None]
+        if hours:
+            total = sum(float(m or 0) for _, _, m in hours)
+            wet = [h for h in hours if float(h[2] or 0) >= 0.1] if mms else [h for h in hours if h[1] >= 50]
+            peak = max(wet, key=lambda h: (float(h[2] or 0), h[1])) if wet else None
+            out["chuva_proximas_horas"] = {
+                "max_probabilidade": int(peak[1]) if peak else min(int(max(p for _, p, _ in hours)), 10 if mms else 100),
+                "mm": round(total, 1), "por_volta_de": peak[0] if peak else "", "vai_chover": bool(peak)}
         out["dias"] = []
         for i, day in enumerate((daily.get("time") or [])[:days]):
             try:
@@ -149,10 +282,14 @@ class Local:
                 label = "hoje" if i == 0 else ("amanhã" if i == 1 else f"{DIAS[d.weekday()]} {d:%d/%m}")
             except ValueError:
                 label = day
+            col = lambda key: (daily.get(key) or [None] * 8)[i] if i < len(daily.get(key) or []) else None  # noqa: E731
+            code = col("weather_code")
+            chance, rain_text = rain_info(col("precipitation_probability_max"), col("precipitation_probability_mean"),
+                                          col("precipitation_sum"), code)
             out["dias"].append({"dia": label, "min": round(float(daily["temperature_2m_min"][i])),
                                 "max": round(float(daily["temperature_2m_max"][i])),
-                                "chuva": (daily.get("precipitation_probability_max") or [None] * 8)[i],
-                                "ceu": WEATHER.get(int((daily.get("weather_code") or [0] * 8)[i] or 0), "")})
+                                "chuva": chance, "chuva_texto": rain_text, "chuva_mm": col("precipitation_sum"),
+                                "ceu": WEATHER.get(int(code or 0), "")})
         return out
 
 
@@ -164,11 +301,15 @@ def format_weather(w: Dict[str, Any]) -> str:
                      f"vento {a['vento_kmh']} km/h")
     rain = w.get("chuva_proximas_horas")
     if rain:
-        lines.append(f"Chuva nas próximas 12 h: até {rain['max_probabilidade']}%"
-                     + (f" (por volta das {rain['por_volta_de']})" if rain["max_probabilidade"] >= 30 and rain["por_volta_de"] else ""))
+        if rain.get("vai_chover", True) and rain["max_probabilidade"] >= 30:
+            lines.append(f"Chuva nas próximas 12 h: chance {rain['max_probabilidade']}%"
+                         + (f", por volta das {rain['por_volta_de']}" if rain.get("por_volta_de") else "")
+                         + (f" ({rain['mm']} mm)" if rain.get("mm") else ""))
+        else:
+            lines.append("Chuva nas próximas 12 h: não deve chover")
     for d in w.get("dias", []):
-        lines.append(f"{d['dia'].capitalize()}: {d['min']}–{d['max']} °C, {d['ceu']}"
-                     + (f", chuva {d['chuva']}%" if d.get("chuva") is not None else ""))
+        rain_text = d.get("chuva_texto") or (f"chuva {d['chuva']}%" if d.get("chuva") is not None else "")
+        lines.append(f"{d['dia'].capitalize()}: {d['min']}–{d['max']} °C, {d['ceu']}" + (f", {rain_text}" if rain_text else ""))
     return "\n".join(lines)
 
 

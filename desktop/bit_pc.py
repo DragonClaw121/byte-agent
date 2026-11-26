@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.14"
+VERSION = "1.15"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -1071,6 +1071,39 @@ def outlook_read(paths: List[str]) -> List[Dict[str, str]]:
     return out
 
 
+WINDOWS_LOCATION_PS = r"""param($src, $out)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Device
+$w = New-Object System.Device.Location.GeoCoordinateWatcher([System.Device.Location.GeoPositionAccuracy]::Default)
+$w.Start()
+$deadline = (Get-Date).AddSeconds(15)
+while (($w.Status -ne 'Ready') -and ((Get-Date) -lt $deadline)) { Start-Sleep -Milliseconds 300 }
+$c = $w.Position.Location
+$w.Stop()
+if ($c.IsUnknown) { '{"ok": false}' | Set-Content -Encoding UTF8 $out; exit 0 }
+ConvertTo-Json @{ ok = $true; lat = $c.Latitude; lon = $c.Longitude; acc = $c.HorizontalAccuracy } | Set-Content -Encoding UTF8 $out
+"""
+
+
+def windows_location() -> Optional[Dict[str, float]]:
+    """Posição aproximada do PC pelo serviço de localização do Windows (Wi-Fi). None se desligado/indisponível."""
+    if not IS_WINDOWS:
+        return None
+    try:
+        res = _powershell(WINDOWS_LOCATION_PS, {}, timeout=40)
+    except Exception:
+        return None
+    if not isinstance(res, dict) or not res.get("ok"):
+        return None
+    try:
+        lat, lon = float(res["lat"]), float(res["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180) or (lat == 0 and lon == 0):
+        return None
+    return {"lat": round(lat, 4), "lon": round(lon, 4), "acc": float(res.get("acc") or 0)}
+
+
 def write_eml(to: str, subject: str, text: str, html: str) -> str:
     """Rascunho .eml (abre como e-mail NOVO no Outlook, com o formato) — plano B quando não dá para usar o Outlook."""
     import tempfile
@@ -1793,6 +1826,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.speak_var = tk.BooleanVar(value=bool(self.cfg.get("voz", False)))
         self.text_var = tk.BooleanVar(value=bool(self.cfg.get("texto", True)))
+        self.loc_var = tk.BooleanVar(value=bool(self.cfg.get("localizacao")))     # v1.15: localização do Windows
         self.frame: Optional[Any] = None
         self.meeting: Optional[Dict[str, Any]] = None
         token = unprotect(str(self.cfg.get("token") or ""))
@@ -1809,6 +1843,7 @@ class App:
             threading.Thread(target=hotkeys, args=(self.events,), daemon=True, name="atalhos").start()
             threading.Thread(target=self.track_foreground, daemon=True, name="janela-em-uso").start()
             threading.Thread(target=self.poll_notices, daemon=True, name="avisos").start()
+            threading.Thread(target=self.location_loop, daemon=True, name="localizacao").start()
 
     # ------------------------------------------------------------ utilidades de interface
     def px(self, value: float) -> int:
@@ -1965,7 +2000,8 @@ class App:
             side="bottom", anchor="w", pady=(self.px(4), 0))
         opts = tk.Frame(f, bg=self.BG)
         opts.pack(side="bottom", fill="x", pady=(self.px(6), 0))
-        for text, var in (("Orientação em texto", self.text_var), ("Orientação por voz", self.speak_var)):
+        for text, var in (("Orientação em texto", self.text_var), ("Orientação por voz", self.speak_var),
+                          ("Localização (clima)", self.loc_var)):
             tk.Checkbutton(opts, text=text, variable=var, command=self.save_options, bg=self.BG, fg=self.MUTED,
                            selectcolor=self.CARD, activebackground=self.BG, activeforeground=self.INK,
                            font=("Segoe UI", 9)).pack(side="left")
@@ -2014,7 +2050,11 @@ class App:
 
     def save_options(self) -> None:
         self.cfg["voz"], self.cfg["texto"] = bool(self.speak_var.get()), bool(self.text_var.get())
+        turned_on = bool(self.loc_var.get()) and not self.cfg.get("localizacao")
+        self.cfg["localizacao"] = bool(self.loc_var.get())
         save_config(self.cfg, self.config_path)
+        if turned_on:
+            self.location_now()
         if not self.speak_var.get():
             self.voice.stop()
         self.update_bar()
@@ -2867,6 +2907,43 @@ class App:
             except Exception:
                 pass
 
+    # ------------------------------------------------------------ localização do Windows (v1.15)
+    def location_loop(self) -> None:
+        """Com a sua permissão, manda ao Bit a posição APROXIMADA do PC (Wi-Fi, pelo serviço de localização do Windows) a
+        cada 45 min: o clima, o resumo e a rotina passam a saber a cidade sem cadastro. Pergunta uma vez."""
+        time.sleep(20)
+        if self.cfg.get("localizacao") is None and not self.cfg.get("localizacao_perguntada"):
+            self.cfg["localizacao_perguntada"] = True
+            save_config(self.cfg, self.config_path)
+            self.events.put(("call", lambda: self.notice(
+                "Quer que eu use a localização do Windows (aproximada, pelo Wi-Fi) para o clima e a rotina saberem a sua "
+                "cidade sozinhos? Dá para mudar depois em \"Localização (clima)\".",
+                action=("Usar a localização", lambda: (self.loc_var.set(True), self.save_options())))))
+        while True:
+            if self.cfg.get("localizacao") and self.api is not None:
+                self.location_now(background=False)
+            time.sleep(45 * 60)
+
+    def location_now(self, background: bool = True) -> None:
+        def work() -> Dict[str, Any]:
+            pos = windows_location()
+            if not pos:
+                raise ApiError("A localização do Windows está desligada ou não respondeu (Configurações → Privacidade e "
+                               "segurança → Localização).")
+            return self.api.call("POST", "local", pos, timeout=30)
+
+        def done(res: Dict[str, Any]) -> None:
+            if res.get("onde"):
+                self.cfg["ultima_cidade"] = str(res.get("cidade") or res["onde"])
+                save_config(self.cfg, self.config_path)
+        if background:
+            self.run_bg(work, done, lambda msg: self.add_message("⚠ " + msg, "aviso"))
+        else:
+            try:
+                done(work())
+            except Exception:
+                pass
+
     def press_data(self, data: str, label: str) -> None:
         """Botão de um aviso (v1.12): manda para o Bit como se fosse um botão da conversa."""
         if self.api is None:
@@ -3693,6 +3770,7 @@ def autotest(out_path: str) -> int:
                 try:                                                    # Outlook novo: o script de colar roda e,
                     uia = _powershell(NEW_OUTLOOK_PASTE_PS, {"assunto": "teste-bit", "espera": 2}, timeout=40)
                     result["outlook_novo_colar"] = uia.get("motivo") if isinstance(uia, dict) else str(uia)
+                    result["localizacao_windows"] = bool(windows_location())     # diagnóstico (o CI não tem GPS/Wi-Fi)
                     result["outlook_tipo"] = outlook_flavor()           # sem Outlook novo aberto, não cola nada
                     if result["outlook_novo_colar"] not in ("sem_janela", "colado"):
                         problems.append(f"Outlook novo: script de colar respondeu {result['outlook_novo_colar']}")

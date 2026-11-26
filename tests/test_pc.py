@@ -354,3 +354,15 @@ def test_meeting_from_the_pc(bit):
     status, res = call(svc, "GET", f"reuniao/{mid}", token)
     assert status == 200 and res["status"] == "pronta" and res["ata"]
     assert call(svc, "GET", "reuniao/999", token)[0] == 404
+
+
+def test_pc_sends_the_windows_location(bit, monkeypatch):
+    """v13.70: o Bit no PC manda a posição aproximada (com permissão) e o clima passa a saber a cidade."""
+    svc, _ = bit
+    token = pair(svc)
+    monkeypatch.setattr(svc.local, "_reverse", lambda lat, lon: {"cidade": "Americana", "bairro": "Centro", "estado": "São Paulo"})
+    status, res = call(svc, "POST", "local", token, {"lat": -22.7393, "lon": -47.3313, "acc": 120})
+    assert status == 200 and res["cidade"] == "Americana"
+    assert svc.local.where("")["fonte"] == "sua localização atual"
+    assert call(svc, "POST", "local", token, {"lat": "x"})[0] == 400
+    assert call(svc, "POST", "local", "", {"lat": 1, "lon": 1})[0] in (401, 403)

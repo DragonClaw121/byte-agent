@@ -96,3 +96,21 @@ curta e sem listas. A versão escrita continua chegando no Telegram.
 - **Para ver agora:** `/alertas_clientes testar` dispara os alertas de clientes na hora, com os botões. Se não houver
   nada para avisar, guarde uma renovação próxima para testar:
   `/data_cliente Teste | renovação Produto X | <data daqui a 10 dias>`.
+
+
+## Clima (v13.70)
+- **Sem cadastro:** o clima do resumo e das perguntas ("vai chover hoje?") usa, nesta ordem:
+  1. a cidade que você pedir ("clima em Campinas, SP");
+  2. onde você está agora (app do Kronus ou Bit no PC, com a sua permissão; a posição vale para todos os agentes);
+  3. a cidade do resumo (`/resumo cidade <nome>`);
+  4. a última localização conhecida;
+  5. a cidade que você já contou ("moro em Americana").
+- **Cidade certa:** a busca é no Brasil (`BYTE_PAIS`, padrão BR), aceita o estado ("Santa Bárbara, MG"). Com várias
+  cidades do mesmo nome, prefere a do estado onde você costuma estar e, depois, a maior. O resumo mostra a cidade com o
+  estado, para você conferir.
+- **Chuva realista:** a chance do dia é a média das horas, não o pico de uma única hora, e só conta como chuva se houver
+  chuva prevista em milímetros. Dia seco aparece como "sem chuva"; com chuva, aparecem os milímetros e a chance. O aviso
+  "leve o guarda-chuva" da rotina segue a mesma regra.
+- **Bit no PC:** a opção **Localização (clima)** usa a localização do Windows (aproximada, pelo Wi-Fi) a cada 45 min. O
+  app pergunta uma vez. Se o Windows estiver com a localização desligada (Configurações → Privacidade e segurança →
+  Localização), ele avisa.

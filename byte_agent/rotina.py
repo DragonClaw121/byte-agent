@@ -204,11 +204,15 @@ class Routine:
         getter = self.getter or local.getter
         res = getter("https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
             "latitude": place["lat"], "longitude": place["lon"], "timezone": "auto",
-            "hourly": "precipitation_probability", "forecast_days": 1}))
+            "hourly": "precipitation_probability,precipitation", "forecast_days": 1}))
         hourly = res.get("hourly") or {}
         best = None
-        for t, p in zip(hourly.get("time") or [], hourly.get("precipitation_probability") or []):
+        mms = hourly.get("precipitation")
+        for i, (t, p) in enumerate(zip(hourly.get("time") or [], hourly.get("precipitation_probability") or [])):
             h = int(str(t)[11:13] or 0)
+            mm = float((mms or [0] * (i + 1))[i] or 0) if mms is not None else None
+            if mm is not None and mm < 0.2:                       # v13.70: sem chuva prevista em mm, não é chuva
+                continue
             if p is not None and start_h - 0.5 <= h <= start_h + hours and (best is None or p > best[0]):
                 best = (int(p), str(t)[11:16])
         return best

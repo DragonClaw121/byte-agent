@@ -41,8 +41,8 @@ def test_weather_location_priority_and_privacy():
     w = loc.weather("Santa Barbara do Oeste", 3)
     text = local.format_weather(w)
     assert "Santa Bárbara d'Oeste (São Paulo) (cidade pedida)" in text
-    assert "Agora: 29 °C (sensação 31 °C), parcialmente nublado" in text and "até 70% (por volta das 17:00)" in text
-    assert "Hoje: 18–32 °C, pancadas de chuva, chuva 70%" in text and "Amanhã: 19–27 °C" in text
+    assert "Agora: 29 °C (sensação 31 °C), parcialmente nublado" in text and "chance 70%, por volta das 17:00" in text
+    assert "Hoje: 18–32 °C, pancadas de chuva, chance de chuva 70%" in text and "Amanhã: 19–27 °C" in text
     d = loc.update_location(-22.7531, -47.4127, 900)
     assert d["onde"] == "Centro, Santa Bárbara d'Oeste, São Paulo" and d["ha_minutos"] == 0
     assert db.get_setting(local.SETTING)["lat"] == -22.7531                       # só a última posição, sem histórico
@@ -50,9 +50,8 @@ def test_weather_location_priority_and_privacy():
     loc.update_location(-22.7540, -47.4130, 800)                                 # mesmo lugar: não consulta o mapa de novo
     assert len([c for c in geo.calls if "nominatim" in c]) == n
     assert loc.weather()["fonte_do_lugar"] == "sua localização atual"
-    now["t"] += 7 * 3600                                                          # posição velha não vale mais
-    with pytest.raises(ValueError):
-        loc.weather()
+    now["t"] += 7 * 3600                                     # posição velha: não é "onde você está", é a última conhecida
+    assert loc.weather()["fonte_do_lugar"] == "a última localização conhecida"
     with pytest.raises(ValueError):
         loc.update_location(0, 0)
 
@@ -102,3 +101,65 @@ def test_telegram_weather_and_where(kronus):
     finally:
         bridge.stop()
         tg.httpd.shutdown()
+
+
+
+def test_rain_is_realistic_on_a_dry_day():
+    """v13.70: dia de sol e seco com o pico de uma hora em 100% (média baixa, 0 mm) não vira "100% de chuva"."""
+    assert local.rain_info(100, 12, 0.0, 1) == (10, "sem chuva")
+    assert local.rain_info(80, 45, 1.2, 61) == (45, "chuva fraca possível (1.2 mm), chance 45%")
+    assert local.rain_info(95, 80, 18.4, 65) == (80, "chuva: 18 mm, chance 80%")
+    db = engine.UnifiedDatabase(__import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "c.db", engine.VectorEngine())
+
+    def getter(url, timeout=10.0):
+        if "geocoding-api" in url:
+            return {"results": [{"name": "Americana", "admin1": "São Paulo", "latitude": -22.74, "longitude": -47.33}]}
+        return {"current": {"temperature_2m": 33, "apparent_temperature": 35, "relative_humidity_2m": 30, "weather_code": 0,
+                            "wind_speed_10m": 8},
+                "hourly": {"time": [f"2026-11-26T{h:02d}:00" for h in range(12, 24)],
+                           "precipitation_probability": [100] + [5] * 11, "precipitation": [0.0] * 12},
+                "daily": {"time": ["2026-11-26"], "temperature_2m_min": [20], "temperature_2m_max": [34],
+                          "precipitation_probability_max": [100], "precipitation_probability_mean": [8],
+                          "precipitation_sum": [0.0], "weather_code": [0]}}
+    text = local.format_weather(local.Local(db, getter=getter).weather("Americana"))
+    assert "Hoje: 20–34 °C, céu limpo, sem chuva" in text and "não deve chover" in text and "100%" not in text
+
+
+def test_right_city_shared_location_and_what_you_told_me(tmp_path, monkeypatch):
+    """v13.70: busca no Brasil, "Campinas, SP", o estado onde você costuma estar, a cidade maior; localização
+    compartilhada entre os agentes; e a cidade que você contou ("moro em ...") quando não há outra."""
+    calls = []
+
+    def getter(url, timeout=10.0):
+        calls.append(url)
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        if "geocoding-api" in url:
+            assert q.get("countryCode") == "BR"
+            if q["name"] == "Santa Bárbara":
+                return {"results": [{"name": "Santa Bárbara", "admin1": "Minas Gerais", "latitude": -19.9, "longitude": -43.4,
+                                     "population": 30000},
+                                    {"name": "Santa Bárbara", "admin1": "Bahia", "latitude": -11.9, "longitude": -38.9,
+                                     "population": 21000}]}
+            return {"results": [{"name": "Campinas", "admin1": "Goiás", "latitude": -16.6, "longitude": -49.3, "population": 5},
+                                {"name": "Campinas", "admin1": "São Paulo", "latitude": -22.9, "longitude": -47.06,
+                                 "population": 1200000}]}
+        return {}
+    assert local.split_city("Campinas, SP") == ("Campinas", "São Paulo") and local.split_city("Campinas") == ("Campinas", "")
+    assert local.split_city("Santa Bárbara d'Oeste") == ("Santa Bárbara d'Oeste", "")
+    monkeypatch.setenv("BYTE_DADOS_PERSISTENTES", str(tmp_path / "store"))
+    mk = lambda name: engine.UnifiedDatabase(tmp_path / f"{name}.db", engine.VectorEngine())     # noqa: E731
+    kronus, bit = local.Local(mk("kronus"), getter=getter), local.Local(mk("bit"), getter=getter)
+    assert kronus._geocode("Campinas")["estado"] == "São Paulo"                  # a maior
+    assert kronus._geocode("Campinas, GO")["estado"] == "Goiás"                  # o estado dito
+    kronus.db.set_setting(local.SETTING, {"lat": -19.0, "lon": -44.0, "estado": "Bahia", "at": 1.0})
+    assert kronus._geocode("Santa Bárbara")["estado"] == "Bahia"                 # o estado onde você costuma estar
+    kronus.update_location = local.Local.update_location.__get__(kronus)
+    kronus._reverse = lambda lat, lon: {"cidade": "Americana", "bairro": "Centro", "estado": "São Paulo"}
+    kronus.update_location(-22.74, -47.33)
+    where = bit.where("")                                                        # o Bit sabe onde o Kronus viu você
+    assert where["nome"] == "Americana" and where["fonte"] == "sua localização atual"
+    alone = local.Local(mk("matrix2"), getter=getter)
+    monkeypatch.setenv("BYTE_DADOS_PERSISTENTES", str(tmp_path / "outro"))
+    alone.db.add_memory_direct("O usuário mora em Campinas, SP e trabalha na L.spot", category="usuario", importance=4)
+    got = alone.where("")
+    assert got["fonte"] == "a cidade que você me contou" and got["estado"] == "São Paulo"

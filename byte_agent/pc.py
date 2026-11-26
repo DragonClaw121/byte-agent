@@ -798,6 +798,16 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
             image = clean_image(body.get("tela")) if body.get("tela") else ""
             h._send_json(200, hub.prepare(str(body.get("sessao") or ""), str(body.get("tipo") or ""),
                                           str(body.get("pedido") or ""), image))
+        elif sub == "local" and method == "POST":                   # v13.70: localização aproximada do PC (Windows)
+            loc = getattr(service, "local", None)
+            body = read_body(h, 2048) or {}
+            if loc is None:
+                h._send_json(404, {"error": "Localização indisponível neste agente."})
+                return
+            try:
+                h._send_json(200, loc.update_location(body.get("lat"), body.get("lon"), body.get("acc")))
+            except (TypeError, ValueError):
+                h._send_json(400, {"error": "Coordenadas inválidas."})
         elif sub == "reuniao" or sub.startswith("reuniao/"):         # v13.62: transcrever reunião pelo PC
             meetings = getattr(service, "meetings", None)
             if meetings is None:
