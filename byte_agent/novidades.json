@@ -135,5 +135,11 @@
    "Chuva realista: dia seco aparece como \"sem chuva\" (antes, o pico de uma hora virava 100%); o \"leve o guarda-chuva\" também",
    "Bit no PC 1.15: opção \"Localização (clima)\" com a localização do Windows"
   ]
+ },
+ {
+  "versao": "13.71",
+  "itens": [
+   "Bit no PC 1.16: a cor de fundo atrás de cada imagem é medida pelo navegador (Edge, sem janela) — o HTML do Outlook com células sem fechar enganava a leitura e as imagens iam com fundo branco"
+  ]
  }
 ]

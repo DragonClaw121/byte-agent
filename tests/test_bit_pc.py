@@ -233,3 +233,18 @@ def test_split_meeting_you_vs_others_with_echo_gate():
         bit_pc.MEET_CHUNK_S = old
     who = [w for w, _ in chunks]
     assert "outros" in who and "voce" in who and split.echo_blocks == 4      # o eco dos 2 primeiros segundos foi calado
+
+
+def test_outlook_style_unclosed_cells_do_not_leak_background():
+    """v1.16: no HTML "torto" do Outlook (td/tr sem fechar), a cor de uma célula antiga não vaza para a próxima imagem."""
+    html = ('<style>.hero{background-color:rgb(31,42,26)}</style><body bgcolor="#ffffff">'
+            '<table><tr><td style="background:#ffffff"><p>Olá<td>outra'
+            '<tr><td class="hero"><p><span><img src="data:image/png;base64,AAAA"></span>'
+            '<tr><td><img src="https://x/y.png"></table></body>')
+    assert bit_pc.image_backgrounds(html) == [(31, 42, 26), (255, 255, 255)]
+    seen = []
+    bit_pc.flatten_transparency(html, fetch=lambda u: None, backgrounds=lambda h: seen.append(h) or [(1, 2, 3), (4, 5, 6)])
+    assert seen and [i["medido_por"] for i in bit_pc.LAST_IMAGES] == ["navegador", "navegador"]
+    assert [i["fundo"] for i in bit_pc.LAST_IMAGES] == [(1, 2, 3), (4, 5, 6)]
+    bit_pc.flatten_transparency(html, fetch=lambda u: None, backgrounds=lambda h: None)       # sem navegador: a leitura
+    assert [i["medido_por"] for i in bit_pc.LAST_IMAGES] == ["leitura do HTML", "leitura do HTML"]

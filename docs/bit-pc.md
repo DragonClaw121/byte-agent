@@ -118,6 +118,10 @@ pronto sai igual ao modelo.
 - **Fidelidade ao modelo (v13.67):** o texto do modelo fica palavra por palavra. Só os campos e, se indispensável, uma
   frase de outra situação mudam. Negrito, cor e marca-texto que o modelo não tem são recusados, e o e-mail sai só em
   texto se a IA reescrever demais. Campos que o Outlook "picou" em etiquetas (`[<span>Nome</span>]`) voltam a ser campos.
+- **Imagens (v1.16):** a cor de fundo atrás de cada imagem passa a ser medida pelo próprio navegador (o Edge do
+  Windows, aberto escondido, sem janela e sem as imagens: só a estrutura do e-mail). Antes, o HTML "torto" do Outlook
+  (células e linhas sem fechar) fazia a leitura pegar a cor de outro bloco, e a imagem ia com fundo branco. Sem o
+  Edge, vale a leitura do HTML, que agora também fecha essas células como o navegador.
 - **Imagens (v1.13):** também ajusta o logo que já chegou com fundo branco num bloco escuro (o Outlook/Word "achata" a
   transparência ao copiar), a cor de fundo vinda do estilo do modelo (`<style>`) e as imagens hospedadas na internet.
   A janela do e-mail diz quantas imagens foram ajustadas. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.

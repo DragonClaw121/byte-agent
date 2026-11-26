@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.15"
+VERSION = "1.16"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -704,6 +704,19 @@ def image_backgrounds(html: str) -> List[Optional[Tuple[int, int, int]]]:
             if tag == "img":
                 self.found.append(next((c for _, c in reversed(self.stack) if c is not None), None))
                 return
+            # v1.16: etiquetas que o HTML do Outlook deixa sem fechar (<td>, <tr>, <p>, <li>): uma nova fecha a anterior,
+            # como no navegador — senão a cor de uma célula antiga "vazava" para a imagem seguinte
+            limits = {"td": ("td", "th"), "th": ("td", "th"), "tr": ("tr",), "p": ("p",), "li": ("li",)}
+            if tag in limits:
+                walls = {"td": ("tr", "table"), "th": ("tr", "table"), "tr": ("table",), "p": ("td", "th", "div", "table"),
+                         "li": ("ul", "ol")}[tag]
+                for k in range(len(self.stack) - 1, -1, -1):
+                    name = self.stack[k][0]
+                    if name in walls:
+                        break
+                    if name in limits[tag]:                           # (para <tr>, sobe até o <tr> anterior)
+                        del self.stack[k:]
+                        break
             if tag not in voids:
                 self.stack.append((tag, color))
 
@@ -778,7 +791,65 @@ def _fetch_image(url: str) -> Optional[bytes]:
         return None
 
 
-def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None) -> str:
+BROWSER_PROBE_JS = """<script>(function(){var out=[];var imgs=document.getElementsByTagName('img');
+for(var i=0;i<imgs.length;i++){var el=imgs[i].parentElement,c='';while(el){var s=getComputedStyle(el).backgroundColor;
+if(s&&s!=='transparent'&&!/rgba\\([^)]*,\\s*0\\)$/.test(s)){c=s;break;}el=el.parentElement;}out.push(c);}
+var p=document.createElement('pre');p.id='bit-fundos';p.textContent='BITFUNDOS'+JSON.stringify(out)+'FIMFUNDOS';
+document.documentElement.appendChild(p);})();</script>"""
+PIXEL_GIF = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
+
+
+def find_browser() -> str:
+    """O Edge (vem em todo Windows 10/11) ou o Chrome, para medir as cores como o navegador desenha."""
+    if not IS_WINDOWS:
+        return ""
+    bases = [os.environ.get(k, "") for k in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+    for base in bases:
+        for rel in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe"):
+            path = os.path.join(base, rel) if base else ""
+            if path and os.path.isfile(path):
+                return path
+    return ""
+
+
+def browser_backgrounds(html: str, browser: str = "") -> Optional[List[Optional[Tuple[int, int, int]]]]:
+    """v1.16: a cor de fundo REAL atrás de cada <img>, medida pelo navegador (Edge sem janela): vale para estilos,
+    classes, <table bgcolor> e o HTML "torto" do Outlook (etiquetas sem fechar), que a leitura simples erra. As imagens
+    viram um pixel vazio na cópia medida (nada sai do PC). None se não houver navegador ou ele não responder."""
+    import tempfile
+    browser = browser or find_browser()
+    if not browser:
+        return None
+    probe = IMG_SRC_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{PIXEL_GIF}{m.group(2)}", str(html or ""))
+    probe = re.sub(r"(?is)<script.*?</script>", "", probe)
+    probe = re.sub(r"(?i)</body>", lambda _m: BROWSER_PROBE_JS + "</body>", probe, count=1) if re.search(r"(?i)</body>", probe) \
+        else probe + BROWSER_PROBE_JS
+    folder = tempfile.mkdtemp(prefix="bitpc-fundo-")
+    path = os.path.join(folder, "email.html")
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(probe if re.search(r"(?i)<meta[^>]+charset", probe) else '<meta charset="utf-8">' + probe)
+        extra = ["--no-sandbox"] if not sys.platform.startswith("win") and hasattr(os, "geteuid") and os.geteuid() == 0 else []
+        proc = subprocess.run([browser, "--headless", "--disable-gpu", "--no-first-run", "--disable-extensions",
+                               "--disable-background-networking", "--disable-component-update", "--disable-sync",
+                               "--no-default-browser-check", "--mute-audio"] + extra + [
+                               f"--user-data-dir={os.path.join(folder, 'perfil')}", "--dump-dom",
+                               "file:///" + path.replace("\\", "/").lstrip("/")],
+                              capture_output=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+        m = re.search(r"BITFUNDOS(\[.*?\])FIMFUNDOS", out, re.S)
+        if not m:
+            return None
+        return [parse_color(c) if c else None for c in json.loads(m.group(1).replace("&quot;", '"'))]
+    except Exception:
+        return None
+    finally:
+        import shutil
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None,
+                         backgrounds: Optional[Callable[[str], Optional[List[Optional[Tuple[int, int, int]]]]]] = None) -> str:
     """Deixa as imagens iguais em qualquer programa de e-mail (o Outlook novo pinta o transparente de branco):
       - PNG/GIF com transparência ganham, no transparente, a cor de fundo do bloco onde estão no modelo;
       - v1.13: imagem já "achatada" em branco (moldura branca num bloco escuro) tem o branco das bordas pintado com a
@@ -789,7 +860,10 @@ def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[byt
     except ImportError:
         return html
     fetch = fetch or _fetch_image
-    colors = image_backgrounds(html)
+    measured = (backgrounds or browser_backgrounds)(html)
+    n_imgs = len(IMG_SRC_RE.findall(str(html or "")))
+    how = "navegador" if measured is not None and len(measured) == n_imgs else "leitura do HTML"
+    colors = measured if how == "navegador" else image_backgrounds(html)
     count = [0]
     report: List[Dict[str, Any]] = []
 
@@ -799,7 +873,8 @@ def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[byt
         prefix, quote, src = m.group(1), m.group(2), m.group(3)
         color = colors[i] if i < len(colors) else None
         info: Dict[str, Any] = {"n": i + 1, "origem": "embutida" if src.startswith("data:") else
-                                ("internet" if src.lower().startswith("http") else "outra"), "fundo": color}
+                                ("internet" if src.lower().startswith("http") else "outra"), "fundo": color,
+                                "medido_por": how}
         report.append(info)
         if color is None:
             info["resultado"] = "sem cor de fundo no bloco"
@@ -856,7 +931,8 @@ def images_summary() -> str:
         return ""
     fixed = sum(1 for i in LAST_IMAGES if "trocad" in str(i.get("resultado")))
     nobg = sum(1 for i in LAST_IMAGES if i.get("resultado") == "sem cor de fundo no bloco")
-    text = f"Imagens: {len(LAST_IMAGES)}"
+    text = f"Imagens: {len(LAST_IMAGES)}" + (" (cores medidas pelo navegador)" if any(
+        i.get("medido_por") == "navegador" for i in LAST_IMAGES) else "")
     if fixed:
         text += f", {fixed} ajustada(s) ao fundo do modelo"
     if nobg:
@@ -3771,6 +3847,14 @@ def autotest(out_path: str) -> int:
                     uia = _powershell(NEW_OUTLOOK_PASTE_PS, {"assunto": "teste-bit", "espera": 2}, timeout=40)
                     result["outlook_novo_colar"] = uia.get("motivo") if isinstance(uia, dict) else str(uia)
                     result["localizacao_windows"] = bool(windows_location())     # diagnóstico (o CI não tem GPS/Wi-Fi)
+                    probe_html = ('<style>.hero{background-color:rgb(31,42,26)}</style><body bgcolor="#ffffff"><table>'
+                                  '<tr><td style="background:#ffffff"><p>Olá<td>x<tr><td class="hero"><p><span>'
+                                  '<img src="data:image/png;base64,AAAA"></span><tr><td><img src="https://x/y.png"></table>')
+                    result["navegador"] = os.path.basename(find_browser())
+                    measured = browser_backgrounds(probe_html)                  # v1.16: o Edge mede as cores de fundo
+                    result["fundos_navegador"] = measured
+                    if result["navegador"] and measured != [(31, 42, 26), (255, 255, 255)]:
+                        problems.append(f"cores de fundo pelo navegador: {measured}")
                     result["outlook_tipo"] = outlook_flavor()           # sem Outlook novo aberto, não cola nada
                     if result["outlook_novo_colar"] not in ("sem_janela", "colado"):
                         problems.append(f"Outlook novo: script de colar respondeu {result['outlook_novo_colar']}")
