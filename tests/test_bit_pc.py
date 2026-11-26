@@ -160,52 +160,95 @@ def test_new_outlook_diagnostics_are_logged(tmp_path, monkeypatch):
     assert "msedgewebview2" in bit_pc.NEW_OUTLOOK_PASTE_PS and "GetForegroundWindow" in bit_pc.NEW_OUTLOOK_PASTE_PS
 
 
-def test_transparent_images_get_the_block_background():
-    """v1.11: no Outlook novo a transparência virava branco: a imagem ganha a cor do bloco onde está no modelo."""
+def _png(im):
     import base64
     import io
-    img = Image.new("RGBA", (4, 2), (0, 0, 0, 0))
-    img.putpixel((0, 0), (255, 255, 255, 255))                         # um ponto branco (o "logo")
     buf = io.BytesIO()
-    img.save(buf, "PNG")
-    src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-    html = (f'<table bgcolor="#ffffff"><tr><td style="padding:4px;background:#1E2A12"><img src="{src}"></td></tr>'
-            f'<tr><td><img src="{src}"></td></tr></table><p><img src="{src}"></p>')
-    assert bit_pc.image_backgrounds(html) == [(30, 42, 18), (255, 255, 255), None]
-    out = bit_pc.flatten_transparency(html)
-    srcs = re.findall(r'src="(data:image/png;base64,[^"]+)"', out)
-    first = Image.open(io.BytesIO(base64.b64decode(srcs[0].split(",", 1)[1])))
-    assert first.mode == "RGB" and first.getpixel((1, 1)) == (30, 42, 18) and first.getpixel((0, 0)) == (255, 255, 255)
-    assert srcs[2] == src                                              # sem fundo conhecido: fica como estava
+    im.save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _img(src):
+    import base64
+    import io
+    return Image.open(io.BytesIO(base64.b64decode(src.split(",", 1)[1])))
+
+
+def test_transparent_images_stay_transparent():
+    """v1.17: nada é pintado atrás das imagens — no modo claro ou escuro, o que aparece é o fundo do próprio e-mail."""
+    img = Image.new("RGBA", (4, 2), (0, 0, 0, 0))
+    img.putpixel((0, 0), (255, 255, 255, 255))
+    src = _png(img)
+    html = (f'<table bgcolor="#ffffff"><tr><td style="background:#1E2A12"><img src="{src}"></td></tr>'
+            f'<tr><td><img src="{src}"></td></tr></table><p><img src="https://x/y.png"></p>')
+    calls = []
+    out = bit_pc.transparent_images(html, fetch=lambda u: base64_png_bytes(img),
+                                    backgrounds=lambda h: calls.append(h) or [(30, 42, 18), (255, 255, 255), None])
+    assert out == html                                                 # PNG transparente: intocado (até o da internet)
+    assert calls == []                                                 # nem precisou medir os blocos no navegador
+    assert [i["resultado"] for i in bit_pc.LAST_IMAGES] == ["já transparente: mantida"] * 3
+    assert "3 com a transparência original" in bit_pc.images_summary()
+    big = Image.new("RGBA", (8000, 1800), (0, 0, 0, 0))                # o logo gigante do modelo: diminuído, ainda transparente
+    big.paste((40, 90, 30, 255), (3000, 500, 5000, 1300))
+    out = bit_pc.transparent_images(f'<img src="{_png(big)}">', backgrounds=lambda h: None)
+    small = _img(re.search(r'src="([^"]+)"', out).group(1))
+    assert small.size == (1200, 270) and small.mode == "RGBA"
+    assert small.getpixel((5, 5))[3] == 0 and small.getpixel((600, 135)) == (40, 90, 30, 255)
+    out = bit_pc.transparent_images(f'<img width="150" src="{_png(big)}">', backgrounds=lambda h: None)
+    assert _img(re.search(r'src="([^"]+)"', out).group(1)).size == (300, 67)    # 2x a largura em que aparece
+    assert bit_pc.display_limits('<img src="a" style="width:100px"><img alt="x"><img src="b">') == [200, 1200]
     assert bit_pc.parse_color("rgb(1, 2, 3)") == (1, 2, 3) and bit_pc.parse_color("#abc") == (170, 187, 204)
 
 
-def test_images_white_box_css_class_and_remote():
-    """v1.13: logo já "achatado" em branco num bloco escuro, fundo vindo do <style> e imagem da internet."""
-    import base64
+def base64_png_bytes(im):
     import io
-    logo = Image.new("RGB", (10, 6), (255, 255, 255))                 # caixa branca com um "logo" verde dentro
-    for x in range(3, 8):
-        for y in range(1, 5):
-            logo.putpixel((x, y), (120, 200, 60))
-    logo.putpixel((5, 2), (255, 255, 255))                            # branco DENTRO do logo: fica
     buf = io.BytesIO()
-    logo.save(buf, "PNG")
-    raw = buf.getvalue()
-    html = ('<style>.hero { background-color: #1E2A12; } td.claro { background:#ffffff }</style>'
-            '<table><tr><td class="hero"><img src="https://site/logo.png" width="10"></td></tr>'
-            '<tr><td class="claro"><img src="data:image/png;base64,' + base64.b64encode(raw).decode() + '"></td></tr></table>')
-    assert bit_pc.css_backgrounds(html) == {".hero": (30, 42, 18), "td.claro": (255, 255, 255)}
-    assert bit_pc.image_backgrounds(html) == [(30, 42, 18), (255, 255, 255)]
-    out = bit_pc.flatten_transparency(html, fetch=lambda url: raw)
-    first = re.search(r'<img src="(data:image/png;base64,[^"]+)" width="10">', out).group(1)
-    im = Image.open(io.BytesIO(base64.b64decode(first.split(",", 1)[1])))
-    assert im.getpixel((0, 0)) == (30, 42, 18) and im.getpixel((4, 2)) == (120, 200, 60)
-    assert im.getpixel((5, 2)) == (255, 255, 255)                     # o branco de dentro do logo não muda
-    assert [i["resultado"] for i in bit_pc.LAST_IMAGES] == ["fundo branco trocado pela cor do bloco", "bloco claro: mantida"]
-    assert "1 ajustada(s)" in bit_pc.images_summary()
-    plain = bit_pc.flatten_transparency('<p><img src="https://x/y.png"></p>', fetch=lambda url: raw)
-    assert plain == '<p><img src="https://x/y.png"></p>' and "sem cor de fundo" in bit_pc.images_summary()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_white_box_background_is_removed():
+    """v1.17: o logo que chegou com caixa branca (o Outlook/Word achatou a transparência) fica com o fundo transparente."""
+    logo = Image.new("RGB", (40, 20), (255, 255, 255))
+    for x in range(10, 30):
+        for y in range(4, 16):
+            logo.putpixel((x, y), (40, 90, 30))
+    for x in range(17, 23):
+        for y in range(8, 12):
+            logo.putpixel((x, y), (255, 255, 255))                   # branco DENTRO do logo: fica
+    logo.putpixel((9, 10), (150, 175, 145))                           # borda suavizada: meio a meio
+    html = f'<td style="background:#1E2A12"><img src="{_png(logo)}" width="40"></td>'
+    out = bit_pc.transparent_images(html, backgrounds=lambda h: [(30, 42, 18)])
+    im = _img(re.search(r'src="([^"]+)" width="40"', out).group(1))
+    assert im.mode == "RGBA" and im.getpixel((0, 0))[3] == 0 and im.getpixel((39, 19))[3] == 0
+    assert im.getpixel((12, 6)) == (40, 90, 30, 255)
+    assert im.getpixel((20, 10)) == (255, 255, 255, 255)
+    edge = im.getpixel((9, 10))
+    assert 0 < edge[3] < 255 and edge[0] < 90                         # semitransparente e sem halo branco
+    assert bit_pc.LAST_IMAGES[0]["resultado"] == "fundo removido (transparente)"
+    assert "1 com o fundo removido" in bit_pc.images_summary()
+
+
+def test_buttons_and_photos_are_not_touched():
+    """Um botão verde num bloco branco É o botão (não é fundo); foto/print de tela também não muda."""
+    button = Image.new("RGB", (40, 12), (110, 160, 40))
+    for x in range(10, 30):
+        button.putpixel((x, 6), (255, 255, 255))
+    src = _png(button)
+    html = f'<td><img src="{src}"></td>'
+    assert bit_pc.transparent_images(html, backgrounds=lambda h: [(255, 255, 255)]) == html
+    assert "botão" in bit_pc.LAST_IMAGES[0]["resultado"]
+    same = bit_pc.transparent_images(html, backgrounds=lambda h: [(110, 160, 40)])   # fundo da cor do bloco: sai
+    assert same != html and _img(re.search(r'src="([^"]+)"', same).group(1)).getpixel((0, 0))[3] == 0
+    import random
+    rnd = random.Random(1)
+    photo = Image.new("RGB", (96, 96), (255, 255, 255))
+    for x in range(4, 92):
+        for y in range(4, 92):
+            photo.putpixel((x, y), (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)))
+    html = f'<img src="{_png(photo)}">'
+    assert bit_pc.transparent_images(html, backgrounds=lambda h: None) == html
+    assert bit_pc.LAST_IMAGES[0]["resultado"] == "foto ou sem fundo liso: mantida"
 
 
 def test_split_meeting_you_vs_others_with_echo_gate():
@@ -242,9 +285,3 @@ def test_outlook_style_unclosed_cells_do_not_leak_background():
             '<tr><td class="hero"><p><span><img src="data:image/png;base64,AAAA"></span>'
             '<tr><td><img src="https://x/y.png"></table></body>')
     assert bit_pc.image_backgrounds(html) == [(31, 42, 26), (255, 255, 255)]
-    seen = []
-    bit_pc.flatten_transparency(html, fetch=lambda u: None, backgrounds=lambda h: seen.append(h) or [(1, 2, 3), (4, 5, 6)])
-    assert seen and [i["medido_por"] for i in bit_pc.LAST_IMAGES] == ["navegador", "navegador"]
-    assert [i["fundo"] for i in bit_pc.LAST_IMAGES] == [(1, 2, 3), (4, 5, 6)]
-    bit_pc.flatten_transparency(html, fetch=lambda u: None, backgrounds=lambda h: None)       # sem navegador: a leitura
-    assert [i["medido_por"] for i in bit_pc.LAST_IMAGES] == ["leitura do HTML", "leitura do HTML"]

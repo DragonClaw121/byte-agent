@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.16"
+VERSION = "1.17"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -738,39 +738,118 @@ def _light(color: Tuple[int, int, int]) -> bool:
     return 0.299 * r + 0.587 * g + 0.114 * b >= 200
 
 
-def _remove_white_box(im: Any, color: Tuple[int, int, int]) -> Optional[Any]:
-    """Imagem SEM transparência, com moldura branca, num bloco escuro: o Outlook/Word "achatou" a transparência em branco
-    ao copiar. Pinta o branco ligado às bordas com a cor do bloco (o branco de dentro do logo fica)."""
+def _dist(a: Tuple[int, ...], b: Tuple[int, ...]) -> int:
+    return max(abs(int(x) - int(y)) for x, y in zip(a[:3], b[:3]))
+
+
+def border_color(im: Any) -> Optional[Tuple[int, int, int]]:
+    """A cor da moldura da imagem, se ela for (quase) toda de uma cor só — senão None."""
     rgb = im.convert("RGB")
     w, h = rgb.size
-    if w * h > 1_500_000 or w < 4 or h < 4:
+    if w < 4 or h < 4:
         return None
     px = rgb.load()
-    border = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
-    white = lambda p: min(p) >= 238                               # noqa: E731
-    if sum(1 for x, y in border if white(px[x, y])) < 0.85 * len(border):
+    border = [px[x, y] for x in range(w) for y in (0, h - 1)] + [px[x, y] for y in range(h) for x in (0, w - 1)]
+    counts: Dict[Tuple[int, int, int], int] = {}
+    for c in border:
+        key = (c[0] // 8 * 8, c[1] // 8 * 8, c[2] // 8 * 8)
+        counts[key] = counts.get(key, 0) + 1
+    key = max(counts, key=counts.get)                              # type: ignore[arg-type]
+    near = [c for c in border if _dist(c, key) <= 14]
+    if len(near) < 0.85 * len(border):
         return None
+    return tuple(sum(c[i] for c in near) // len(near) for i in range(3))  # type: ignore[return-value]
+
+
+def looks_like_logo(im: Any) -> bool:
+    """Logo, ícone ou botão (poucas cores) — e não foto ou print de tela, que nunca têm o fundo removido."""
+    small = im.convert("RGB").resize((96, 96))
+    return len(set(small.getdata())) <= 900                        # type: ignore[arg-type]
+
+
+def _alpha_from(c: Tuple[int, ...], bg: Tuple[int, int, int]) -> float:
+    """Quanto do pixel NÃO é o fundo ("cor para alfa", como no GIMP)."""
+    out = 0.0
+    for ci, bi in zip(c[:3], bg):
+        if ci > bi:
+            out = max(out, (ci - bi) / float(255 - bi))
+        elif ci < bi:
+            out = max(out, (bi - ci) / float(bi))
+    return out
+
+
+def remove_background(im: Any, bg: Tuple[int, int, int], low: int = 24, rings: int = 2) -> Any:
+    """v1.17: remove o fundo sólido (ligado às bordas) de uma imagem SEM transparência: vira transparente de verdade.
+    A borda suavizada do desenho (até 2 px) fica semitransparente, com a cor do fundo antigo descontada (sem halo).
+    O que é da cor do fundo mas fica DENTRO do desenho (o miolo branco de um "o") não muda."""
+    rgba = im.convert("RGBA")
+    w, h = rgba.size
+    px = rgba.load()
+    removed = bytearray(w * h)
     seen = bytearray(w * h)
-    stack = [(x, y) for x, y in border if white(px[x, y])]
+    stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    edge: List[Tuple[int, int]] = []
     while stack:
         x, y = stack.pop()
         k = y * w + x
         if seen[k]:
             continue
-        v = min(px[x, y])
-        if v < 215:
-            continue
         seen[k] = 1
-        if v >= 238:
-            px[x, y] = color
-        else:                                                    # borda suavizada: mistura (sem halo branco)
-            t = (238 - v) / 23.0
-            px[x, y] = tuple(int(c * (1 - t) + o * t) for c, o in zip(color, px[x, y]))  # type: ignore[assignment]
+        p = px[x, y]
+        if _dist(p, bg) > low:
+            edge.append((x, y))                                     # já é o desenho (ou a borda suavizada dele)
             continue
+        removed[k] = 1
+        px[x, y] = (p[0], p[1], p[2], 0)
         for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
             if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx]:
                 stack.append((nx, ny))
-    return rgb
+    for _ in range(rings):                                           # a borda suavizada, de fora para dentro
+        nxt: List[Tuple[int, int]] = []
+        for x, y in edge:
+            k = y * w + x
+            if removed[k] == 2:
+                continue
+            p = px[x, y]
+            a = _alpha_from(p, bg)
+            removed[k] = 2
+            if a >= 0.85:
+                continue                                             # o desenho de verdade: intocado
+            a = max(a, 1 / 255.0)
+            px[x, y] = tuple(max(0, min(255, int(round((c - b) / a + b)))) for c, b in zip(p[:3], bg)) + (
+                int(round(a * 255)),)                                # type: ignore[assignment]
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < w and 0 <= ny < h and not removed[ny * w + nx]:
+                    nxt.append((nx, ny))
+        edge = nxt
+    return rgba
+
+
+MAX_EMAIL_IMAGE = 1200
+
+
+def fit_for_email(im: Any, limit: int = MAX_EMAIL_IMAGE) -> Any:
+    """Imagem gigante (o logo do modelo tinha 8000 px) diminuída para o dobro do tamanho em que aparece no e-mail
+    (nítida em tela de alta resolução), no máximo 1200 px, com o alfa pré-multiplicado (sem franja na borda)."""
+    w, h = im.size
+    if max(w, h) <= limit:
+        return im
+    scale = limit / float(max(w, h))
+    from PIL import Image
+    size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    return im.convert("RGBa").resize(size, Image.LANCZOS).convert("RGBA")
+
+
+def display_limits(html: str) -> List[int]:
+    """Para cada <img> com src (na ordem), o maior lado aceitável: 2x a largura em que ela aparece, se o modelo disser."""
+    out: List[int] = []
+    for tag in re.findall(r"(?is)<img\b[^>]*>", str(html or "")):
+        if not IMG_SRC_RE.search(tag):
+            continue
+        m = re.search(r"""(?i)\bwidth\s*=\s*["']?(\d{2,4})(?:px)?["'\s>/]""", tag) or \
+            re.search(r"(?i)[\s;\"']width\s*:\s*(\d{2,4})(?:\.\d+)?px", tag)
+        out.append(min(MAX_EMAIL_IMAGE, 2 * int(m.group(1))) if m and int(m.group(1)) >= 16 else MAX_EMAIL_IMAGE)
+    return out
 
 
 LAST_IMAGES: List[Dict[str, Any]] = []
@@ -848,37 +927,47 @@ def browser_backgrounds(html: str, browser: str = "") -> Optional[List[Optional[
         shutil.rmtree(folder, ignore_errors=True)
 
 
-def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None,
-                         backgrounds: Optional[Callable[[str], Optional[List[Optional[Tuple[int, int, int]]]]]] = None) -> str:
-    """Deixa as imagens iguais em qualquer programa de e-mail (o Outlook novo pinta o transparente de branco):
-      - PNG/GIF com transparência ganham, no transparente, a cor de fundo do bloco onde estão no modelo;
-      - v1.13: imagem já "achatada" em branco (moldura branca num bloco escuro) tem o branco das bordas pintado com a
-        cor do bloco; imagens da internet são baixadas e ajustadas também; cores de fundo vindas do <style> contam.
+def transparent_images(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None,
+                       backgrounds: Optional[Callable[[str], Optional[List[Optional[Tuple[int, int, int]]]]]] = None) -> str:
+    """v1.17: as imagens do e-mail ficam com o fundo TRANSPARENTE — em qualquer programa e no modo claro ou escuro, o que
+    aparece atrás delas é o fundo do próprio e-mail:
+      - PNG/GIF que já têm transparência: a transparência é mantida (nada é pintado por cima);
+      - imagem com fundo sólido (a caixa branca de um logo "achatado" pelo Outlook/Word, ou um fundo da cor do bloco):
+        o fundo ligado às bordas é removido. Só em logos, ícones e botões; foto e print de tela não mudam. Um botão
+        de cor diferente do bloco onde está também não muda (o fundo dele é o próprio botão);
+      - imagens gigantes são diminuídas para 1200 px (PNG com alfa).
     O diagnóstico (sem as imagens) fica em LAST_IMAGES e em %APPDATA%\\BitPC\\imagens.log."""
     try:
         from PIL import Image
     except ImportError:
         return html
     fetch = fetch or _fetch_image
-    measured = (backgrounds or browser_backgrounds)(html)
     n_imgs = len(IMG_SRC_RE.findall(str(html or "")))
-    how = "navegador" if measured is not None and len(measured) == n_imgs else "leitura do HTML"
-    colors = measured if how == "navegador" else image_backgrounds(html)
+    limits = display_limits(html)
+    blocks: Dict[str, Any] = {}
+
+    def block_color(i: int) -> Optional[Tuple[int, int, int]]:
+        if "cores" not in blocks:                                  # só mede (no Edge) se alguma imagem precisar
+            measured = (backgrounds or browser_backgrounds)(html)
+            blocks["cores"] = measured if measured is not None and len(measured) == n_imgs else image_backgrounds(html)
+            blocks["como"] = "navegador" if blocks["cores"] is measured else "leitura do HTML"
+        cores = blocks["cores"]
+        return cores[i] if i < len(cores) else None
     count = [0]
     report: List[Dict[str, Any]] = []
+
+    def encoded(prefix: str, quote: str, im: Any) -> str:
+        out = io.BytesIO()
+        im.save(out, "PNG", optimize=True)
+        return f"{prefix}{quote}data:image/png;base64,{base64.b64encode(out.getvalue()).decode('ascii')}{quote}"
 
     def repl(m: "re.Match[str]") -> str:
         i = count[0]
         count[0] += 1
         prefix, quote, src = m.group(1), m.group(2), m.group(3)
-        color = colors[i] if i < len(colors) else None
         info: Dict[str, Any] = {"n": i + 1, "origem": "embutida" if src.startswith("data:") else
-                                ("internet" if src.lower().startswith("http") else "outra"), "fundo": color,
-                                "medido_por": how}
+                                ("internet" if src.lower().startswith("http") else "outra")}
         report.append(info)
-        if color is None:
-            info["resultado"] = "sem cor de fundo no bloco"
-            return m.group(0)
         try:
             if src.startswith("data:"):
                 dm = DATA_IMG_RE.match(src)
@@ -886,7 +975,7 @@ def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[byt
             else:
                 raw = fetch(src) or b""
             if not raw:
-                info["resultado"] = "não consegui ler a imagem"
+                info["resultado"] = "não consegui ler a imagem: mantida"
                 return m.group(0)
             im = Image.open(io.BytesIO(raw))
             info["formato"], info["tamanho"] = im.format, list(im.size)
@@ -894,22 +983,27 @@ def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[byt
                 info["resultado"] = "GIF animado: mantida"
                 return m.group(0)
             rgba = im.convert("RGBA")
-            flat = None
+            limit = limits[i] if i < len(limits) else MAX_EMAIL_IMAGE
+            big = max(rgba.size) > limit
+            fit = lambda x: fit_for_email(x, limit)                # noqa: E731
             if rgba.getchannel("A").getextrema()[0] < 255:
-                flat = Image.new("RGBA", rgba.size, tuple(color) + (255,))
-                flat.alpha_composite(rgba)
-                flat = flat.convert("RGB")
-                info["resultado"] = "transparência trocada pela cor do bloco"
-            elif not _light(color):
-                flat = _remove_white_box(rgba, color)
-                info["resultado"] = "fundo branco trocado pela cor do bloco" if flat is not None else "sem transparência: mantida"
-            else:
-                info["resultado"] = "bloco claro: mantida"
-            if flat is None:
-                return m.group(0)
-            out = io.BytesIO()
-            flat.save(out, "PNG", optimize=True)
-            return f"{prefix}{quote}data:image/png;base64,{base64.b64encode(out.getvalue()).decode('ascii')}{quote}"
+                info["resultado"] = "já transparente: mantida" + (" (diminuída)" if big else "")
+                if not big and im.format in ("PNG", "GIF"):
+                    return m.group(0)
+                return encoded(prefix, quote, fit(rgba))
+            bg = border_color(rgba)
+            if bg is None or not looks_like_logo(rgba):
+                info["resultado"] = "foto ou sem fundo liso: mantida"
+                return m.group(0) if not big else encoded(prefix, quote, fit(rgba))
+            info["fundo_da_imagem"] = list(bg)
+            near_white = min(bg) >= 235                            # a caixa branca típica: sai sempre
+            block = None if near_white else block_color(i)
+            if not near_white and (block is None or _dist(bg, block) > 40):
+                info["resultado"] = "botão/fundo próprio (cor diferente do bloco): mantida"
+                info["bloco"], info["medido_por"] = block, blocks.get("como")
+                return m.group(0) if not big else encoded(prefix, quote, fit(rgba))
+            info["resultado"] = "fundo removido (transparente)"
+            return encoded(prefix, quote, remove_background(fit(rgba), bg))
         except Exception as err:
             info["resultado"] = f"erro: {type(err).__name__}"
             return m.group(0)
@@ -919,7 +1013,7 @@ def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[byt
     if report:
         try:
             with open(os.path.join(config_dir(), "imagens.log"), "a", encoding="utf-8") as fh:
-                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + json.dumps(report, ensure_ascii=False) + "\n")
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S v") + VERSION + " " + json.dumps(report, ensure_ascii=False) + "\n")
         except OSError:
             pass
     return out_html
@@ -929,14 +1023,13 @@ def images_summary() -> str:
     """Uma linha para a janela do e-mail: o que foi feito com as imagens."""
     if not LAST_IMAGES:
         return ""
-    fixed = sum(1 for i in LAST_IMAGES if "trocad" in str(i.get("resultado")))
-    nobg = sum(1 for i in LAST_IMAGES if i.get("resultado") == "sem cor de fundo no bloco")
-    text = f"Imagens: {len(LAST_IMAGES)}" + (" (cores medidas pelo navegador)" if any(
-        i.get("medido_por") == "navegador" for i in LAST_IMAGES) else "")
-    if fixed:
-        text += f", {fixed} ajustada(s) ao fundo do modelo"
-    if nobg:
-        text += f", {nobg} sem cor de fundo no bloco (não mexi)"
+    removed = sum(1 for i in LAST_IMAGES if "removido" in str(i.get("resultado")))
+    kept = sum(1 for i in LAST_IMAGES if "já transparente" in str(i.get("resultado")))
+    text = f"Imagens: {len(LAST_IMAGES)}"
+    if kept:
+        text += f", {kept} com a transparência original"
+    if removed:
+        text += f", {removed} com o fundo removido"
     return text + "."
 
 
@@ -2560,7 +2653,7 @@ class App:
             if alive(status) and images_summary():
                 status.configure(text=tk_safe(str(status.cget("text")) + " " + images_summary()))
         if html:
-            self.run_bg(lambda: flatten_transparency(html), flattened, lambda m: html_box["ready"].set())
+            self.run_bg(lambda: transparent_images(html), flattened, lambda m: html_box["ready"].set())
         else:
             html_box["ready"].set()
 

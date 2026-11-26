@@ -118,16 +118,19 @@ pronto sai igual ao modelo.
 - **Fidelidade ao modelo (v13.67):** o texto do modelo fica palavra por palavra. Só os campos e, se indispensável, uma
   frase de outra situação mudam. Negrito, cor e marca-texto que o modelo não tem são recusados, e o e-mail sai só em
   texto se a IA reescrever demais. Campos que o Outlook "picou" em etiquetas (`[<span>Nome</span>]`) voltam a ser campos.
-- **Imagens (v1.16):** a cor de fundo atrás de cada imagem passa a ser medida pelo próprio navegador (o Edge do
-  Windows, aberto escondido, sem janela e sem as imagens: só a estrutura do e-mail). Antes, o HTML "torto" do Outlook
-  (células e linhas sem fechar) fazia a leitura pegar a cor de outro bloco, e a imagem ia com fundo branco. Sem o
-  Edge, vale a leitura do HTML, que agora também fecha essas células como o navegador.
-- **Imagens (v1.13):** também ajusta o logo que já chegou com fundo branco num bloco escuro (o Outlook/Word "achata" a
-  transparência ao copiar), a cor de fundo vinda do estilo do modelo (`<style>`) e as imagens hospedadas na internet.
-  A janela do e-mail diz quantas imagens foram ajustadas. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.
-- **Imagens transparentes (v1.11):** o Outlook novo pintava de branco o fundo transparente das imagens. Antes de copiar
-  ou abrir no Outlook, o Bit aplica na imagem a cor de fundo do bloco onde ela está no modelo, então ela fica igual em
-  qualquer programa de e-mail.
+- **Imagens com fundo transparente (v1.17):** o fundo das imagens é transparente, então atrás delas aparece o fundo do
+  próprio e-mail, no modo claro ou escuro, em qualquer programa. O Bit não pinta mais cor nenhuma nas imagens (as versões
+  1.11 a 1.16 pintavam a cor do bloco do modelo, e isso virava um quadro claro no modo escuro do Outlook).
+  - **Imagem que já é transparente** (PNG ou GIF): vai como está.
+  - **Imagem com fundo sólido** (por exemplo, a caixa branca de um logo que o Outlook ou o Word "achatou"): o fundo
+    ligado às bordas é removido e vira transparente. A borda suavizada do desenho fica semitransparente, sem halo, e o
+    branco de dentro do desenho fica.
+  - **O que não muda:** foto, print de tela, GIF animado e botão com cor própria, diferente do bloco onde está. Para
+    saber a cor do bloco, o Bit usa o Edge do Windows, aberto escondido e sem as imagens.
+  - **Imagem gigante:** diminuída para o dobro do tamanho em que aparece no e-mail (no máximo 1200 px), em PNG com
+    transparência. O logo do modelo tinha 8000 px.
+  - **Onde ver o que foi feito:** a janela do e-mail diz quantas imagens mantiveram a transparência e quantas tiveram o
+    fundo removido. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.
 
 ### Transcrever reunião (v1.8 do app, v13.62)
 Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:

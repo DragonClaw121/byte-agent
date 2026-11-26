@@ -148,5 +148,11 @@
    "Papel \"colega\": o Bit de trabalho completo para outra pessoa (Bit no PC, modelos de e-mail, fichas, datas e avisos), com os dados só dela",
    "/pessoas papel <n> colega para promover quem já entrou"
   ]
+ },
+ {
+  "versao": "13.73",
+  "itens": [
+   "Bit no PC 1.17: imagens do e-mail com fundo transparente de verdade — nada é pintado atrás delas (no modo escuro do Outlook não aparece mais o quadro claro); logos com caixa branca têm o fundo removido; imagens gigantes diminuídas"
+  ]
  }
 ]
