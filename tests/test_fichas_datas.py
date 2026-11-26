@@ -106,3 +106,14 @@ def test_research_saves_purchase_and_estimated_renewal(bit, monkeypatch):
     bit.dispatch_request("client_date", {"cliente": "EMS", "descricao": "renovação Figma Enterprise Full Seat", "data": real})
     ren = [d for d in bit.client_book.get(res["ficha"])["datas"] if d["tipo"] == "renovacao"]
     assert len(ren) == 1 and not ren[0]["estimada"]
+
+
+def test_alerts_can_be_tested_right_away(bit):
+    from byte_agent.app_comandos import AppBridge
+    app = AppBridge(bit)
+    assert "Nada para avisar agora" in app.run("/alertas_clientes testar")[0]["text"]
+    soon = date.fromordinal(date.today().toordinal() + 10).strftime("%d/%m/%Y")
+    app.run(f"/data_cliente Teste | renovação Produto X | {soon}")
+    assert "Alertas disparados" in app.run("/alertas_clientes testar")[0]["text"]
+    items = [i for i in bit.db.pop_undelivered_proactive_messages("telegram") if i["trigger_type"] == "clientes"]
+    assert items and items[-1]["actions"][0]["data"].startswith("cs:ren:")

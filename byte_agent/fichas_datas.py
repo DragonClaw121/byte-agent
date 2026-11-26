@@ -241,7 +241,7 @@ class Alerts:
         data = self.db.get_setting(SETTING_SENT, {}) or {}
         return data if isinstance(data, dict) else {}
 
-    def tick(self) -> List[str]:
+    def tick(self, force_weekly: bool = False) -> List[str]:
         book = getattr(self.service, "client_book", None)
         if book is None:
             return []
@@ -272,8 +272,8 @@ class Alerts:
                        + (f" de {item['descricao']}" if item["descricao"] else "") + f" {when} ({human(item['data'])}"
                        + (", data estimada" if item.get("estimada") else "") + ").")
         last_week = float(self.db.get_setting("fichas.sem_contato_em", 0) or 0)
-        if today.weekday() == 0 or now - last_week > 8 * 86400:
-            if now - last_week > 6 * 86400:
+        if force_weekly or today.weekday() == 0 or now - last_week > 8 * 86400:
+            if force_weekly or now - last_week > 6 * 86400:
                 idle = stale(book, int(cfg["sem_contato_dias"]), now)
                 self.db.set_setting("fichas.sem_contato_em", now)
                 if idle:

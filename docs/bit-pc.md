@@ -118,6 +118,9 @@ pronto sai igual ao modelo.
 - **Fidelidade ao modelo (v13.67):** o texto do modelo fica palavra por palavra. Só os campos e, se indispensável, uma
   frase de outra situação mudam. Negrito, cor e marca-texto que o modelo não tem são recusados, e o e-mail sai só em
   texto se a IA reescrever demais. Campos que o Outlook "picou" em etiquetas (`[<span>Nome</span>]`) voltam a ser campos.
+- **Imagens (v1.13):** também ajusta o logo que já chegou com fundo branco num bloco escuro (o Outlook/Word "achata" a
+  transparência ao copiar), a cor de fundo vinda do estilo do modelo (`<style>`) e as imagens hospedadas na internet.
+  A janela do e-mail diz quantas imagens foram ajustadas. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.
 - **Imagens transparentes (v1.11):** o Outlook novo pintava de branco o fundo transparente das imagens. Antes de copiar
   ou abrir no Outlook, o Bit aplica na imagem a cor de fundo do bloco onde ela está no modelo, então ela fica igual em
   qualquer programa de e-mail.
@@ -136,6 +139,12 @@ Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:
    chegam como um cartão "Criar N tarefas?" e nada é criado sem a sua aprovação.
 
 Detalhes:
+- **Quem falou (v1.14):** com "Separar quem fala" ligado (o padrão), o microfone e o som do PC são transcritos à parte e
+  as linhas saem como "Você:" e "Participantes:". A ata usa isso para dizer quem decidiu ou assumiu o quê. Sem fone de
+  ouvido, o microfone também capta o alto-falante. Por isso, enquanto os outros falam, o microfone só conta se a sua voz
+  estiver bem mais alta (filtro de eco). Com fone, fica perfeito. Separar cada participante remoto por nome ainda não é
+  possível.
+- **Nomes certos:** a transcrição recebe como vocabulário o nome da reunião, os clientes das fichas e o seu nome.
 - **Sugestão automática (v1.9):** ao abrir uma reunião no Teams, Zoom, Google Meet ou Webex, o Bit pergunta, num aviso,
   se deve transcrever. Isso acontece no máximo uma vez a cada 30 min por aplicativo. Ele só pergunta: nada começa sem o
   seu clique.

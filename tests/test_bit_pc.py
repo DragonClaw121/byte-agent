@@ -178,3 +178,58 @@ def test_transparent_images_get_the_block_background():
     assert first.mode == "RGB" and first.getpixel((1, 1)) == (30, 42, 18) and first.getpixel((0, 0)) == (255, 255, 255)
     assert srcs[2] == src                                              # sem fundo conhecido: fica como estava
     assert bit_pc.parse_color("rgb(1, 2, 3)") == (1, 2, 3) and bit_pc.parse_color("#abc") == (170, 187, 204)
+
+
+def test_images_white_box_css_class_and_remote():
+    """v1.13: logo já "achatado" em branco num bloco escuro, fundo vindo do <style> e imagem da internet."""
+    import base64
+    import io
+    logo = Image.new("RGB", (10, 6), (255, 255, 255))                 # caixa branca com um "logo" verde dentro
+    for x in range(3, 8):
+        for y in range(1, 5):
+            logo.putpixel((x, y), (120, 200, 60))
+    logo.putpixel((5, 2), (255, 255, 255))                            # branco DENTRO do logo: fica
+    buf = io.BytesIO()
+    logo.save(buf, "PNG")
+    raw = buf.getvalue()
+    html = ('<style>.hero { background-color: #1E2A12; } td.claro { background:#ffffff }</style>'
+            '<table><tr><td class="hero"><img src="https://site/logo.png" width="10"></td></tr>'
+            '<tr><td class="claro"><img src="data:image/png;base64,' + base64.b64encode(raw).decode() + '"></td></tr></table>')
+    assert bit_pc.css_backgrounds(html) == {".hero": (30, 42, 18), "td.claro": (255, 255, 255)}
+    assert bit_pc.image_backgrounds(html) == [(30, 42, 18), (255, 255, 255)]
+    out = bit_pc.flatten_transparency(html, fetch=lambda url: raw)
+    first = re.search(r'<img src="(data:image/png;base64,[^"]+)" width="10">', out).group(1)
+    im = Image.open(io.BytesIO(base64.b64decode(first.split(",", 1)[1])))
+    assert im.getpixel((0, 0)) == (30, 42, 18) and im.getpixel((4, 2)) == (120, 200, 60)
+    assert im.getpixel((5, 2)) == (255, 255, 255)                     # o branco de dentro do logo não muda
+    assert [i["resultado"] for i in bit_pc.LAST_IMAGES] == ["fundo branco trocado pela cor do bloco", "bloco claro: mantida"]
+    assert "1 ajustada(s)" in bit_pc.images_summary()
+    plain = bit_pc.flatten_transparency('<p><img src="https://x/y.png"></p>', fetch=lambda url: raw)
+    assert plain == '<p><img src="https://x/y.png"></p>' and "sem cor de fundo" in bit_pc.images_summary()
+
+
+def test_split_meeting_you_vs_others_with_echo_gate():
+    """v1.13: microfone e som do PC transcritos à parte; o eco do alto-falante no microfone não vira fala sua."""
+    import math
+    from array import array
+    old = bit_pc.MEET_CHUNK_S
+    bit_pc.MEET_CHUNK_S = 1.0
+    chunks = []
+    try:
+        system, mic = bit_pc.AudioSource("som do PC", 1, 16000), bit_pc.AudioSource("microfone", 1, 16000)
+        split = bit_pc.SplitMeeting(system, mic, lambda wav, seq, t, who: chunks.append((who, t)))
+        loud = array("h", [int(6000 * math.sin(2 * math.pi * 300 * i / 16000)) for i in range(8000)])
+        echo = array("h", [v // 4 for v in loud])                         # o alto-falante vazando no microfone
+        me = array("h", [int(9000 * math.sin(2 * math.pi * 200 * i / 16000)) for i in range(8000)])
+        for _ in range(4):                                                # 2 s: os outros falam (e vaza eco)
+            system.feed(loud.tobytes())
+            mic.feed(echo.tobytes())
+            split.tick(0.5)
+        for _ in range(4):                                                # 2 s: só você fala
+            mic.feed(me.tobytes())
+            split.tick(0.5)
+        split.flush()
+    finally:
+        bit_pc.MEET_CHUNK_S = old
+    who = [w for w, _ in chunks]
+    assert "outros" in who and "voce" in who and split.echo_blocks == 4      # o eco dos 2 primeiros segundos foi calado

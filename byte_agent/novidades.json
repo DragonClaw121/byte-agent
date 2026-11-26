@@ -117,5 +117,14 @@
    "👍/👎 nos avisos: no 2º 👎 seguido, ofereço silenciar aquela categoria por 30 dias; /avisos mostra e muda",
    "Bit no PC 1.12: os avisos mostram os botões"
   ]
+ },
+ {
+  "versao": "13.69",
+  "itens": [
+   "Reunião pelo PC separa \"Você\" e \"Participantes\" (com filtro de eco) e a transcrição aprende os nomes dos clientes",
+   "Imagens: logo com fundo branco num bloco escuro, fundo vindo do estilo do modelo e imagens da internet também são ajustados",
+   "/alertas_clientes testar dispara os alertas na hora (para ver os botões)",
+   "Bit no PC 1.14: cola no Outlook novo mais rápido"
+  ]
  }
 ]

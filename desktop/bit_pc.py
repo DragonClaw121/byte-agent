@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.12"
+VERSION = "1.14"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -656,10 +656,32 @@ def parse_color(value: str) -> Optional[Tuple[int, int, int]]:
     return None
 
 
+def css_backgrounds(html: str) -> Dict[str, Tuple[int, int, int]]:
+    """Cores de fundo definidas em <style> por seletores simples: '.classe', 'td', 'td.classe', '#id'."""
+    out: Dict[str, Tuple[int, int, int]] = {}
+    for block in re.findall(r"(?is)<style[^>]*>(.*?)</style>", str(html or "")):
+        block = re.sub(r"(?s)/\*.*?\*/", "", block)
+        for sels, body in re.findall(r"([^{}@]+)\{([^{}]*)\}", block):
+            m = re.search(r"(?i)background(?:-color)?\s*:\s*([^;]+)", body)
+            color = parse_color(m.group(1)) if m else None
+            if color is None:
+                continue
+            for sel in sels.split(","):
+                sel = sel.strip().lower()
+                if re.fullmatch(r"[a-z0-9]*(?:[.#][\w-]+)?", sel) and sel:
+                    out[sel] = color
+    return out
+
+
+IMG_SRC_RE = re.compile(r"""(?i)(<img\b[^>]*?\bsrc\s*=\s*)(["'])([^"']+)\2""")
+
+
 def image_backgrounds(html: str) -> List[Optional[Tuple[int, int, int]]]:
-    """Para cada <img src="data:..."> (na ordem), a cor de fundo do bloco onde ela está (bgcolor/background)."""
+    """Para cada <img> (na ordem do HTML), a cor de fundo do bloco onde ela está: bgcolor, style background e as
+    classes/etiquetas/ids do <style> (v1.13)."""
     from html.parser import HTMLParser
     voids = {"img", "br", "hr", "meta", "link", "input", "col", "area", "base", "source", "wbr"}
+    css = css_backgrounds(html)
 
     class P(HTMLParser):
         def __init__(self) -> None:
@@ -669,14 +691,18 @@ def image_backgrounds(html: str) -> List[Optional[Tuple[int, int, int]]]:
 
         def handle_starttag(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> None:
             a = {k.lower(): (v or "") for k, v in attrs}
-            color = parse_color(a.get("bgcolor", ""))
-            style = a.get("style", "")
-            m = re.search(r"(?i)background(?:-color)?\s*:\s*([^;]+)", style)
+            color = None
+            for cls in a.get("class", "").lower().split():
+                color = css.get(f"{tag}.{cls}") or css.get(f".{cls}") or color
+            if a.get("id"):
+                color = css.get(f"#{a['id'].lower()}") or color
+            color = color or css.get(tag)
+            color = parse_color(a.get("bgcolor", "")) or color
+            m = re.search(r"(?i)background(?:-color)?\s*:\s*([^;]+)", a.get("style", ""))
             if m and parse_color(m.group(1)) is not None:
                 color = parse_color(m.group(1))
             if tag == "img":
-                if a.get("src", "").startswith("data:image/"):
-                    self.found.append(next((c for _, c in reversed(self.stack) if c is not None), None))
+                self.found.append(next((c for _, c in reversed(self.stack) if c is not None), None))
                 return
             if tag not in voids:
                 self.stack.append((tag, color))
@@ -694,37 +720,148 @@ def image_backgrounds(html: str) -> List[Optional[Tuple[int, int, int]]]:
     return p.found
 
 
-def flatten_transparency(html: str) -> str:
-    """PNG/GIF com transparência ganham, no lugar do transparente, a cor de fundo do bloco onde estão no modelo. Assim a
-    imagem fica igual em qualquer programa de e-mail (o Outlook novo, ao colar, pinta o transparente de branco)."""
+def _light(color: Tuple[int, int, int]) -> bool:
+    r, g, b = color
+    return 0.299 * r + 0.587 * g + 0.114 * b >= 200
+
+
+def _remove_white_box(im: Any, color: Tuple[int, int, int]) -> Optional[Any]:
+    """Imagem SEM transparência, com moldura branca, num bloco escuro: o Outlook/Word "achatou" a transparência em branco
+    ao copiar. Pinta o branco ligado às bordas com a cor do bloco (o branco de dentro do logo fica)."""
+    rgb = im.convert("RGB")
+    w, h = rgb.size
+    if w * h > 1_500_000 or w < 4 or h < 4:
+        return None
+    px = rgb.load()
+    border = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+    white = lambda p: min(p) >= 238                               # noqa: E731
+    if sum(1 for x, y in border if white(px[x, y])) < 0.85 * len(border):
+        return None
+    seen = bytearray(w * h)
+    stack = [(x, y) for x, y in border if white(px[x, y])]
+    while stack:
+        x, y = stack.pop()
+        k = y * w + x
+        if seen[k]:
+            continue
+        v = min(px[x, y])
+        if v < 215:
+            continue
+        seen[k] = 1
+        if v >= 238:
+            px[x, y] = color
+        else:                                                    # borda suavizada: mistura (sem halo branco)
+            t = (238 - v) / 23.0
+            px[x, y] = tuple(int(c * (1 - t) + o * t) for c, o in zip(color, px[x, y]))  # type: ignore[assignment]
+            continue
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx]:
+                stack.append((nx, ny))
+    return rgb
+
+
+LAST_IMAGES: List[Dict[str, Any]] = []
+
+
+def _fetch_image(url: str) -> Optional[bytes]:
+    """Imagem que o modelo busca na internet (logo hospedado): baixa para poder ajustar o fundo (até 2 MB)."""
+    if not url.lower().startswith("https://"):
+        return None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"BitPC/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if not str(resp.headers.get("Content-Type") or "").lower().startswith("image/"):
+                return None
+            data = resp.read(2_000_001)
+        return data if len(data) <= 2_000_000 else None
+    except Exception:
+        return None
+
+
+def flatten_transparency(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None) -> str:
+    """Deixa as imagens iguais em qualquer programa de e-mail (o Outlook novo pinta o transparente de branco):
+      - PNG/GIF com transparência ganham, no transparente, a cor de fundo do bloco onde estão no modelo;
+      - v1.13: imagem já "achatada" em branco (moldura branca num bloco escuro) tem o branco das bordas pintado com a
+        cor do bloco; imagens da internet são baixadas e ajustadas também; cores de fundo vindas do <style> contam.
+    O diagnóstico (sem as imagens) fica em LAST_IMAGES e em %APPDATA%\\BitPC\\imagens.log."""
     try:
         from PIL import Image
     except ImportError:
         return html
+    fetch = fetch or _fetch_image
     colors = image_backgrounds(html)
     count = [0]
+    report: List[Dict[str, Any]] = []
 
     def repl(m: "re.Match[str]") -> str:
         i = count[0]
         count[0] += 1
+        prefix, quote, src = m.group(1), m.group(2), m.group(3)
         color = colors[i] if i < len(colors) else None
-        if color is None or m.group(1) not in ("image/png", "image/gif"):
+        info: Dict[str, Any] = {"n": i + 1, "origem": "embutida" if src.startswith("data:") else
+                                ("internet" if src.lower().startswith("http") else "outra"), "fundo": color}
+        report.append(info)
+        if color is None:
+            info["resultado"] = "sem cor de fundo no bloco"
             return m.group(0)
         try:
-            im = Image.open(io.BytesIO(base64.b64decode(re.sub(r"\s", "", m.group(2)))))
-            if getattr(im, "n_frames", 1) > 1:                     # GIF animado: fica como está
+            if src.startswith("data:"):
+                dm = DATA_IMG_RE.match(src)
+                raw = base64.b64decode(re.sub(r"\s", "", dm.group(2))) if dm else b""
+            else:
+                raw = fetch(src) or b""
+            if not raw:
+                info["resultado"] = "não consegui ler a imagem"
+                return m.group(0)
+            im = Image.open(io.BytesIO(raw))
+            info["formato"], info["tamanho"] = im.format, list(im.size)
+            if getattr(im, "n_frames", 1) > 1:
+                info["resultado"] = "GIF animado: mantida"
                 return m.group(0)
             rgba = im.convert("RGBA")
-            if rgba.getchannel("A").getextrema()[0] == 255:        # sem transparência
+            flat = None
+            if rgba.getchannel("A").getextrema()[0] < 255:
+                flat = Image.new("RGBA", rgba.size, tuple(color) + (255,))
+                flat.alpha_composite(rgba)
+                flat = flat.convert("RGB")
+                info["resultado"] = "transparência trocada pela cor do bloco"
+            elif not _light(color):
+                flat = _remove_white_box(rgba, color)
+                info["resultado"] = "fundo branco trocado pela cor do bloco" if flat is not None else "sem transparência: mantida"
+            else:
+                info["resultado"] = "bloco claro: mantida"
+            if flat is None:
                 return m.group(0)
-            flat = Image.new("RGBA", rgba.size, tuple(color) + (255,))
-            flat.alpha_composite(rgba)
             out = io.BytesIO()
-            flat.convert("RGB").save(out, "PNG", optimize=True)
-            return "data:image/png;base64," + base64.b64encode(out.getvalue()).decode("ascii")
-        except Exception:
+            flat.save(out, "PNG", optimize=True)
+            return f"{prefix}{quote}data:image/png;base64,{base64.b64encode(out.getvalue()).decode('ascii')}{quote}"
+        except Exception as err:
+            info["resultado"] = f"erro: {type(err).__name__}"
             return m.group(0)
-    return DATA_IMG_RE.sub(repl, str(html or ""))
+    out_html = IMG_SRC_RE.sub(repl, str(html or ""))
+    LAST_IMAGES.clear()
+    LAST_IMAGES.extend(report)
+    if report:
+        try:
+            with open(os.path.join(config_dir(), "imagens.log"), "a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + json.dumps(report, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+    return out_html
+
+
+def images_summary() -> str:
+    """Uma linha para a janela do e-mail: o que foi feito com as imagens."""
+    if not LAST_IMAGES:
+        return ""
+    fixed = sum(1 for i in LAST_IMAGES if "trocad" in str(i.get("resultado")))
+    nobg = sum(1 for i in LAST_IMAGES if i.get("resultado") == "sem cor de fundo no bloco")
+    text = f"Imagens: {len(LAST_IMAGES)}"
+    if fixed:
+        text += f", {fixed} ajustada(s) ao fundo do modelo"
+    if nobg:
+        text += f", {nobg} sem cor de fundo no bloco (não mexi)"
+    return text + "."
 
 
 def images_to_files(html: str) -> str:
@@ -1009,20 +1146,20 @@ while ((Get-Date) -lt $deadline) {
       }
       if ($subjectOk -and $body) {
         try { [BitWin]::SetForegroundWindow([IntPtr]$w.Current.NativeWindowHandle) | Out-Null } catch { }
-        Start-Sleep -Milliseconds 300
+        Start-Sleep -Milliseconds 150
         $body.SetFocus()
-        Start-Sleep -Milliseconds 500
+        Start-Sleep -Milliseconds 250
         # o corpo é uma página web (processo msedgewebview2): o que vale é a JANELA da frente ser do Outlook
         $fpid = [uint32]0
         [BitWin]::GetWindowThreadProcessId([BitWin]::GetForegroundWindow(), [ref]$fpid) | Out-Null
         if ($ids -notcontains [int]$fpid) { Done $false 'foco' }
         [System.Windows.Forms.SendKeys]::SendWait('^v')
-        Start-Sleep -Milliseconds 800
+        Start-Sleep -Milliseconds 400
         Done $true 'colado'
       }
     }
   }
-  Start-Sleep -Milliseconds 800
+  Start-Sleep -Milliseconds 300
 }
 if (-not $state.janela) { Done $false 'sem_janela' }
 if ($state.assunto) { Done $false 'assunto_diferente' }
@@ -1477,6 +1614,40 @@ class AudioSource:
         return out
 
 
+ECHO_SYS_RMS = 300                    # o som do PC está "falando"
+ECHO_RATIO = 1.5                       # o microfone só vale se for bem mais alto que o som do PC (senão é eco)
+
+
+class SplitMeeting:
+    """v1.13: "eu × os outros". O microfone e o som do PC viram DOIS fluxos transcritos à parte, com quem falou. Sem fone
+    de ouvido o microfone também capta o alto-falante: enquanto o som do PC fala e o microfone não está bem mais alto,
+    o microfone é silenciado (filtro de eco simples), para a fala dos outros não sair duplicada como sua."""
+
+    def __init__(self, system: AudioSource, mic: AudioSource, on_chunk: Callable[[bytes, int, float, str], None]):
+        self.system, self.mic = system, mic
+        self.rec = {"outros": MeetingRecorder([system], lambda w, q, t: on_chunk(w, q, t, "outros")),
+                    "voce": MeetingRecorder([mic], lambda w, q, t: on_chunk(w, q, t, "voce"))}
+        self.echo_blocks = 0
+
+    def tick(self, seconds: float = 0.5) -> None:
+        n = int(MEET_RATE * seconds)
+        sys_blk, mic_blk = self.system.take(n), self.mic.take(n)
+        r_sys, r_mic = rms(sys_blk[::4]), rms(mic_blk[::4])
+        if r_sys >= ECHO_SYS_RMS and r_mic < ECHO_RATIO * r_sys:
+            mic_blk = _array("h", bytes(2 * n))
+            self.echo_blocks += 1
+        self.rec["outros"].tick(seconds, sys_blk)
+        self.rec["voce"].tick(seconds, mic_blk)
+
+    def flush(self) -> None:
+        for rec in self.rec.values():
+            rec.flush()
+
+    @property
+    def skipped(self) -> int:
+        return sum(r.skipped for r in self.rec.values())
+
+
 class MeetingRecorder:
     """Mistura as fontes a cada `tick` (0,5 s) e entrega pedaços WAV de ~25 s: on_chunk(wav, seq, inicio_s)."""
 
@@ -1486,12 +1657,13 @@ class MeetingRecorder:
         self.seq, self.offset_s, self.skipped = 0, 0.0, 0
         self.elapsed_s = 0.0
 
-    def tick(self, seconds: float = 0.5) -> None:
+    def tick(self, seconds: float = 0.5, block: Optional[_array] = None) -> None:
+        """`block` (v1.13): o pedaço já tirado das fontes (modo "eu × os outros", com o filtro de eco)."""
         n = int(MEET_RATE * seconds)
-        block = None
-        for src in self.sources:
-            part = src.take(n)
-            block = part if block is None else mix(block, part)
+        if block is None:
+            for src in self.sources:
+                part = src.take(n)
+                block = part if block is None else mix(block, part)
         if block is None:
             return
         self.pending.extend(block)
@@ -2337,6 +2509,8 @@ class App:
             self.button(buttons, "Salvar como modelo", save_as_template).pack(side="left", padx=self.px(6))
         self.button(buttons, "Fechar", win.destroy).pack(side="right")
         hint = (f"Baseado no seu modelo \"{res['modelo']}\". " if res.get("modelo") else "")
+        if html and images_summary():
+            hint += images_summary() + " "
         if html:
             hint += ("No formato do modelo (◆). \"Copiar formatado\"/\"Abrir no Outlook\" levam o visual; o que você "
                      "editar na caixa vale para \"Só o texto\".")
@@ -3001,8 +3175,10 @@ class App:
                         width=36)
         name.pack(fill="x", ipady=self.px(4))
         system_var, mic_var = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
+        split_var = tk.BooleanVar(value=bool(self.cfg.get("reuniao_separar", True)))
         for text, var in (("Som do PC (os outros participantes: Teams, Meet, Zoom)", system_var),
-                          ("Meu microfone (a minha voz)", mic_var)):
+                          ("Meu microfone (a minha voz)", mic_var),
+                          ("Separar quem fala: eu × os outros (melhor com fone de ouvido)", split_var)):
             tk.Checkbutton(box, text=text, variable=var, bg=self.BG, fg=self.INK, selectcolor=self.CARD,
                            activebackground=self.BG, activeforeground=self.INK, font=("Segoe UI", 9),
                            anchor="w").pack(fill="x", pady=(self.px(4), 0))
@@ -3014,6 +3190,8 @@ class App:
 
         def go() -> None:
             title, system, mic = name.get().strip(), system_var.get(), mic_var.get()
+            self.cfg["reuniao_separar"] = bool(split_var.get())
+            save_config(self.cfg, self.config_path)
             win.destroy()
             if not (system or mic):
                 self.error("Escolha o som do PC, o microfone ou os dois.")
@@ -3030,7 +3208,7 @@ class App:
         self.meeting_dialog = win
 
     def start_meeting(self, title: str = "", system: bool = True, mic: bool = True,
-                      sources: Optional[List[AudioSource]] = None) -> None:
+                      sources: Optional[List[AudioSource]] = None, split: Optional[bool] = None) -> None:
         if self.meeting is not None or self.api is None:
             return
 
@@ -3051,7 +3229,14 @@ class App:
             m: Dict[str, Any] = {"id": int(res["id"]), "title": str(res.get("title") or title or "Reunião"), "close": close,
                                  "queue": queue.Queue(), "stop": threading.Event(), "t0": time.time(), "sent": 0,
                                  "lost": 0, "lines": [], "notes": notes, "sources": [s.name for s in srcs]}
-            m["recorder"] = MeetingRecorder(srcs, lambda wav, seq, t: m["queue"].put((wav, seq, t)))
+            want_split = (self.cfg.get("reuniao_separar", True) if split is None else split)
+            by_name = {s.name: s for s in srcs}
+            if want_split and "som do PC" in by_name and "microfone" in by_name:   # v1.13: "Você" × "Participantes"
+                m["recorder"] = SplitMeeting(by_name["som do PC"], by_name["microfone"],
+                                             lambda wav, seq, t, who: m["queue"].put((wav, seq, t, who)))
+                m["split"] = True
+            else:
+                m["recorder"] = MeetingRecorder(srcs, lambda wav, seq, t: m["queue"].put((wav, seq, t, "")))
             self.meeting = m
             self.open_meeting_window(m)
             threading.Thread(target=self.meeting_ticker, args=(m,), daemon=True, name="BitReuniaoAudio").start()
@@ -3079,12 +3264,15 @@ class App:
     def meeting_uploader(self, m: Dict[str, Any]) -> None:
         while True:
             try:
-                wav, seq, t = m["queue"].get(timeout=0.5)
+                wav, _seq, t, who = m["queue"].get(timeout=0.5)
             except queue.Empty:
                 if m.get("ticker_done"):
                     break
                 continue
-            body = {"audio": base64.b64encode(wav).decode("ascii"), "seq": seq, "t": t}
+            m["upload_seq"] = m.get("upload_seq", -1) + 1           # na ordem de envio (os 2 fluxos numa fila só)
+            body = {"audio": base64.b64encode(wav).decode("ascii"), "seq": m["upload_seq"], "t": t}
+            if who:
+                body["quem"] = who
             for attempt in range(4):
                 try:
                     res = self.api.call("POST", f"reuniao/{m['id']}/audio", body, timeout=120)

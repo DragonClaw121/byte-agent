@@ -93,3 +93,6 @@ curta e sem listas. A versão escrita continua chegando no Telegram.
 - **Botões de ação:** os alertas de renovação e de clientes sem contato trazem "✉️ Renovação — <cliente>" e
   "✉️ Follow-up — <cliente>". Um toque prepara o e-mail no seu modelo, com a ficha do cliente. No Bit do PC, ele abre
   pronto para o Outlook. A ação só prepara: o envio é sempre seu.
+- **Para ver agora:** `/alertas_clientes testar` dispara os alertas de clientes na hora, com os botões. Se não houver
+  nada para avisar, guarde uma renovação próxima para testar:
+  `/data_cliente Teste | renovação Produto X | <data daqui a 10 dias>`.

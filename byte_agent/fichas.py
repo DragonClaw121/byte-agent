@@ -351,6 +351,11 @@ def install(service: Any) -> ClientBook:
         """/alertas_clientes · /alertas_clientes 60,30,15,7 | 45 (dias antes da renovação | dias sem contato)"""
         from .fichas_datas import SETTING_ALERTS, config
         raw = str(p.get("arg") or "").strip()
+        if raw.lower() in ("testar", "teste", "agora"):           # v13.69: ver os alertas (e os botões) na hora
+            sent = alerts.tick(force_weekly=True)
+            return {"text": "🔔 Alertas disparados: chegam em instantes (no Bit do PC, em até 1 minuto), com os botões." if sent else
+                    "Nada para avisar agora: nenhuma renovação dentro dos marcos e nenhum cliente sem contato. Para testar, "
+                    "guarde uma renovação próxima: /data_cliente Teste | renovação Produto X | <data daqui a 10 dias>"}
         if raw:
             marks, _, idle = raw.partition("|")
             cfg = config(service.db)

@@ -832,7 +832,8 @@ def route(service: Any, h: Any, method: str, path: str) -> None:
                     return
                 try:
                     h._send_json(200, meetings.add_chunk(mid, audio, "audio/wav", seq=int((body or {}).get("seq", -1)),
-                                                         offset_s=float((body or {}).get("t") or 0)))
+                                                         offset_s=float((body or {}).get("t") or 0),
+                                                         speaker=str((body or {}).get("quem") or "")))
                 except KeyError:
                     h._send_json(404, {"error": "Reunião não encontrada."})
                 return

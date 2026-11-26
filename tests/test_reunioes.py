@@ -203,3 +203,41 @@ def test_panel_actions_record_and_upload_in_parts(svc):
     assert {m["title"] for m in st["recent"]} >= {"Pelo painel", "Gravação"} and "stt" in st
     with pytest.raises(ValueError):
         svc.extra_actions["meeting_file_part"]({"upload": "../x", "index": 0, "total": 1, "data_b64": ""})
+
+
+def test_speakers_glossary_and_sorted_minutes(tmp_path):
+    """v13.69: "Você" e "Participantes" nas linhas, vocabulário com os clientes e linhas em ordem de tempo na ata."""
+    from byte_agent import headless, engine, reunioes
+    from test_native_tools import TOOL_MODEL, FakeOllama
+    fake = FakeOllama()
+    svc = headless.build_service(tmp_path, ollama_url=fake.url, model=TOOL_MODEL, profile="trabalho", web=False)
+    try:
+        svc.client_book.upsert("EMS S/A")
+        prompts = []
+        svc.meetings._transcribe = lambda audio, mime, prompt: (prompts.append(prompt), "renovação do Figma")[1]
+        seen = []
+        svc.meetings._llm = lambda messages, max_tokens: (seen.append(messages[1]["content"]), json.dumps(
+            {"resumo": "ok", "participantes": [], "decisoes": [], "tarefas": [], "pontos_em_aberto": [], "proximos_passos": []}))[1]
+        m = svc.meetings.start("Alinhamento EMS")
+        wav = make_wav(1.0) if "make_wav" in globals() else _wav()
+        svc.meetings.add_chunk(m["id"], wav, seq=0, offset_s=30, speaker="outros")
+        svc.meetings.add_chunk(m["id"], wav, seq=1, offset_s=5, speaker="voce")
+        assert "Vocabulário: Alinhamento EMS, EMS S/A" in prompts[0]
+        assert "] Participantes: renovação do Figma" in svc.meetings.get(m["id"])["transcript"]
+        svc.meetings.finish(m["id"], background=False)
+        body = seen[-1]
+        assert body.index("[00:05] Você:") < body.index("[00:30] Participantes:")
+        assert reunioes.sort_lines("[01:00] b\n[00:10] a\ncontinua\n") == "[00:10] a\ncontinua\n[01:00] b\n"
+    finally:
+        svc.shutdown()
+        fake.httpd.shutdown()
+        engine.apply_profile("pessoal")
+
+
+def _wav():
+    import io as _io
+    import wave
+    buf = _io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000), w.writeframes(b"\x10\x00" * 16000)
+    return buf.getvalue()
