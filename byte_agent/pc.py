@@ -668,13 +668,31 @@ def _device(service: Any, h: Any) -> Optional[Dict[str, Any]]:
 
 
 def route(service: Any, h: Any, method: str, path: str) -> None:
-    from . import engine
-    parts = path.strip("/").split("/")                 # ["pc", "<agente>", ...]
+    """v13.72: o PC de um COLEGA (pessoa com o Bit de trabalho, /convidar <nome> colega) cai no espaço dele: pelo código
+    de pareamento (gerado com /pc no espaço dele) e, depois, pelo token do aparelho. Nada do dono é visto por ele."""
+    parts = path.strip("/").split("/")
     sub = "/".join(parts[2:])
+    people = getattr(service, "people", None)
+    if sub == "parear" and method == "POST":
+        body = read_body(h, 4096)
+        target = service
+        own = getattr(service, "device_registry", None)
+        if people is not None and body is not None and not (own is not None and own.matches(str(body.get("codigo") or ""))):
+            target = people.service_for_pair_code(str(body.get("codigo") or "")) or service
+        return _route(target, h, method, sub, body)
+    if people is not None and _device(service, h) is None:
+        other = people.service_for_token(h._bearer())
+        if other is not None:
+            return _route(other, h, method, sub)
+    return _route(service, h, method, sub)
+
+
+def _route(service: Any, h: Any, method: str, sub: str, pair_body: Optional[Dict[str, Any]] = None) -> None:
+    from . import engine
     hub: PcHub = service.pc_hub
     if sub == "parear" and method == "POST":
         reg = getattr(service, "device_registry", None)
-        body = read_body(h, 4096)
+        body = pair_body
         if reg is None or body is None:
             h._send_json(400, {"error": 'Envie JSON {"codigo": "123456", "nome": "..."}'})
             return

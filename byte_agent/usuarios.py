@@ -9,7 +9,12 @@ O dono (os chats de BYTE_TELEGRAM_CHAT_IDS e o painel com token) continua como s
 Convidados NÃO têm: seus e-mails, suas contas Microsoft/Google, suas aprovações, executar código, trocar modelo,
 atualizar o sistema, nem ver nada de outra pessoa. "admin" pode convidar e remover membros (útil numa empresa).
 
-Comandos do dono (e dos admins): /pessoas · /convidar <nome> [admin] · /remover <n> [apagar] · /limite <n> <msgs/dia>
+v13.72 — "colega" (/convidar <nome> colega): o Bit de TRABALHO completo, com os dados só dele: o Bit no PC (pareado
+pelo /pc do próprio chat; o PC dele cai no espaço dele), modelos de e-mail e assinatura, pesquisa de cliente, fichas com
+datas e alertas, e avisos com botões. Limite padrão: 400 mensagens/dia (BYTE_LIMITE_COLEGA_DIA).
+
+Comandos do dono (e dos admins): /pessoas · /convidar <nome> [colega|admin] · /remover <n> [apagar] · /limite <n> <msgs/dia>
+· /pessoas papel <n> membro|colega|admin
 · /pessoas painel <n> (link do painel) · /pessoas convite <n> (novo convite).
 """
 from __future__ import annotations
@@ -30,7 +35,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .app_comandos import AppBridge
 from .telegram_bridge import TelegramBridge
 
-ROLES = ("membro", "admin")
+ROLES = ("membro", "colega", "admin")
+WORK_ROLES = {"colega", "admin"}                        # v13.72: o Bit de trabalho completo (PC, modelos, clientes)
 INVITE_TTL_S = 7 * 24 * 3600
 PER_MINUTE = 20                                         # pedidos por minuto no painel pessoal, por pessoa
 PEOPLE_COMMANDS = {"/pessoas", "/convidar", "/remover", "/limite"}
@@ -42,6 +48,20 @@ MEMBER_COMMANDS = FREE_COMMANDS | {
     "/apresentacao", "/apresentação", "/email", "/caixa", "/abrir", "/triagem",       # v13.45: e-mail da própria pessoa
 }
 MAIL_TOOLS = {"email_listar", "email_ler", "email_responder", "email_contas"}      # liberadas quando o espaço tem caixas
+# v13.72: o que um COLEGA (trabalho) ganha além do membro: o Bit no PC, modelos de e-mail, clientes e avisos
+COLEGA_COMMANDS = {"/pc", "/cliente", "/clientes", "/ficha", "/nota_cliente", "/data_cliente", "/renovacoes",
+                   "/alertas_clientes", "/apagar_ficha", "/modelos_email", "/modelo_email", "/assinatura", "/avisos",
+                   "/dispositivos", "/desparear"}
+COLEGA_HELP = (
+    "\n\n💼 Você tem o Bit de trabalho completo:\n"
+    "/pc — conectar o Bit no PC (Windows): olhar a tela, preparar e-mails, transcrever reuniões\n"
+    "/modelos_email · /modelo_email <nome> | <situação> (texto na linha de baixo) · /assinatura <texto>\n"
+    "/cliente <nome ou CNPJ> — pesquisa e plano de conta · /clientes · /ficha <cliente> · /nota_cliente <cliente> | <nota>\n"
+    "/data_cliente <cliente> | renovação <produto> | <data> · /renovacoes · /alertas_clientes · /avisos")
+
+
+def allowed_commands(papel: str) -> set:
+    return MEMBER_COMMANDS | (COLEGA_COMMANDS if papel in WORK_ROLES else set())
 # Ferramentas que nunca existem no espaço de um convidado (são do dono ou perigosas para terceiros).
 BLOCKED_TOOLS = {"run_python", "run_shell", "email_inbox", "email_send", "email_triage", "email_listar", "email_ler",
                  "email_responder", "email_contas", "asana_my_tasks", "asana_create_task", "notion_search",
@@ -78,11 +98,14 @@ def _today() -> str:
     return time.strftime("%Y-%m-%d")
 
 
-def default_limit() -> int:
+def default_limit(papel: str = "membro") -> int:
+    """Mensagens por dia: membro 150 (BYTE_LIMITE_PESSOA_DIA); colega 400 (BYTE_LIMITE_COLEGA_DIA), porque o trabalho
+    (PC, e-mails, clientes) usa mais."""
+    name, fallback = (("BYTE_LIMITE_COLEGA_DIA", 400) if papel in ("colega", "admin") else ("BYTE_LIMITE_PESSOA_DIA", 150))
     try:
-        return max(1, int(os.environ.get("BYTE_LIMITE_PESSOA_DIA", "150")))
+        return max(1, int(os.environ.get(name, str(fallback))))
     except ValueError:
-        return 150
+        return fallback
 
 
 # ---------------------------------------------------------------- diretório de pessoas
@@ -124,7 +147,7 @@ class Directory:
         if r is None:
             return None
         d = dict(r)
-        d["limite"] = int(d["limite"]) or default_limit()
+        d["limite"] = int(d["limite"]) or default_limit(str(d.get("papel") or "membro"))
         return d
 
     def list(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
@@ -162,7 +185,7 @@ class Directory:
         if not nome or not re.search(r"\w", nome):
             raise ValueError("Diga o nome da pessoa, ex.: /convidar Ana")
         if papel not in ROLES:
-            raise ValueError("Papel deve ser membro ou admin.")
+            raise ValueError("Papel deve ser membro, colega ou admin.")
         code = secrets.token_urlsafe(12)
         with self._lock, self._conn:
             cur = self._conn.execute(
@@ -210,6 +233,15 @@ class Directory:
             self._conn.execute("UPDATE people SET ativo = 0, chat_id = NULL, painel_hash = NULL, convite_hash = NULL "
                                "WHERE n = ?", (person["n"],))
         return person
+
+    def set_role(self, n: Any, papel: str) -> Dict[str, Any]:
+        person = self.get(n)
+        papel = str(papel or "").strip().lower()
+        if papel not in ROLES:
+            raise ValueError("Papel deve ser membro, colega ou admin.")
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE people SET papel = ? WHERE n = ?", (papel, person["n"]))
+        return self.get(person["n"])
 
     def set_limit(self, n: Any, msgs: Any) -> Dict[str, Any]:
         person = self.get(n)
@@ -266,7 +298,8 @@ class MemberMixin:
         if cmd in {"/start", "/ajuda", "/help"}:
             extra = ("\n\n👥 Você é admin: /pessoas · /convidar <nome> · /remover <n> · /limite <n> <msgs>"
                      if person["papel"] == "admin" else "")
-            self.send(chat_id, f"Oi, {person['nome'].split()[0]}! {MEMBER_HELP}{extra}")   # type: ignore[attr-defined]
+            work = COLEGA_HELP if person["papel"] in WORK_ROLES else ""
+            self.send(chat_id, f"Oi, {person['nome'].split()[0]}! {MEMBER_HELP}{work}{extra}")   # type: ignore[attr-defined]
             return
         if cmd == "/eu":
             self.send(chat_id, self.people.describe_usage(person))         # type: ignore[attr-defined]
@@ -277,7 +310,7 @@ class MemberMixin:
         if cmd in PEOPLE_COMMANDS and person["papel"] == "admin":
             self.send(chat_id, self.people.admin_command(person, cmd, arg.strip()))   # type: ignore[attr-defined]
             return
-        if cmd not in MEMBER_COMMANDS:
+        if cmd not in allowed_commands(person["papel"]):
             self.send(chat_id, "Esse comando é só do dono do agente. Envie /ajuda para ver os seus.")  # type: ignore[attr-defined]
             return
         if cmd == "/email" and arg.strip().lower().split()[:1] in (["senha"], ["adicionar"], ["servidor"]):
@@ -329,7 +362,7 @@ def app_link() -> str:
 
 def member_catalog(service: Any, papel: str = "membro") -> List[Dict[str, Any]]:
     from .app_comandos import catalog
-    allowed = MEMBER_COMMANDS | (PEOPLE_COMMANDS if papel == "admin" else set())
+    allowed = allowed_commands(papel) | (PEOPLE_COMMANDS if papel == "admin" else set())
     out = [c for c in catalog(service) if c["command"].split()[0] in allowed and c["command"] != "/painel"
            and not c["command"].startswith("/email ")]                 # caixas: aba ✉️ E-mail do painel pessoal
     out.append({"group": "Conta", "label": "📊 Meu uso de hoje", "command": "/eu", "ask": "", "example": "", "required": False})
@@ -387,6 +420,8 @@ def build_space(owner: Any, person: Dict[str, Any], root: Path) -> Any:
     if "email_listar" in getattr(owner, "extra_tools", {}):
         from . import caixas
         caixas.install(service, root, personal=True)             # v13.45: caixas da PESSOA (nada da nuvem do dono)
+    if person.get("papel") in WORK_ROLES:                       # v13.72: colega = o Bit de trabalho completo, só dele
+        install_work_tools(owner, service)
     manifest = getattr(owner, "agent_manifest", None) or engine.ACTIVE_AGENT
     if manifest:
         agents.apply_to_service(service, manifest)
@@ -396,6 +431,24 @@ def build_space(owner: Any, person: Dict[str, Any], root: Path) -> Any:
         if hasattr(owner.llm, attr):
             setattr(llm, attr, getattr(owner.llm, attr))
     return service
+
+
+def install_work_tools(owner: Any, service: Any) -> None:
+    """O que o dono tem para o trabalho, mas com os dados do colega: aparelhos (Bit no PC), modelos de e-mail, avisos
+    com 👍/👎 e botões, pesquisa de cliente e fichas (datas e alertas)."""
+    from . import avisos, fichas, modelos_email
+    from .app_movel import DeviceRegistry
+    service.device_registry = DeviceRegistry(service.db)        # os PCs DESTA pessoa (tokens só deste espaço)
+    service.api_enabled = True
+    avisos.install(service)
+    modelos_email.install(service)
+    if "pc_pair_code" in getattr(owner, "extra_actions", {}):
+        from . import pc
+        pc.install(service)
+    if "client_research" in getattr(owner, "extra_actions", {}):
+        from . import clientes
+        clientes.install(service)
+    fichas.install(service)
 
 
 def seal_space(service: Any, person: Dict[str, Any]) -> None:
@@ -509,6 +562,20 @@ class People:
             sp.close()
         self.directory.close()
 
+    # ---- Bit no PC de um colega (v13.72)
+    def _work_services(self) -> List[Any]:
+        with self._lock:
+            spaces = list(self._spaces.values())
+        return [sp.service for sp in spaces if getattr(sp.service, "device_registry", None) is not None]
+
+    def service_for_pair_code(self, code: str) -> Optional[Any]:
+        return next((svc for svc in self._work_services() if svc.device_registry.matches(code)), None)
+
+    def service_for_token(self, token: str) -> Optional[Any]:
+        if not token or len(str(token)) < 20:
+            return None
+        return next((svc for svc in self._work_services() if svc.device_registry.verify(token) is not None), None)
+
     def _drop(self, n: int, wipe: bool = False) -> None:
         with self._lock:
             sp = self._spaces.pop(int(n), None)
@@ -541,7 +608,8 @@ class People:
             return True
         self.space(person)
         from . import engine
-        owner_bridge.send(chat_id, f"👋 Oi, {person['nome'].split()[0]}! Eu sou {engine.AGENT_NAME}.\n{MEMBER_HELP}")
+        owner_bridge.send(chat_id, f"👋 Oi, {person['nome'].split()[0]}! Eu sou {engine.AGENT_NAME}.\n{MEMBER_HELP}"
+                          + (COLEGA_HELP if person["papel"] in WORK_ROLES else ""))
         self._tell_owner(f"👥 {person['nome']} entrou pelo convite (Telegram) como {person['papel']}.")
         return True
 
@@ -647,6 +715,20 @@ class People:
                 sub, _, rest = arg.partition(" ")
                 if not sub:
                     return self.format_list()
+                if sub == "papel":                                   # v13.72: /pessoas papel <n> colega
+                    who, _, papel = rest.partition(" ")
+                    person = self.directory.get(who)
+                    self._check(actor, person)
+                    if papel.strip().lower() == "admin" and actor is not None:
+                        return "Só o dono cria administradores."
+                    person = self.directory.set_role(person["n"], papel)
+                    self._drop(person["n"])                          # o espaço é refeito com as ferramentas do papel
+                    if person["chat_id"] is not None or person["painel_hash"]:
+                        self.space(person)
+                    return (f"✅ {person['nome']} agora é {person['papel']}"
+                            + (" — com o Bit de trabalho completo (PC, modelos de e-mail, clientes). Ele conecta o PC "
+                               "mandando /pc no próprio chat." if person["papel"] in WORK_ROLES else ".")
+                            + f" Limite: {person['limite']} mensagens por dia.")
                 if sub in {"painel", "convite"}:
                     person = self.directory.get(rest)
                     self._check(actor, person)
@@ -654,7 +736,7 @@ class People:
                         return self._invite_text(person, self.directory.new_invite(person["n"]))
                     return (f"🖥️ Painel pessoal de {person['nome']} (o anterior, se havia, deixou de valer):\n"
                             f"{self.panel_link(person)}\n\nEnvie só para a pessoa: quem tem o link entra no espaço dela.")
-                return "Use: /pessoas · /pessoas painel <n> · /pessoas convite <n>"
+                return "Use: /pessoas · /pessoas painel <n> · /pessoas convite <n> · /pessoas papel <n> membro|colega|admin"
             if cmd == "/convidar":
                 words = arg.split()
                 papel = "membro"

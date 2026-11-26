@@ -71,6 +71,12 @@ class DeviceRegistry:
             self._failures.popleft()
         return len(self._failures) >= MAX_FAILURES
 
+    def matches(self, code: str) -> bool:
+        """v13.72: o código é deste registro? (sem contar tentativa errada: serve para achar de quem é o código)"""
+        current = self._code
+        return bool(current) and self.clock() <= current["expires"] and hmac.compare_digest(str(code or "").strip(),
+                                                                                              current["code"])
+
     def pair(self, code: str, name: str = "") -> str:
         now = self.clock()
         with self._lock:

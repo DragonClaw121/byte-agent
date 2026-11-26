@@ -66,19 +66,37 @@ avisa e pede o link novo.
 ## Papéis
 
 - **membro** (padrão): usa o próprio espaço.
-- **admin**: além disso, convida e remove **membros**, com `/convidar`, `/remover`, `/limite` e `/pessoas`. Não cria
-  outros admins e não vê os dados de ninguém. Serve para delegar a gestão da equipe numa empresa.
+- **colega** (v13.72): o **Bit de trabalho completo**, com tudo separado do seu. Serve para quem trabalha com você:
+  - **Bit no PC:** `/pc` no chat dele gera o código, e o app do Windows dele conecta no espaço **dele**, não no seu.
+    Ele pode olhar a tela, preparar e-mails e transcrever reuniões.
+  - **Modelos de e-mail e assinatura:** `/modelos_email`, `/modelo_email`, `/assinatura`.
+  - **Clientes:** `/cliente`, `/clientes`, `/ficha`, `/nota_cliente`, `/data_cliente`, `/renovacoes`.
+  - **Avisos:** `/alertas_clientes` e `/avisos`, com 👍/👎.
+  - **Dispositivos:** `/dispositivos` e `/desparear`.
+  - **Limite:** 400 mensagens por dia (variável `BYTE_LIMITE_COLEGA_DIA`).
+  - **O que ele não acessa:** as suas contas (Microsoft, Google, Asana, Notion), o seu e-mail, os seus clientes, os
+    seus modelos, nem execução de código.
+- **admin**: tudo do colega e, além disso, convida e remove **membros**, com `/convidar`, `/remover`, `/limite` e
+  `/pessoas`. Não cria outros admins e não vê os dados de ninguém. Serve para delegar a gestão da equipe numa empresa.
 
 ```
+/convidar João Lima colega
 /convidar Carla admin
+/pessoas papel 3 colega
 ```
+
+`/pessoas papel <n> membro|colega|admin` muda o papel de quem já entrou. Os dados da pessoa ficam, e ela ganha ou perde
+as ferramentas de trabalho na hora.
+
+> ⚠️ Os dados de trabalho do colega (clientes, telas e e-mails) passam pela **sua** Azure. Numa empresa, combine isso
+> com a TI antes, por causa da LGPD e das regras internas.
 
 ## Limite diário (para proteger a sua cota)
 
 As mensagens dos convidados usam a **sua** Azure (modelo) e o **seu** Groq (transcrição). Por isso, cada pessoa tem
 um limite de mensagens por dia:
 
-- **Padrão:** 150 mensagens por dia. Para mudar o padrão, defina a variável `BYTE_LIMITE_PESSOA_DIA` no contêiner.
+- **Padrão:** 150 mensagens por dia (400 para colega e admin, `BYTE_LIMITE_COLEGA_DIA`). Para mudar o padrão, defina a variável `BYTE_LIMITE_PESSOA_DIA` no contêiner.
 - **Por pessoa:** `/limite <n> <mensagens>`, por exemplo `/limite 2 300`.
 - **Renovação:** o limite renova à meia-noite. `/ajuda`, `/eu`, `/painel` e `/limpar` não contam.
 - **Quem chega ao limite:** a pessoa recebe "⏳ Você usou as N mensagens de hoje".
@@ -93,8 +111,9 @@ um limite de mensagens por dia:
 
 | Quem | Comandos |
 |---|---|
-| Dono | `/pessoas` · `/convidar <nome> [admin]` · `/pessoas painel <n>` · `/pessoas convite <n>` · `/limite <n> <msgs>` · `/remover <n> [apagar]` |
+| Dono | `/pessoas` · `/convidar <nome> [colega\|admin]` · `/pessoas papel <n> <papel>` · `/pessoas painel <n>` · `/pessoas convite <n>` · `/limite <n> <msgs>` · `/remover <n> [apagar]` |
 | Convidado | `/ajuda` · `/agenda` · `/tarefa` · `/feito` · `/lembrete` · `/lembretes` · `/cancelar` · `/rotina` · `/memorias` · `/lembrar` · `/objetivo` · `/objetivos` · `/resumo` · `/semana` · `/clima` · `/onde` · `/buscar` · `/pesquisar` · `/reunioes` · `/ata` · `/painel` · `/eu` · `/limpar`, além de notas de voz e áudios de reunião com a legenda "ata". No Bit, também `/arquivos`, `/analise`, `/apresentacao` e `/modelos` |
+| Colega | Tudo do convidado, mais `/pc` · `/modelos_email` · `/modelo_email` · `/assinatura` · `/cliente` · `/clientes` · `/ficha` · `/nota_cliente` · `/data_cliente` · `/renovacoes` · `/alertas_clientes` · `/apagar_ficha` · `/avisos` · `/dispositivos` · `/desparear` |
 
 ## E-mail de cada pessoa (v13.45)
 

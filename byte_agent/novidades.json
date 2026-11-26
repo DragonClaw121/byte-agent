@@ -141,5 +141,12 @@
   "itens": [
    "Bit no PC 1.16: a cor de fundo atrás de cada imagem é medida pelo navegador (Edge, sem janela) — o HTML do Outlook com células sem fechar enganava a leitura e as imagens iam com fundo branco"
   ]
+ },
+ {
+  "versao": "13.72",
+  "itens": [
+   "Papel \"colega\": o Bit de trabalho completo para outra pessoa (Bit no PC, modelos de e-mail, fichas, datas e avisos), com os dados só dela",
+   "/pessoas papel <n> colega para promover quem já entrou"
+  ]
  }
 ]
