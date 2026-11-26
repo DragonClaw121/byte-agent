@@ -149,7 +149,7 @@ pronto sai igual ao modelo.
   - **Onde ver o que foi feito:** a janela do e-mail diz quantas imagens mantiveram a transparência e quantas tiveram o
     fundo removido. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.
 
-- **Imagens do modelo (v1.18):** em **Modelos**, escolha um modelo com formato (◆) e clique em **Imagens do modelo**.
+- **Imagens do modelo (v1.18):** em **Modelos**, escolha um modelo com formato (◆) e clique em **Imagens do modelo** (abaixo da lista).
   - **O que aparece:** cada imagem, desenhada sobre um fundo escuro. Assim, um "quadro branco" de uma imagem que perdeu
     a transparência fica visível.
   - **Imagem marcada com ⚠:** clique em **Trocar pela original…** e escolha o arquivo original (PNG, WebP, GIF ou JPG).
