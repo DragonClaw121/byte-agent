@@ -9,6 +9,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  id-token: write          # atestado de origem (o .exe foi gerado por este CI, a partir deste commit)
+  attestations: write
 jobs:
   exe:
     runs-on: windows-latest
@@ -55,14 +57,60 @@ jobs:
           name: fotos-bit-pc
           path: fotos/
           retention-days: 7
+      - name: PyInstaller com o carregador compilado aqui (menos alarme falso de antivírus)
+        shell: pwsh
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          # o carregador pronto do PyInstaller é o mesmo de muito malware, e por isso vários antivírus o marcam;
+          # compilado aqui, ele é único. Se a compilação falhar, segue com o pronto (e avisa).
+          python -m pip uninstall -y pyinstaller
+          python -m pip install --disable-pip-version-check --no-binary pyinstaller pyinstaller==6.11.1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::warning::Não consegui compilar o carregador do PyInstaller; usando o pronto."
+            python -m pip install --disable-pip-version-check pyinstaller==6.11.1
+          }
+      - name: Informações de versão do .exe
+        shell: python
+        run: |
+          import re
+          v = re.search(r'^VERSION = "([\d.]+)"', open("desktop/bit_pc.py", encoding="utf-8").read(), re.M).group(1)
+          nums = (v.split(".") + ["0", "0", "0"])[:4]
+          tup = "(" + ", ".join(nums) + ")"
+          info = f"""VSVersionInfo(
+            ffi=FixedFileInfo(filevers={tup}, prodvers={tup}, mask=0x3f, flags=0x0, OS=0x40004, fileType=0x1,
+                              subtype=0x0, date=(0, 0)),
+            kids=[StringFileInfo([StringTable('041604B0', [
+                StringStruct('CompanyName', 'Projeto Byte'),
+                StringStruct('FileDescription', 'Bit no PC - assistente de trabalho'),
+                StringStruct('FileVersion', '{v}'),
+                StringStruct('InternalName', 'BitPC'),
+                StringStruct('LegalCopyright', 'Projeto Byte'),
+                StringStruct('OriginalFilename', 'BitPC.exe'),
+                StringStruct('ProductName', 'Bit no PC'),
+                StringStruct('ProductVersion', '{v}')])]),
+                  VarFileInfo([VarStruct('Translation', [1046, 1200])])])
+          """
+          open("versao.txt", "w", encoding="utf-8").write(info)
+          print(info)
       - name: Gerar BitPC.exe
-        run: pyinstaller --noconfirm --onefile --noconsole --name BitPC --icon desktop/bit.ico desktop/bit_pc.py
+        run: pyinstaller --noconfirm --onefile --noconsole --noupx --name BitPC --icon desktop/bit.ico --version-file versao.txt desktop/bit_pc.py
       - name: Autoteste do .exe
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist\BitPC.exe -ArgumentList "--autoteste","exe.json" -Wait -PassThru
           Get-Content exe.json
           exit $p.ExitCode
+      - name: SHA-256 do .exe
+        shell: pwsh
+        run: |
+          $h = (Get-FileHash dist\BitPC.exe -Algorithm SHA256).Hash.ToLower()
+          "$h  BitPC.exe" | Out-File -Encoding ascii -NoNewline dist\BitPC.exe.sha256
+          Write-Output "SHA-256: $h"
+      - name: Atestado de origem (GitHub)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/BitPC.exe
       - name: Publicar
         shell: bash
         env:
@@ -72,15 +120,23 @@ jobs:
           # tenta de novo em erro temporário (5xx) e só termina quando o link público do BitPC.exe existe de verdade.
           set +e +o pipefail                                  # um 5xx do GitHub não pode encerrar o passo na 1ª tentativa
           TITLE="Bit no PC para Windows (build $GITHUB_RUN_NUMBER)"
-          NOTES="Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app."
+          SHA=$(cut -d' ' -f1 dist/BitPC.exe.sha256)
+          NOTES="Baixe BitPC.exe e abra. Na primeira vez o Windows pode avisar 'O Windows protegeu o computador' (o app não é assinado): Mais informações → Executar assim mesmo. Depois, mande /pc para o Bit no Telegram e cole o link no app.
+
+          Sem alarme de antivírus: instale pelo PowerShell (sem .exe), veja docs/bit-pc.md.
+
+          Conferir que este arquivo é o original:
+          - SHA-256: $SHA (no PowerShell: Get-FileHash BitPC.exe)
+          - Origem (gerado pelo CI deste repositório, commit $GITHUB_SHA): gh attestation verify BitPC.exe --repo $GITHUB_REPOSITORY
+          - Análise de antivírus: https://www.virustotal.com/gui/file/$SHA"
           # rascunhos deixados por uma falha anterior do GitHub atrapalham: saem
           gh api "repos/$GITHUB_REPOSITORY/releases" --jq '.[] | select(.draft and .tag_name=="app-bit-pc") | .id' \
             | while read -r id; do gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id" || true; done
           for i in 1 2 3 4 5 6 7 8; do
             if gh api "repos/$GITHUB_REPOSITORY/releases/tags/app-bit-pc" >/dev/null 2>&1; then
-              gh release upload app-bit-pc dist/BitPC.exe --clobber && gh release edit app-bit-pc --title "$TITLE" --notes "$NOTES" --draft=false
+              gh release upload app-bit-pc dist/BitPC.exe dist/BitPC.exe.sha256 --clobber && gh release edit app-bit-pc --title "$TITLE" --notes "$NOTES" --draft=false
             else
-              gh release create app-bit-pc dist/BitPC.exe --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES" \
+              gh release create app-bit-pc dist/BitPC.exe dist/BitPC.exe.sha256 --target "$GITHUB_SHA" --title "$TITLE" --notes "$NOTES" \
                 || gh release edit app-bit-pc --draft=false
             fi
             sleep 5

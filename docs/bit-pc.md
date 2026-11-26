@@ -14,6 +14,23 @@ conversa, memória, tarefas e e-mails do Telegram.
    em apps feitos com o PyInstaller). Pelo comando acima, nada desconhecido é baixado: o Python vem assinado pela Python
    Software Foundation, e o script confere essa assinatura antes de instalar.
    O `BitPC.exe` continua em Releases para quem preferir (pode ser bloqueado).
+
+   **Conferir que o .exe é o original (v1.18):** cada versão sai com três comprovantes, todos gratuitos.
+   - **Carregador próprio:** o carregador do PyInstaller é compilado no próprio CI. O carregador pronto é o mesmo usado
+     por muitos vírus, e é ele que os antivírus costumam marcar.
+   - **Informações de versão:** o .exe traz produto, descrição e versão em Propriedades → Detalhes.
+   - **SHA-256:** vai em `BitPC.exe.sha256` e nas notas da versão. No PowerShell, compare com:
+     ```
+     Get-FileHash BitPC.exe
+     ```
+   - **Atestado de origem do GitHub:** prova que o arquivo foi gerado pelo CI deste repositório, a partir do commit
+     indicado. Para conferir:
+     ```
+     gh attestation verify BitPC.exe --repo DragonClaw121/byte-agent
+     ```
+   - **Link do VirusTotal** pelo hash. Se ninguém tiver enviado o arquivo ainda, dá para enviar lá.
+
+   Nada disso substitui uma assinatura digital: o Windows e alguns antivírus ainda podem avisar.
 2. **Conectar:** no **painel do Bit** (ou da Matrix), aba **⚡ Comandos** → **🔗 Gerar link de conexão**. No
    Telegram, o equivalente é `/pc`. O link (`https://.../pc/bit#123456`) vale 10 minutos e só uma vez.
 3. Cole o link no app e clique em **Conectar**.
@@ -131,6 +148,16 @@ pronto sai igual ao modelo.
     transparência. O logo do modelo tinha 8000 px.
   - **Onde ver o que foi feito:** a janela do e-mail diz quantas imagens mantiveram a transparência e quantas tiveram o
     fundo removido. O detalhe, sem as imagens, fica em `%APPDATA%\BitPC\imagens.log`.
+
+- **Imagens do modelo (v1.18):** em **Modelos**, escolha um modelo com formato (◆) e clique em **Imagens do modelo**.
+  - **O que aparece:** cada imagem, desenhada sobre um fundo escuro. Assim, um "quadro branco" de uma imagem que perdeu
+    a transparência fica visível.
+  - **Imagem marcada com ⚠:** clique em **Trocar pela original…** e escolha o arquivo original (PNG, WebP, GIF ou JPG).
+    O Bit salva como PNG com transparência, no tamanho certo para e-mail. WebP vira PNG, porque o Outlook não mostra WebP.
+  - **Para valer:** clique em **Salvar no modelo**. A troca vale para os próximos e-mails.
+  - **Por que trocar:** quando o Outlook "achata" a transparência ao copiar, o miolo das letras (o "o" e o "p") também
+    fica branco. Não tem como o Bit adivinhar se isso era fundo ou desenho; com a original, fica perfeito.
+  - **Correção automática:** os cantos brancos de um botão arredondado (o que mais acontece) são removidos sozinhos.
 
 ### Transcrever reunião (v1.8 do app, v13.62)
 Botão **⏺ Reunião** na janela, ou o ícone de microfone na barra compacta:

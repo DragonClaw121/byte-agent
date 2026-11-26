@@ -285,3 +285,32 @@ def test_outlook_style_unclosed_cells_do_not_leak_background():
             '<tr><td class="hero"><p><span><img src="data:image/png;base64,AAAA"></span>'
             '<tr><td><img src="https://x/y.png"></table></body>')
     assert bit_pc.image_backgrounds(html) == [(31, 42, 26), (255, 255, 255)]
+
+
+def test_rounded_button_with_white_corners_and_swapping_the_original():
+    """v1.18: botão arredondado que perdeu a transparência (cantos brancos) e a troca da imagem do modelo pela original."""
+    button = Image.new("RGBA", (60, 20), (0, 0, 0, 0))
+    from PIL import ImageDraw
+    ImageDraw.Draw(button).rounded_rectangle((0, 0, 59, 19), radius=8, fill=(183, 210, 105, 255))
+    for x in range(10, 50):
+        button.putpixel((x, 10), (10, 10, 10, 255))
+    flat = Image.new("RGBA", button.size, (255, 255, 255, 255))
+    flat.alpha_composite(button)
+    flat = flat.convert("RGB")
+    html = f'<p><img src="{_png(flat)}" width="60"></p><img src="{_png(button)}">'
+    out = bit_pc.transparent_images(html, backgrounds=lambda h: [None, None])
+    fixed = _img(re.findall(r'src="([^"]+)"', out)[0])
+    assert fixed.getpixel((0, 0))[3] == 0 and fixed.getpixel((30, 3)) == (183, 210, 105, 255)
+    assert bit_pc.LAST_IMAGES[0]["resultado"] == "cantos brancos removidos (transparente)"
+    found = bit_pc.template_images(html)
+    assert [f["ok"] for f in found] == [False, True] and "cantos brancos" in found[0]["estado"] and found[0]["png"]
+    swapped = bit_pc.replace_image(html, 0, base64_png_bytes(button))
+    assert [f["ok"] for f in bit_pc.template_images(swapped)] == [True, True]
+    assert swapped.count("<img") == 2 and swapped.endswith(f'<img src="{_png(button)}">')
+    import io
+    webp = io.BytesIO()
+    button.save(webp, "WEBP", lossless=True)
+    as_png = bit_pc.replace_image(html, 1, webp.getvalue())              # WebP (o Outlook não mostra) vira PNG
+    assert _img(re.findall(r'src="([^"]+)"', as_png)[1]).format == "PNG"
+    with pytest.raises(ValueError):
+        bit_pc.replace_image(html, 5, base64_png_bytes(button))

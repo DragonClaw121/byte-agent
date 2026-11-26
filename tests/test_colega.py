@@ -75,6 +75,13 @@ def test_colleague_gets_the_work_bit_and_the_pc_lands_in_their_space(world):
     h = FakeHandler(token, None)
     pc.route(svc, h, "GET", "/pc/bit/modelos")                        # o PC do João vê os modelos DELE
     assert [t["nome"] for t in h.out[1]["modelos"]] == ["Follow-up"]
+    n = h.out[1]["modelos"][0]["n"]
+    h = FakeHandler(token, {"acao": "html", "n": n})                   # o HTML do modelo (para trocar imagens no PC)
+    pc.route(svc, h, "POST", "/pc/bit/modelos")
+    assert h.out[0] == 200 and h.out[1]["nome"] == "Follow-up" and "html" in h.out[1]
+    h = FakeHandler(token, {"acao": "html", "n": 999})
+    pc.route(svc, h, "POST", "/pc/bit/modelos")
+    assert h.out[0] == 404
     svc_code = svc.dispatch_request("pc_pair_code", {})["code"]       # o PC do dono continua indo para o dono
     h = FakeHandler("", {"codigo": svc_code, "nome": "PC do dono"})
     pc.route(svc, h, "POST", "/pc/bit/parear")

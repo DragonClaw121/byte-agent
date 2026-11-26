@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.17"
+VERSION = "1.18"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -808,8 +808,9 @@ def remove_background(im: Any, bg: Tuple[int, int, int], low: int = 24, rings: i
         nxt: List[Tuple[int, int]] = []
         for x, y in edge:
             k = y * w + x
-            if removed[k] == 2:
-                continue
+            if removed[k] == 2 or not any(0 <= nx < w and 0 <= ny < h and removed[ny * w + nx] for nx, ny in
+                                          ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))):
+                continue                                             # só o que encosta no fundo removido
             p = px[x, y]
             a = _alpha_from(p, bg)
             removed[k] = 2
@@ -992,6 +993,13 @@ def transparent_images(html: str, fetch: Optional[Callable[[str], Optional[bytes
                     return m.group(0)
                 return encoded(prefix, quote, fit(rgba))
             bg = border_color(rgba)
+            if bg is None and looks_like_logo(rgba):               # botão arredondado que perdeu a transparência:
+                corners = [rgba.getpixel(p)[:3] for p in ((0, 0), (rgba.width - 1, 0), (0, rgba.height - 1),
+                                                          (rgba.width - 1, rgba.height - 1))]
+                if all(min(c) >= 235 for c in corners):           # só os cantos brancos saem
+                    white = tuple(sum(c[k] for c in corners) // 4 for k in range(3))
+                    info["resultado"] = "cantos brancos removidos (transparente)"
+                    return encoded(prefix, quote, remove_background(fit(rgba), white))  # type: ignore[arg-type]
             if bg is None or not looks_like_logo(rgba):
                 info["resultado"] = "foto ou sem fundo liso: mantida"
                 return m.group(0) if not big else encoded(prefix, quote, fit(rgba))
@@ -1030,7 +1038,80 @@ def images_summary() -> str:
         text += f", {kept} com a transparência original"
     if removed:
         text += f", {removed} com o fundo removido"
+    if removed or any("foto ou sem fundo" in str(i.get("resultado")) for i in LAST_IMAGES):
+        text += " Se alguma imagem perdeu a transparência no modelo, troque pela original em Modelos → Imagens do modelo"
     return text + "."
+
+
+def _decode_src(src: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None) -> bytes:
+    if src.startswith("data:"):
+        dm = DATA_IMG_RE.match(src)
+        return base64.b64decode(re.sub(r"\s", "", dm.group(2))) if dm else b""
+    return (fetch or _fetch_image)(src) or b"" if src.lower().startswith("https://") else b""
+
+
+def template_images(html: str, fetch: Optional[Callable[[str], Optional[bytes]]] = None) -> List[Dict[str, Any]]:
+    """v1.18: as imagens de um modelo, com o diagnóstico de cada uma (para trocar a "achatada" pela original)."""
+    from PIL import Image
+    out: List[Dict[str, Any]] = []
+    for i, m in enumerate(IMG_SRC_RE.finditer(str(html or ""))):
+        src = m.group(3)
+        item: Dict[str, Any] = {"n": i + 1, "origem": "embutida" if src.startswith("data:") else
+                                ("internet" if src.lower().startswith("http") else "outra"), "png": b""}
+        try:
+            raw = _decode_src(src, fetch)
+            if not raw:
+                item["estado"] = "não consegui ler a imagem"
+                out.append(item)
+                continue
+            im = Image.open(io.BytesIO(raw))
+            item["formato"], item["tamanho"] = im.format, list(im.size)
+            rgba = im.convert("RGBA")
+            if rgba.getchannel("A").getextrema()[0] < 255:
+                item["estado"], item["ok"] = "✔ fundo transparente", True
+            elif border_color(rgba) is not None and looks_like_logo(rgba):
+                item["estado"], item["ok"] = "⚠ SEM transparência (fundo liso): troque pela original", False
+            else:
+                corners = [rgba.getpixel(p) for p in ((0, 0), (rgba.width - 1, 0), (0, rgba.height - 1),
+                                                     (rgba.width - 1, rgba.height - 1))]
+                flat_corners = all(min(c[:3]) >= 235 for c in corners) and looks_like_logo(rgba)
+                item["estado"] = ("⚠ cantos brancos (perdeu a transparência?): troque pela original" if flat_corners
+                                  else "sem transparência (foto ou imagem cheia)")
+                item["ok"] = not flat_corners
+            thumb = rgba.copy()
+            thumb.thumbnail((360, 90))
+            board = Image.new("RGBA", thumb.size, (32, 32, 32, 255))     # fundo escuro: o "quadro branco" aparece
+            board.alpha_composite(thumb)
+            buf = io.BytesIO()
+            board.convert("RGB").save(buf, "PNG")
+            item["png"] = buf.getvalue()
+        except Exception as err:
+            item["estado"] = f"erro: {type(err).__name__}"
+        out.append(item)
+    return out
+
+
+def replace_image(html: str, index: int, raw: bytes) -> str:
+    """Troca a imagem nº index (0, 1, ...) do modelo por outra (PNG, WebP, GIF ou JPG), salva como PNG com transparência,
+    no tamanho certo para e-mail. O resto do HTML não muda."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(raw))
+    im.load()
+    limits = display_limits(html)
+    rgba = fit_for_email(im.convert("RGBA"), limits[index] if index < len(limits) else MAX_EMAIL_IMAGE)
+    buf = io.BytesIO()
+    rgba.save(buf, "PNG", optimize=True)
+    new_src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    count = [0]
+
+    def repl(m: "re.Match[str]") -> str:
+        k = count[0]
+        count[0] += 1
+        return f"{m.group(1)}{m.group(2)}{new_src}{m.group(2)}" if k == index else m.group(0)
+    out = IMG_SRC_RE.sub(repl, str(html or ""))
+    if count[0] <= index:
+        raise ValueError("Essa imagem não existe no modelo.")
+    return out
 
 
 def images_to_files(html: str) -> str:
@@ -2748,6 +2829,82 @@ class App:
         win.focus_force()
         self.result_windows.append(win)
 
+    def template_images_window(self, parent: Any, res: Dict[str, Any], entries: Dict[str, Any], text: Any, status: Any,
+                               state: Dict[str, Any], save: Callable[[], None]) -> None:
+        tk = self.tk
+        box: Dict[str, Any] = {"html": str(res.get("html") or ""), "changed": False, "photos": []}
+        win = tk.Toplevel(parent)
+        win.title("Imagens do modelo — Bit")
+        win.configure(bg=self.BG)
+        self.extra_windows = [x for x in getattr(self, "extra_windows", []) if alive(x)] + [win]
+        self.label(win, f"Imagens de \"{res.get('nome') or ''}\"", 12, bold=True).pack(anchor="w", padx=self.px(12),
+                                                                                     pady=(self.px(10), 0))
+        self.label(win, "Mostradas sobre fundo escuro: se aparecer um quadro branco, a imagem perdeu a transparência. "
+                        "Troque pela original (PNG ou WebP, como veio do design).", 9, self.MUTED,
+                   wraplength=self.px(560)).pack(anchor="w", padx=self.px(12))
+        rows = tk.Frame(win, bg=self.BG)
+        rows.pack(fill="both", expand=True, padx=self.px(12), pady=self.px(8))
+        info = self.label(win, "", 9, self.MUTED, wraplength=self.px(560))
+        info.pack(anchor="w", padx=self.px(12))
+
+        def draw() -> None:
+            for child in rows.winfo_children():
+                child.destroy()
+            box["photos"] = []
+            found = template_images(box["html"])
+            box["found"] = found
+            if not found:
+                self.label(rows, "Este modelo não tem imagens.", 10).pack(anchor="w")
+            for item in found:
+                row = tk.Frame(rows, bg=self.CARD)
+                row.pack(fill="x", pady=(0, self.px(6)))
+                if item.get("png"):
+                    try:
+                        photo = tk.PhotoImage(data=base64.b64encode(item["png"]).decode("ascii"))
+                        box["photos"].append(photo)
+                        tk.Label(row, image=photo, bg=self.CARD).pack(side="left", padx=self.px(6), pady=self.px(6))
+                    except Exception:
+                        pass
+                size = "×".join(str(v) for v in item.get("tamanho") or [])
+                desc = f"Imagem {item['n']} · {item.get('formato') or '?'} {size}\n{item.get('estado') or ''}"
+                self.label(row, desc, 9, "#7ddc9a" if item.get("ok") else "#ffb86b", bg=self.CARD,
+                           wraplength=self.px(230)).pack(side="left", padx=self.px(6))
+                self.button(row, "Trocar pela original…", lambda k=item["n"] - 1: swap(k)).pack(side="right",
+                                                                                               padx=self.px(6))
+
+        def swap(index: int) -> None:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(parent=win, title=f"Imagem {index + 1}: a original", filetypes=[
+                ("Imagens", "*.png *.webp *.gif *.jpg *.jpeg"), ("Todos os arquivos", "*.*")])
+            if not path:
+                return
+            try:
+                with open(path, "rb") as fh:
+                    box["html"] = replace_image(box["html"], index, fh.read())
+            except Exception as err:
+                info.configure(text=tk_safe(f"⚠ Não consegui usar esse arquivo: {err}"))
+                return
+            box["changed"] = True
+            info.configure(text=f"✔ Imagem {index + 1} trocada. Clique em \"Salvar no modelo\" para valer nos próximos e-mails.")
+            draw()
+
+        def keep() -> None:
+            if not box["changed"]:
+                win.destroy()
+                return
+            state["html"] = box["html"]
+            save()
+            win.destroy()
+            status.configure(text="✔ Imagens trocadas e modelo salvo com o formato.")
+        bar = tk.Frame(win, bg=self.BG)
+        bar.pack(fill="x", padx=self.px(12), pady=(self.px(4), self.px(10)))
+        self.button(bar, "Salvar no modelo", keep, primary=True).pack(side="left")
+        self.button(bar, "Fechar", win.destroy).pack(side="left", padx=self.px(6))
+        self.template_images_win = win
+        self.template_images_swap = swap
+        draw()
+        status.configure(text="")
+
     def open_templates(self) -> None:
         """Modelos de e-mail e assinatura: o Bit usa o que combina com cada situação."""
         if self.api is None:
@@ -2910,6 +3067,16 @@ class App:
                 return self.api.call("POST", "modelos", {"acao": "importar", "modelos": found}, timeout=120)
             self.run_bg(work, show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
+        def images() -> None:
+            """v1.18: ver as imagens do modelo e trocar a que perdeu a transparência pela original."""
+            if state["n"] is None or not any(t.get("n") == state["n"] and t.get("tem_html") for t in state["items"]):
+                status.configure(text="Escolha na lista um modelo com formato (◆) para ver as imagens dele.")
+                return
+            status.configure(text="Abrindo as imagens do modelo…")
+            self.run_bg(lambda: self.api.call("POST", "modelos", {"acao": "html", "n": state["n"]}),
+                        lambda res: self.template_images_window(win, res, entries, text, status, state, save),
+                        lambda m: status.configure(text="⚠ " + tk_safe(m)))
+
         def delete() -> None:
             if state["n"] is not None:
                 call({"acao": "apagar", "n": state["n"]}, "✔ Modelo apagado.")
@@ -2946,6 +3113,7 @@ class App:
         self.button(buttons, "Salvar modelo", save, primary=True).pack(side="left")
         self.button(buttons, "Novo", new).pack(side="left", padx=self.px(6))
         self.button(buttons, "Apagar", delete).pack(side="left")
+        self.button(buttons, "Imagens do modelo", images).pack(side="left", padx=self.px(6))
         text.pack(fill="both", expand=True)
         self.button(sig_row, "Salvar assinatura",
                     lambda: call({"acao": "assinatura", "assinatura": sig.get("1.0", "end").strip()}, "✔ Assinatura salva.")
@@ -2958,7 +3126,7 @@ class App:
         right.pack(side="left", fill="both", expand=True, padx=(self.px(10), 0))
         self.templates_window, self.templates_list = win, listbox
         self.templates_actions = {"colar": paste_outlook, "salvar": save, "novo": new, "estado": state, "texto": text,
-                                  "campos": entries}
+                                  "campos": entries, "imagens": images, "pick": pick}
         self.run_bg(lambda: self.api.call("GET", "modelos"), show, lambda m: status.configure(text="⚠ " + tk_safe(m)))
 
     def draw_suggestions(self) -> None:
@@ -3796,6 +3964,8 @@ class FakeApi:
                       "usos": 0, "tem_html": True, "origem": "outlook"}]
             if (body or {}).get("acao") == "salvar":
                 self.saved = body
+            if (body or {}).get("acao") == "html":
+                return {"n": 2, "nome": "Boas-vindas", "html": TEST_HTML}
             return {"modelos": items, "assinatura": "Gabriel · Comercial", "formato": True}
         return {"avisos": []}
 
@@ -3996,8 +4166,26 @@ def autotest(out_path: str) -> int:
                 if direct_shot is None:
                     problems.append("PrintWindow não fotografou a janela")
             shot("modelos")
-            if alive(win):
-                win.destroy()
+            try:                                                  # v1.18: "Imagens do modelo" (ver e trocar a original)
+                app.templates_list.selection_clear(0, "end")
+                app.templates_list.selection_set(1)
+                app.templates_actions["pick"]()
+                app.templates_actions["imagens"]()
+            except Exception as err:
+                problems.append(f"imagens do modelo: {type(err).__name__}: {err}")
+            app.root.after(1500, step_images)
+
+        def step_images() -> None:
+            app.pump()
+            box = getattr(app, "template_images_win", None)
+            result["imagens_do_modelo"] = bool(box is not None and alive(box))
+            if not result["imagens_do_modelo"]:
+                problems.append("a janela \"Imagens do modelo\" não abriu")
+            else:
+                shot("imagens_modelo")
+                box.destroy()
+            if alive(getattr(app, "templates_window", None)):
+                app.templates_window.destroy()
             app.root.after(100, step_meet)
 
         def step_meet() -> None:                                  # v1.8: transcrever reunião (com um som de teste)

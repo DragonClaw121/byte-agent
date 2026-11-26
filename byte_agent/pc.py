@@ -786,6 +786,14 @@ def _route(service: Any, h: Any, method: str, sub: str, pair_body: Optional[Dict
                                    body.get("html") if "html" in body else None)
                 elif action == "apagar":
                     templates.delete(body.get("n"))
+                elif action == "html":                              # v13.74: o HTML do modelo (trocar imagens no PC)
+                    try:
+                        tpl = templates.get(body.get("n"))
+                    except ValueError as err:
+                        h._send_json(404, {"error": str(err)})
+                        return
+                    h._send_json(200, {"n": tpl["n"], "nome": tpl["nome"], "html": tpl.get("html") or ""})
+                    return
                 elif action == "assinatura":
                     templates.set_signature(str(body.get("assinatura") or ""),
                                             body.get("assinatura_html") if "assinatura_html" in body else None)

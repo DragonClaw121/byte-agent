@@ -154,5 +154,12 @@
   "itens": [
    "Bit no PC 1.17: imagens do e-mail com fundo transparente de verdade — nada é pintado atrás delas (no modo escuro do Outlook não aparece mais o quadro claro); logos com caixa branca têm o fundo removido; imagens gigantes diminuídas"
   ]
+ },
+ {
+  "versao": "13.74",
+  "itens": [
+   "Bit no PC 1.18: \"Imagens do modelo\" — veja as imagens de cada modelo e troque a que perdeu a transparência pela original (PNG/WebP); cantos brancos de botões removidos sozinhos",
+   "BitPC.exe com carregador próprio, informações de versão, SHA-256 e atestado de origem do GitHub (menos alarme de antivírus)"
+  ]
  }
 ]
