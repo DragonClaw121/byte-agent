@@ -2546,7 +2546,23 @@ class App:
             open_mail(fields["para"].get() if "para" in fields else "", fields["assunto"].get() if "assunto" in fields else "",
                       text_of())
             status.configure(text="✔ Abri um e-mail novo. Se o texto não aparecer inteiro, cole (Ctrl+V): já está copiado.")
-        html = flatten_transparency(str(res.get("corpo_html") or ""))   # v1.11: sem fundo branco nas imagens
+        html = str(res.get("corpo_html") or "")
+        # v1.16: as imagens são ajustadas em segundo plano (medir as cores no navegador leva alguns segundos)
+        html_box: Dict[str, Any] = {"html": html, "ready": threading.Event()}
+
+        def final_html() -> str:
+            html_box["ready"].wait(45)
+            return html_box["html"]
+
+        def flattened(h: str) -> None:
+            html_box["html"] = h
+            html_box["ready"].set()
+            if alive(status) and images_summary():
+                status.configure(text=tk_safe(str(status.cget("text")) + " " + images_summary()))
+        if html:
+            self.run_bg(lambda: flatten_transparency(html), flattened, lambda m: html_box["ready"].set())
+        else:
+            html_box["ready"].set()
 
         def flavor() -> str:
             return outlook_flavor(str(self.cfg.get("outlook") or ""))
@@ -2555,7 +2571,7 @@ class App:
             text_now = text_of()
 
             def work() -> bool:
-                if copy_formatted(html, text_now, flavor()):
+                if copy_formatted(final_html(), text_now, flavor()):
                     return True
                 self.events.put(("call", lambda: copy(text_now, "Texto")))
                 return False
@@ -2581,7 +2597,7 @@ class App:
                 status.configure(text=messages.get(how, messages["eml"]).replace("{motivo}", f" ({why})" if why else ""))
                 if how == "novo_colar":                          # o aviso também aparece fora da janela (no Outlook)
                     self.notice("No Outlook: clique no corpo do e-mail e aperte Ctrl+V — o e-mail formatado já está copiado.")
-            self.run_bg(lambda: open_html_mail(to, subject, text_of(), html, kind), opened)
+            self.run_bg(lambda: open_html_mail(to, subject, text_of(), final_html(), kind), opened)
 
         def switch_outlook() -> None:
             self.cfg["outlook"] = "classico" if flavor() == "novo" else "novo"
@@ -2593,7 +2609,8 @@ class App:
             path = os.path.join(tempfile.gettempdir(), "BitPC", f"previa-{int(time.time())}.html")
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(html if re.search(r"(?i)<meta[^>]+charset", html) else '<meta charset="utf-8">' + html)
+                shown = html_box["html"]
+                fh.write(shown if re.search(r"(?i)<meta[^>]+charset", shown) else '<meta charset="utf-8">' + shown)
             open_path(path)
         if html:
             self.button(buttons, "Copiar formatado", copy_formatted_now, primary=True).pack(side="left")
@@ -2625,8 +2642,6 @@ class App:
             self.button(buttons, "Salvar como modelo", save_as_template).pack(side="left", padx=self.px(6))
         self.button(buttons, "Fechar", win.destroy).pack(side="right")
         hint = (f"Baseado no seu modelo \"{res['modelo']}\". " if res.get("modelo") else "")
-        if html and images_summary():
-            hint += images_summary() + " "
         if html:
             hint += ("No formato do modelo (◆). \"Copiar formatado\"/\"Abrir no Outlook\" levam o visual; o que você "
                      "editar na caixa vale para \"Só o texto\".")
@@ -3974,7 +3989,7 @@ def autotest(out_path: str) -> int:
         step3b, step3c = guarded(step3b), guarded(step3c)
         step_meet, step_meet2, step_meet3 = guarded(step_meet), guarded(step_meet2), guarded(step_meet3)
         app.root.after(900, step1)
-        app.root.after(60000, lambda: (problems.append("tempo esgotado (60 s)"), app.root.destroy()))
+        app.root.after(150000, lambda: (problems.append("tempo esgotado (150 s)"), app.root.destroy()))
         app.run()
         result.setdefault("problemas", problems)
         try:
