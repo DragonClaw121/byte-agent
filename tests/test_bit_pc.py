@@ -314,3 +314,18 @@ def test_rounded_button_with_white_corners_and_swapping_the_original():
     assert _img(re.findall(r'src="([^"]+)"', as_png)[1]).format == "PNG"
     with pytest.raises(ValueError):
         bit_pc.replace_image(html, 5, base64_png_bytes(button))
+
+
+def test_screen_cuts_helpers():
+    """v1.19: recortes arrastados em qualquer direção, minúsculos ignorados, no máximo 6, e JPEGs menores com muitos."""
+    assert bit_pc.normalize_rect(200, 150, 10, 10, 640, 400) == (10, 10, 200, 150)
+    assert bit_pc.normalize_rect(-50, -5, 900, 999, 640, 400) == (0, 0, 640, 400)
+    assert bit_pc.normalize_rect(5, 5, 8, 8, 640, 400) is None
+    img = Image.new("RGB", (640, 400), (40, 60, 90))
+    cuts = bit_pc.crop_shots(img, [(0, 0, 100, 50)] * 8)
+    assert len(cuts) == bit_pc.MAX_SHOTS and cuts[0].size == (100, 50)
+    big = [Image.new("RGB", (1600, 900), (255, 255, 255))] * 4
+    import base64
+    import io
+    widths = [Image.open(io.BytesIO(base64.b64decode(b))).width for b in bit_pc.encode_shots(big)]
+    assert widths == [1024] * 4 and len(bit_pc.encode_shots(big[:2])) == 2

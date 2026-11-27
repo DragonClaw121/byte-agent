@@ -161,5 +161,12 @@
    "Bit no PC 1.18: \"Imagens do modelo\" — veja as imagens de cada modelo e troque a que perdeu a transparência pela original (PNG/WebP); cantos brancos de botões removidos sozinhos",
    "BitPC.exe com carregador próprio, informações de versão, SHA-256 e atestado de origem do GitHub (menos alarme de antivírus)"
   ]
+ },
+ {
+  "versao": "13.75",
+  "itens": [
+   "Bit no PC 1.19: recorte várias partes da tela (Ctrl+Alt+R) e mande todas numa mensagem só — dá para trocar de página e juntar mais antes de enviar",
+   "Pesquisa de cliente com LinkedIn: página da empresa, pessoas-chave com link do perfil (pelo buscador) e um convite de conexão sugerido"
+  ]
  }
 ]

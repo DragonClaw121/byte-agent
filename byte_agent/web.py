@@ -316,10 +316,12 @@ class TavilyBackend(SearchBackend):
 
     news = True
 
-    def search(self, fetcher, query, limit, news=False):
-        payload = {"query": query, "max_results": limit, "search_depth": "basic"}
+    def search(self, fetcher, query, limit, news=False, domains=None):
+        payload: Dict[str, Any] = {"query": query, "max_results": limit, "search_depth": "basic"}
         if news:
             payload.update({"topic": "news", "days": 2})
+        if domains:
+            payload["include_domains"] = list(domains)
         data = fetcher.get_json(self.endpoint, headers={"Authorization": f"Bearer {self.api_key}"}, method="POST",
                                 payload=payload)
         return [SearchHit(str(r.get("title") or ""), str(r.get("url") or ""), str(r.get("content") or ""), self.name)
@@ -394,21 +396,31 @@ class WebAccess:
         self.last_error: Optional[str] = None
 
     # ---------- primitivas
-    def search(self, query: str, limit: int = 6, news: bool = False) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 6, news: bool = False, site: str = "") -> Dict[str, Any]:
         """news=True: só notícias recentes, e só nos buscadores que sabem fazer isso (Tavily, SearXNG). A Wikipédia
-        não entra: devolveria verbetes, não manchetes."""
+        não entra: devolveria verbetes, não manchetes. v13.75: site="linkedin.com/in" = só resultados desse site
+        (Tavily: include_domains; os outros: o operador site: na busca)."""
         query = " ".join(str(query or "").split())[:300]
         if not query:
             raise ValueError("Informe o que pesquisar.")
+        site = re.sub(r"[^a-z0-9./-]", "", str(site or "").lower())[:60]
         errors: List[str] = []
         backends = [b for b in self.backends if b.news] if news else self.backends
+        if site:
+            backends = [b for b in backends if not isinstance(b, WikipediaBackend)]
         if news and not backends:
             errors.append("nenhum buscador de notícias configurado (configure o Tavily: TAVILY_API_KEY)")
         for backend in backends:
             n = max(1, min(10, int(limit)))
             try:
-                found = backend.search(self.fetcher, query, n, news=True) if news else backend.search(self.fetcher, query, n)
+                if site and isinstance(backend, TavilyBackend):
+                    found = backend.search(self.fetcher, query, n, news=news, domains=[site.split("/")[0]])
+                else:
+                    q = f"site:{site} {query}" if site else query
+                    found = backend.search(self.fetcher, q, n, news=True) if news else backend.search(self.fetcher, q, n)
                 hits = [h for h in found if h.url.startswith(("http://", "https://"))]
+                if site:                                          # o buscador pode ignorar o filtro: confere aqui
+                    hits = [h for h in hits if site in h.url.lower()]
             except Exception as err:
                 errors.append(f"{backend.name}: {type(err).__name__}: {str(err)[:120]}")
                 continue

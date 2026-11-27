@@ -31,6 +31,7 @@ REGISTRY_URLS = ("https://brasilapi.com.br/api/cnpj/v1/{cnpj}", "https://publica
 STOP = set("""ltda s/a sa s.a. me epp eireli cia companhia sociedade de da do das dos e em para com the and of grupo holding
 comercio servicos servico industria industrial brasil brasileira nacional associacao instituto empresa limitada filial""".split())
 MAX_READ = 6
+MAX_LINKEDIN = 10
 
 
 LAST_CLIENT = "clientes.ultimo"
@@ -158,7 +159,7 @@ class ClientResearch:
         self.llm = llm or self._default_llm
 
     # ---- LLM (com imagem quando houver; Azure ou o modelo local)
-    def _default_llm(self, system: str, user: str, image_url: str = "", json_format: bool = True, max_tokens: int = 1500) -> str:
+    def _default_llm(self, system: str, user: str, image_url: Any = "", json_format: bool = True, max_tokens: int = 1500) -> str:
         llm = self.service.llm
         if hasattr(llm, "azure_active") and llm.azure_active():
             from .pc import vision
@@ -274,8 +275,47 @@ class ClientResearch:
             notes.append("nenhuma página da web mencionando o cliente foi encontrada")
         return sources, notes
 
+    def linkedin(self, name: str, reg: Optional[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+        """v13.75: a página da empresa e os perfis PÚBLICOS de pessoas de lá no LinkedIn, pelo que o buscador mostra
+        (título e trecho do resultado). As páginas do LinkedIn não são abertas: ele exige login e proíbe coleta
+        automática. Para ver mais, abra o LinkedIn no navegador e mande os recortes da tela para o Bit."""
+        web = getattr(self.service, "web", None)
+        if web is None:
+            return [], []
+        main = (reg or {}).get("nome_fantasia") or name or (reg or {}).get("razao_social") or ""
+        if not main:
+            return [], []
+        terms = key_terms(name, (reg or {}).get("razao_social", ""), (reg or {}).get("nome_fantasia", ""))
+        phrases = [fold(x).strip() for x in (name, (reg or {}).get("razao_social", ""), (reg or {}).get("nome_fantasia", "")) if x]
+        found: List[Dict[str, Any]] = []
+        notes: List[str] = []
+        seen: set = set()
+        searches = ((f'"{main}"', "linkedin.com/company", "empresa"),
+                    (f'"{main}" diretor OR gerente OR head OR coordenador OR compras OR TI OR financeiro', "linkedin.com/in",
+                     "pessoa"))
+        for query, site, kind in searches:
+            try:
+                try:
+                    res = web.search(query, limit=8, site=site)
+                except TypeError:                                     # buscador antigo, sem o filtro de site
+                    res = web.search(f"site:{site} {query}", limit=8)
+            except Exception as err:
+                notes.append(f"LinkedIn ({kind}): {type(err).__name__}")
+                continue
+            for hit in res.get("results") or []:
+                url = str(hit.get("url") or "").split("?")[0].rstrip("/")
+                if site not in url.lower() or url in seen:
+                    continue
+                text = f"{hit.get('title', '')} {hit.get('snippet', '')}"
+                if not relevant(text, terms, phrases):
+                    continue
+                seen.add(url)
+                found.append({"tipo": kind, "titulo": " ".join(str(hit.get("title") or "").split())[:160], "url": url,
+                              "trecho": " ".join(str(hit.get("snippet") or "").split())[:300]})
+        return found[:MAX_LINKEDIN], notes
+
     # ---- o plano
-    def run(self, request: str, internal: str = "", notes: str = "", image_url: str = "") -> Dict[str, Any]:
+    def run(self, request: str, internal: str = "", notes: str = "", image_url: Any = "") -> Dict[str, Any]:
         t0 = time.time()
         request = " ".join(str(request or "").split())[:800]
         ident = self._json(
@@ -283,7 +323,9 @@ class ClientResearch:
             "houver). Responda em JSON: {\"nome\": \"nome da empresa como aparece\", \"cnpj\": \"se aparecer\", \"cidade\": \"\", "
             "\"uf\": \"\", \"dados_internos\": \"tudo que a tela/notas mostram da relação com a gente: compras, pedidos, "
             "produtos, valores, datas, status, contatos (texto corrido, até 250 palavras; vazio se nada)\", "
-            "\"foco\": \"o que o usuário quer com a pesquisa (ex.: reativar, vender mais, renegociar)\"}. Não invente. "
+            "\"foco\": \"o que o usuário quer com a pesquisa (ex.: reativar, vender mais, renegociar)\", "
+            "\"pessoas_na_tela\": [{\"nome\": \"\", \"cargo\": \"\", \"empresa\": \"\"}] (pessoas e cargos que a tela "
+            "mostra, por exemplo num perfil ou na página de pessoas do LinkedIn; lista vazia se nenhuma)}. Não invente. "
             "Se aparecer mais de um cliente, use o que o pedido nomeia; \"esse cliente\"/\"o cliente\" sem nome = o mais "
             "recente (notas e dados estão do mais antigo para o mais novo). Em dados_internos, junte TODAS as compras desse "
             "cliente que aparecerem (inclusive de outros CNPJs do mesmo grupo).",
@@ -300,6 +342,14 @@ class ClientResearch:
         if reg is None and name:
             cnpj, reg = self.find_cnpj(name, city)
         sources, web_notes = self.gather(name or (reg or {}).get("razao_social", ""), reg, city)
+        linked, linked_notes = self.linkedin(name or (reg or {}).get("razao_social", ""), reg)
+        web_notes = web_notes + linked_notes
+        raw_people = ident.get("pessoas_na_tela") if isinstance(ident.get("pessoas_na_tela"), list) else []
+        on_screen = [p for p in raw_people if isinstance(p, dict) and p.get("nome")][:15]
+        linked_block = "\n".join(f"[L{i + 1}] ({p['tipo']}) {p['titulo']} — {p['url']}" + (f"\n{p['trecho']}" if p["trecho"] else "")
+                                 for i, p in enumerate(linked)) or "(nada encontrado)"
+        screen_people = "\n".join(f"- {p.get('nome')} — {p.get('cargo') or 'cargo não visto'}"
+                                  + (f" ({p.get('empresa')})" if p.get("empresa") else "") for p in on_screen)
         profile = {}
         try:
             from . import engine
@@ -325,7 +375,13 @@ class ClientResearch:
             "ordem: 'O cliente em resumo', 'Momento atual e notícias', 'Pessoas-chave e decisores', 'Relação com a gente "
             "(compras)', 'Oportunidades', 'Riscos e pontos de atenção', 'Estratégia de acionamento' (canal, quem procurar, "
             "melhor momento, argumento principal, oferta, objeções prováveis e como responder) e 'Próximos passos' "
-            "(3 a 5, com prazo); \"email\": {\"assunto\": \"...\", \"corpo\": \"e-mail de abordagem pronto, curto e "
+            "(3 a 5, com prazo); \"linkedin\": {\"empresa\": \"URL da página da empresa [Ln] ou vazio\", "
+            "\"pessoas\": [{\"nome\": \"\", \"cargo\": \"\", \"por_que\": \"por que procurar essa pessoa (decisor, "
+            "usuário, compras, TI...)\", \"url\": \"perfil [Ln] ou vazio\", \"fonte\": \"Ln|tela\"}] (só pessoas DESTA "
+            "empresa que estão nos resultados do LinkedIn ou na tela, das mais relevantes para a conversa comercial; no máximo "
+            "6), \"nota_conexao\": \"convite de conexão curto (até 280 caracteres), pessoal, sem cara de venda, para a "
+            "pessoa mais indicada\", \"como_usar\": \"1 a 2 frases: o que olhar/fazer no LinkedIn com essa conta "
+            "(ex.: vagas abertas, posts recentes, quem acabou de entrar)\"}; \"email\": {\"assunto\": \"...\", \"corpo\": \"e-mail de abordagem pronto, curto e "
             "personalizado, assinatura [SEU NOME]\"}, \"datas\": [{\"tipo\": \"compra|renovacao|vencimento\", "
             "\"data\": \"AAAA-MM-DD\", \"descricao\": \"produto/contrato (ex.: Figma Enterprise, 18 licenças)\", "
             "\"estimada\": true|false}]}. Em \"datas\", só datas que ESTÃO nos dados internos (compras, emissões, "
@@ -337,7 +393,11 @@ class ClientResearch:
             f"DADOS INTERNOS (compras etc.):\n{internal_all or 'não informados'}\n"
             + (f"{history}\n(Isso é o que já sabíamos de antes: use como dado interno [interno] e mostre o que mudou.)\n"
                if history else "") +
-            f"FONTES DA WEB (só as que mencionam o cliente):\n{numbered}",
+            f"FONTES DA WEB (só as que mencionam o cliente):\n{numbered}\n"
+            f"LINKEDIN (resultados do buscador: título e trecho públicos; cite como [Ln]; o cargo pode estar desatualizado):\n"
+            f"{linked_block}\n"
+            + (f"PESSOAS VISTAS NA TELA DO USUÁRIO (ex.: LinkedIn aberto no navegador; cite como [tela]):\n{screen_people}"
+               if screen_people else ""),
             json_format=True, max_tokens=3500)
         display = (reg or {}).get("nome_fantasia") or (reg or {}).get("razao_social") or name
         title = str(plan.get("titulo") or f"Plano de conta — {display}")[:150]
@@ -351,6 +411,27 @@ class ClientResearch:
                                     "tabela": {"colunas": ["Nome", "Qualificação", "Desde"], "linhas": socios}})
             if reg.get("atividades_secundarias"):
                 sections.insert(2, {"titulo": "Atividades secundárias (CNAE)", "itens": reg["atividades_secundarias"]})
+        li = plan.get("linkedin") if isinstance(plan.get("linkedin"), dict) else {}
+        li_people = [p for p in li.get("pessoas") or [] if isinstance(p, dict) and p.get("nome")][:6]
+        known_urls = {p["url"] for p in linked}
+        for p in li_people:                                    # só links que vieram mesmo da busca (nada inventado)
+            if str(p.get("url") or "").split("?")[0].rstrip("/") not in known_urls:
+                p["url"] = ""
+        li_company = str(li.get("empresa") or "").split("?")[0].rstrip("/")
+        li_company = li_company if li_company in known_urls else next(
+            (p["url"] for p in linked if p["tipo"] == "empresa"), "")
+        if li_company or li_people or li.get("nota_conexao"):
+            sec: Dict[str, Any] = {"titulo": "LinkedIn: empresa e pessoas",
+                                   "paragrafos": ([f"Página da empresa: {li_company}"] if li_company else [])
+                                   + ([str(li["como_usar"])] if li.get("como_usar") else [])
+                                   + ([f"Convite de conexão sugerido: {li['nota_conexao']}"] if li.get("nota_conexao") else [])}
+            if li_people:
+                sec["tabela"] = {"colunas": ["Pessoa", "Cargo", "Por que procurar", "Perfil"],
+                                 "linhas": [[str(p.get("nome") or ""), str(p.get("cargo") or ""), str(p.get("por_que") or ""),
+                                             str(p.get("url") or ("vista na tela" if p.get("fonte") == "tela" else ""))]
+                                            for p in li_people]}
+            idx = next((i for i, x in enumerate(sections) if "pessoas" in fold(x.get("titulo") or "")), len(sections) - 1)
+            sections.insert(idx + 1, sec)
         email = plan.get("email") if isinstance(plan.get("email"), dict) else {}
         if templates is not None and email.get("corpo"):
             email["corpo"] = templates.finish(str(email["corpo"]), tpl)
@@ -360,13 +441,16 @@ class ClientResearch:
         sections.append({"titulo": "Fontes",
                          "itens": ([f"[CNPJ] Cadastro público da Receita Federal (BrasilAPI) — {fmt_cnpj(reg['cnpj'])}"] if reg else [])
                          + [f"[{s['n']}] {s['title']} — {s['url']}" for s in sources]
+                         + [f"[L{i + 1}] LinkedIn (resultado de busca) — {p['url']}" for i, p in enumerate(linked)]
                          + (["[interno] Dados internos informados pelo usuário / vistos na tela"] if internal_all else [])
                          + [f"Observação: {n}" for n in web_notes]})
         out: Dict[str, Any] = {"titulo": title, "resumo": str(plan.get("resumo") or "").strip(), "cliente": display,
                                "cnpj": fmt_cnpj(reg["cnpj"]) if reg else (fmt_cnpj(cnpj) if cnpj else ""),
                                "cadastro": bool(reg), "fontes": [{k: s[k] for k in ("n", "title", "url")} for s in sources],
                                "email": {"assunto": str(email.get("assunto") or ""), "corpo": str(email.get("corpo") or "")},
-                               "arquivos": [], "segundos": round(time.time() - t0, 1)}
+                               "arquivos": [], "segundos": round(time.time() - t0, 1),
+                               "linkedin": {"empresa": li_company, "pessoas": li_people,
+                                            "nota_conexao": str(li.get("nota_conexao") or "")[:300]}}
         actions = getattr(self.service, "extra_actions", {})
         if "work_document" in actions and sections:
             doc = actions["work_document"]({"titulo": title, "subtitulo": f"Gerado pelo Bit em {time.strftime('%d/%m/%Y %H:%M')}",
@@ -380,7 +464,8 @@ class ClientResearch:
                 from .falhas import note
                 note("Ficha do cliente (gravar pesquisa)", err)
         self.service.db.record_audit("client_research", "pesquisar_cliente", "success",
-                                     {"cadastro": bool(reg), "fontes": len(sources), "interno": bool(internal_all)})
+                                     {"cadastro": bool(reg), "fontes": len(sources), "interno": bool(internal_all),
+                                      "linkedin": len(linked)})
         out.pop("_datas", None)
         out["texto"] = self.message(out, web_notes)
         try:                                                     # v13.54: "o e-mail para ESSE cliente" logo depois
@@ -401,6 +486,8 @@ class ClientResearch:
                     return [str(i) for i in (s.get("itens") or []) + (s.get("paragrafos") or []) if str(i).strip()]
             return []
         people = items("pessoas")[:6] + [f"{s['nome']} ({s['qualificacao']})" for s in (reg or {}).get("socios") or []][:5]
+        people += [f"{p.get('nome')} — {p.get('cargo') or '?'}" + (f" (LinkedIn: {p['url']})" if p.get("url") else "")
+                   for p in (out.get("linkedin") or {}).get("pessoas") or []]
         card = book.upsert(display, cnpj=out["cnpj"], apelidos=[name, (reg or {}).get("razao_social", ""),
                                                                 (reg or {}).get("nome_fantasia", "")],
                            resumo=out["resumo"], compras=(f"[{time.strftime('%d/%m/%Y')}] " + internal) if internal else "",
@@ -424,6 +511,13 @@ class ClientResearch:
         lines += ["", "Base: " + ", ".join(x for x in (
             "cadastro oficial ✔" if out["cadastro"] else "cadastro oficial não encontrado (informe o CNPJ)",
             f"{len(out['fontes'])} fonte(s) da web sobre o cliente", ) if x)]
+        li = out.get("linkedin") or {}
+        if li.get("empresa") or li.get("pessoas"):
+            lines += ["", "🔗 LinkedIn" + (f": {li['empresa']}" if li.get("empresa") else "")]
+            lines += [f"• {p.get('nome')} — {p.get('cargo') or '?'}" + (f" — {p['url']}" if p.get("url") else "")
+                      for p in li.get("pessoas") or []]
+            if li.get("nota_conexao"):
+                lines.append(f"Convite sugerido: {li['nota_conexao']}")
         if out["email"]["corpo"]:
             lines += ["", f"✉️ Rascunho de abordagem — Assunto: {out['email']['assunto']}", out["email"]["corpo"]]
         if out["fontes"]:

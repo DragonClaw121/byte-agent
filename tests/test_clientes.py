@@ -123,3 +123,59 @@ def test_vague_request_is_not_searched_as_a_phrase_and_client_asks_are_detected(
     assert clientes.CLIENT_RE.search(clientes.fold("faça um levantamento da empresa ACME"))
     assert not clientes.CLIENT_RE.search(clientes.fold("pesquise o preço do dólar"))
     assert web._proper_terms('pesquisa sobre o cliente ASBEC e "Faculdade Baiana"') == ["faculdade baiana", "asbec"]
+
+
+class LinkedInWeb(FakeWeb):
+    def search(self, query, limit=6, news=False, site=""):
+        self.queries.append((site, query))
+        if site == "linkedin.com/company":
+            return {"results": [{"title": "Faculdade ASBEC | LinkedIn", "url": "https://br.linkedin.com/company/faculdade-asbec?trk=x",
+                                 "snippet": "Faculdade ASBEC | 1.200 seguidores no LinkedIn. Educação superior em Salvador."}]}
+        if site == "linkedin.com/in":
+            return {"results": [
+                {"title": "Carla Mendes - Coordenadora de TI - Faculdade ASBEC | LinkedIn",
+                 "url": "https://br.linkedin.com/in/carla-mendes", "snippet": "Coordenadora de TI na Faculdade ASBEC."},
+                {"title": "Pedro Lima - Analista - Outra Empresa | LinkedIn", "url": "https://br.linkedin.com/in/pedro",
+                 "snippet": "Analista na Outra Empresa."},
+                {"title": "Página qualquer", "url": "https://site.x/carla", "snippet": "Faculdade ASBEC"}]}
+        return super().search(query, limit, news)
+
+
+def test_research_brings_linkedin_company_and_people(monkeypatch):
+    """v13.75: a página da empresa e os perfis públicos (pelo buscador; o LinkedIn não é aberto) e as pessoas vistas na tela."""
+    svc, calls = FakeService(), []
+    svc.web = LinkedInWeb()
+    base = fake_llm(calls)
+
+    def llm(system, user, image_url="", json_format=True, max_tokens=1500):
+        out = json.loads(base(system, user, image_url, json_format, max_tokens))
+        if "Identifique o CLIENTE" in system:
+            out["pessoas_na_tela"] = [{"nome": "Roberto Alves", "cargo": "Diretor Financeiro", "empresa": "Faculdade ASBEC"}]
+        else:
+            out["secoes"].insert(0, {"titulo": "Pessoas-chave e decisores", "itens": ["Carla Mendes [L2]"]})
+            out["linkedin"] = {"empresa": "https://br.linkedin.com/company/faculdade-asbec",
+                               "pessoas": [{"nome": "Carla Mendes", "cargo": "Coordenadora de TI", "por_que": "usa as licenças",
+                                            "url": "https://br.linkedin.com/in/carla-mendes", "fonte": "L2"},
+                                           {"nome": "Roberto Alves", "cargo": "Diretor Financeiro", "por_que": "aprova a compra",
+                                            "url": "https://br.linkedin.com/in/inventado", "fonte": "tela"}],
+                               "nota_conexao": "Oi, Carla! Trabalho com a gestão de licenças da ASBEC; vamos nos conectar?",
+                               "como_usar": "Veja as vagas de TI abertas."}
+        return json.dumps(out)
+    research = clientes.ClientResearch(svc, llm=llm)
+    res = research.run("pesquise a Faculdade ASBEC", image_url=["data:image/jpeg;base64,a", "data:image/jpeg;base64,b"])
+    assert ("linkedin.com/in", '"FACULDADE ASBEC" diretor OR gerente OR head OR coordenador OR compras OR TI OR financeiro') \
+        in svc.web.queries
+    plan_prompt = calls[-1]["user"]
+    assert "[L1] (empresa) Faculdade ASBEC | LinkedIn — https://br.linkedin.com/company/faculdade-asbec" in plan_prompt
+    assert "Carla Mendes" in plan_prompt and "Pedro Lima" not in plan_prompt and "site.x" not in plan_prompt
+    assert "Roberto Alves — Diretor Financeiro" in plan_prompt                          # visto na tela (LinkedIn aberto)
+    li = res["linkedin"]
+    assert li["empresa"] == "https://br.linkedin.com/company/faculdade-asbec"
+    assert [p["url"] for p in li["pessoas"]] == ["https://br.linkedin.com/in/carla-mendes", ""]   # link inventado sai
+    titles = [s["titulo"] for s in svc.docs[0]["secoes"]]
+    assert titles.index("LinkedIn: empresa e pessoas") == titles.index("Pessoas-chave e decisores") + 1
+    sec = next(s for s in svc.docs[0]["secoes"] if s["titulo"] == "LinkedIn: empresa e pessoas")
+    assert sec["tabela"]["linhas"][1][3] == "vista na tela"
+    assert "🔗 LinkedIn: https://br.linkedin.com/company/faculdade-asbec" in res["texto"]
+    assert "Convite sugerido: Oi, Carla!" in res["texto"]
+    assert any("[L2] LinkedIn" in i for i in svc.docs[0]["secoes"][-1]["itens"])

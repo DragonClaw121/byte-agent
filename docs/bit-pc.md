@@ -46,7 +46,26 @@ acesso fica guardado cifrado com a sua conta do Windows (DPAPI).
 | **● Assistente ao vivo** | Trabalhe normalmente: o Bit observa a tela, anota o que importa (quem pediu o quê, prazos, valores, tabelas) e sugere o que pode preparar. |
 | **Preparar** | ✉ E-mail · ▦ Planilha · ▭ Slides · ☰ Documento · ✎ Texto: o Bit faz com o que viu. Escreva antes, na caixa, o que quer (opcional): "responder à Ana aceitando o prazo", "orçamento com os 3 itens". |
 | **Avisos** | Lembretes, resumos e avisos do Bit aparecem no canto da tela. |
-| **Atalhos** | **Ctrl+Alt+B** abre o Bit. **Ctrl+Alt+L** liga ou desliga a ajuda ao vivo. Funcionam com o app minimizado. |
+| **✂ Recortar partes da tela (v1.19)** | Várias partes da tela numa mensagem só. Veja abaixo. |
+| **Atalhos** | **Ctrl+Alt+B** abre o Bit. **Ctrl+Alt+L** liga ou desliga a ajuda ao vivo. **Ctrl+Alt+R** recorta partes da tela. Funcionam com o app minimizado. |
+
+### Recortar partes da tela (v1.19)
+Para mostrar ao Bit só o que importa, vindo de várias telas, numa mensagem só. Antes era uma captura por mensagem, e
+as respostas se misturavam.
+1. **Abra o recorte:** aperte **Ctrl+Alt+R** ou clique em **✂ Recortar partes da tela**. A tela "congela", escurecida.
+2. **Recorte:** arraste sobre cada parte que interessa. Cada recorte fica aceso e numerado.
+   - **Backspace** (ou o botão direito do mouse) desfaz o último recorte.
+   - **Enter** conclui.
+   - **Esc** cancela.
+3. **Junte mais, se quiser:** os recortes esperam na bandeja ("✂ 3 recorte(s): vão junto na próxima mensagem"). Dá
+   para trocar de página (outra aba do ERP, o LinkedIn do cliente) e recortar mais. O limite é de 6 por mensagem.
+4. **Peça:** escreva o pedido e envie. Exemplos: "pesquise esse cliente", "resuma", "monte um e-mail com isso".
+   - Todos os recortes vão juntos, na ordem em que foram feitos, e o Bit junta as informações deles.
+   - Os botões **Preparar** e **⌕ Cliente** também usam os recortes.
+   - **Limpar** descarta os recortes.
+
+Os recortes só existem no pedido: nada é gravado em disco no PC nem no servidor. Cada recorte conta como uma captura
+no limite diário (`BYTE_PC_QUADROS_DIA`).
 
 ### Modo compacto (barra flutuante, v1.1 do app)
 O botão **▭ Modo compacto**, no topo da janela, transforma o Bit numa barrinha que fica sempre por cima, como os

@@ -4,7 +4,7 @@ O app do PC (desktop/bit_pc.py) é só os olhos e as mãos: o cérebro continua 
 Telegram. Rotas públicas com o código do aparelho (Authorization: Bearer), em <endereço>/pc/<agente>/...:
   POST parear   {"codigo": "123456", "nome": "Notebook"} -> {"token"}     (código gerado com /pc no Telegram)
   GET  eu                                                  -> agente, versão, visão ligada?
-  POST conversa {"texto": "...", "tela": "<jpeg base64>"?, "botao": "ok:<id>"?} -> mensagens (com botões)
+  POST conversa {"texto": "...", "tela": "<jpeg base64>"?, "telas": [até 6 recortes]?, "botao": "ok:<id>"?} -> mensagens
   GET  avisos                                              -> lembretes e avisos para notificar no PC
   POST ao-vivo  {"sessao", "objetivo", "tela", "pergunta"?} -> {"passo", "alvo": [x0,y0,x1,y1] (0..1) | null,
                                                                "concluido", "fala"}
@@ -75,9 +75,26 @@ class VisionError(RuntimeError):
     pass
 
 
-def vision(service: Any, system: str, text: str, image_url: Optional[str], json_format: bool = False,
+MAX_SHOTS = 6                    # v13.75: recortes da tela numa mensagem só
+
+
+def images_of(image_url: Any) -> List[str]:
+    """Uma imagem (str) ou vários recortes (lista) -> lista sem vazios."""
+    if isinstance(image_url, (list, tuple)):
+        return [str(u) for u in image_url if u][:MAX_SHOTS]
+    return [str(image_url)] if image_url else []
+
+
+def shots_note(image_url: Any) -> str:
+    n = len(images_of(image_url))
+    return (f"\n(O usuário enviou {n} RECORTES da tela, na ordem em que escolheu: são partes de uma mesma consulta — "
+            "junte as informações de todos, sem repetir o que aparecer em mais de um.)") if n > 1 else ""
+
+
+def vision(service: Any, system: str, text: str, image_url: Any, json_format: bool = False,
            max_tokens: int = 500) -> str:
-    """Uma chamada ao modelo com a imagem (ou só texto, se image_url vazio). BYTE_AZURE_VISAO escolhe outra implantação."""
+    """Uma chamada ao modelo com a imagem (ou só texto, se image_url vazio). BYTE_AZURE_VISAO escolhe outra implantação.
+    v13.75: image_url também pode ser uma lista (vários recortes da tela numa mensagem só)."""
     llm = service.llm
     if not (hasattr(llm, "azure_active") and llm.azure_active()):
         raise VisionError("Ver a tela precisa de um modelo da Azure com visão (o modelo atual é local).")
@@ -88,8 +105,10 @@ def vision(service: Any, system: str, text: str, image_url: Optional[str], json_
     if client is None or client.deployment != deployment:
         client = service._vision_client = AzureOpenAIClient.from_env(_read_secret, deployment=deployment)
     content: Any = text
-    if image_url:
-        content = [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": image_url, "detail": "high"}}]
+    urls = images_of(image_url)
+    if urls:
+        content = [{"type": "text", "text": text + shots_note(urls)}] + [
+            {"type": "image_url", "image_url": {"url": u, "detail": "high"}} for u in urls]
     messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
     try:
         msg, _ = client.chat(messages, max_tokens=max_tokens, temperature=0.2, json_format=json_format)
@@ -209,8 +228,9 @@ class PcHub:
             self.frames["n"] += 1
 
     # ---------------- "olha minha tela"
-    def look(self, text: str, image_url: str) -> str:
-        self.spend_frame()
+    def look(self, text: str, image_url: Any) -> str:
+        for _ in images_of(image_url) or [""]:
+            self.spend_frame()
         question = text.strip() or "O que você vê na minha tela? Como pode me ajudar com isso?"
         known = self.context(question)                       # v13.59: o olhar sabe do que vocês estão falando
         prompt = (f"{known}\n\n" if known else "") + f"PEDIDO DO USUÁRIO (sobre a tela atual): {question}"
@@ -442,7 +462,7 @@ class PcHub:
             parts.append("O QUE VOCÊ JÁ SABE (memórias que combinam com o pedido):\n- " + "\n- ".join(facts))
         return "\n\n".join(parts)
 
-    def prepare(self, session: str, kind: str, ask: str, image_url: str = "", previous: Optional[Dict[str, Any]] = None
+    def prepare(self, session: str, kind: str, ask: str, image_url: Any = "", previous: Optional[Dict[str, Any]] = None
                 ) -> Dict[str, Any]:
         """Prepara o trabalho com o que foi visto: texto de e-mail, planilha, apresentação, documento ou texto livre.
         previous: o e-mail anterior, quando o pedido é um ajuste ("deixa mais curto", "troca o produto")."""
@@ -457,7 +477,7 @@ class PcHub:
             raise ValueError("Planilhas, documentos e apresentações são do Bit (e da Matrix): conecte o PC a um deles.")
         st = self._session(session) if session else {"objetivo": "", "notas": [], "vendo": ""}
         notes = "\n".join(st["notas"])[-self.NOTES_LIMIT:]
-        if image_url:
+        for _ in images_of(image_url):
             self.spend_frame()
         known = self.context(ask)
         prompt = (f"PEDIDO: {ask.strip()[:600] or 'o que fizer mais sentido com o que você viu'}\n"
@@ -539,7 +559,7 @@ class PcHub:
             note("Conversa: registro do que o PC fez", err)
         return out
 
-    def client(self, session: str, ask: str, image_url: str = "") -> Dict[str, Any]:
+    def client(self, session: str, ask: str, image_url: Any = "") -> Dict[str, Any]:
         """Pesquisa do cliente que está na tela: os dados de compra vistos viram a base da estratégia."""
         research = getattr(self.service, "client_research", None)
         if research is None:
@@ -556,7 +576,7 @@ class PcHub:
                                  if m.get("role") == "user" and not str(m.get("content") or "").startswith("["))
         except Exception:
             pass
-        if image_url:
+        for _ in images_of(image_url):
             self.spend_frame()
         res = research.run(ask or "pesquise este cliente", internal=internal, notes=notes, image_url=image_url)
         return {"tipo": "cliente", "titulo": res["titulo"], "texto": res["texto"], "resumo": res["resumo"],
@@ -728,10 +748,16 @@ def _route(service: Any, h: Any, method: str, sub: str, pair_body: Optional[Dict
             if body is None:
                 h._send_json(400, {"error": "Pedido inválido ou grande demais."})
                 return
-            image = clean_image(body.get("tela")) if body.get("tela") else ""
-            if body.get("tela") and not image:
+            raw_shots = body.get("telas") if isinstance(body.get("telas"), list) else []
+            raw_shots = ([body.get("tela")] if body.get("tela") else []) + list(raw_shots)
+            if len(raw_shots) > MAX_SHOTS:
+                h._send_json(400, {"error": f"No máximo {MAX_SHOTS} recortes por mensagem."})
+                return
+            shots = [clean_image(x) for x in raw_shots]
+            if any(not x for x in shots):
                 h._send_json(400, {"error": "Captura de tela inválida (use JPEG ou PNG)."})
                 return
+            image: Any = shots if len(shots) > 1 else (shots[0] if shots else "")
             text = str(body.get("texto") or "").strip()[:4000]
             button = str(body.get("botao") or "")
             if button.startswith("cs:"):                            # v13.68: "✉️ Renovação — EMS" num aviso do PC
@@ -821,9 +847,14 @@ def _route(service: Any, h: Any, method: str, sub: str, pair_body: Optional[Dict
             if body is None:
                 h._send_json(400, {"error": "Pedido inválido ou grande demais."})
                 return
-            image = clean_image(body.get("tela")) if body.get("tela") else ""
+            raw_shots = ([body.get("tela")] if body.get("tela") else []) + (
+                list(body.get("telas")) if isinstance(body.get("telas"), list) else [])
+            shots = [clean_image(x) for x in raw_shots[:MAX_SHOTS]]
+            if any(not x for x in shots):
+                h._send_json(400, {"error": "Captura de tela inválida (use JPEG ou PNG)."})
+                return
             h._send_json(200, hub.prepare(str(body.get("sessao") or ""), str(body.get("tipo") or ""),
-                                          str(body.get("pedido") or ""), image))
+                                          str(body.get("pedido") or ""), shots if len(shots) > 1 else (shots[0] if shots else "")))
         elif sub == "local" and method == "POST":                   # v13.70: localização aproximada do PC (Windows)
             loc = getattr(service, "local", None)
             body = read_body(h, 2048) or {}

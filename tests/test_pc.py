@@ -156,6 +156,20 @@ def test_router_sends_pc_app_to_the_bit():
     router.server.server_close()
 
 
+def test_several_screen_cuts_in_one_message(bit):
+    """v13.75: vários recortes da tela numa mensagem só (o Bit junta as informações de todos)."""
+    svc, calls = bit
+    token = pair(svc)
+    status, res = call(svc, "POST", "conversa", token, {"texto": "resuma", "telas": [JPEG, JPEG, JPEG]})
+    assert status == 200 and isinstance(calls[-1]["image"], list) and len(calls[-1]["image"]) == 3
+    status, _ = call(svc, "POST", "conversa", token, {"texto": "x", "tela": JPEG, "telas": [JPEG]})
+    assert status == 200 and len(calls[-1]["image"]) == 2                 # "tela" + "telas" juntos
+    assert call(svc, "POST", "conversa", token, {"texto": "x", "telas": [JPEG] * 7})[0] == 400
+    assert call(svc, "POST", "conversa", token, {"texto": "x", "telas": [JPEG, "lixo"]})[0] == 400
+    assert pc.images_of("a") == ["a"] and pc.images_of(["a", "", "b"]) == ["a", "b"] and pc.images_of("") == []
+    assert "3 RECORTES" in pc.shots_note(["a", "b", "c"]) and pc.shots_note("a") == ""
+
+
 def test_vision_sends_the_image_to_azure_in_openai_format(monkeypatch):
     from byte_agent import cloud
     sent = []
@@ -183,6 +197,9 @@ def test_vision_sends_the_image_to_azure_in_openai_format(monkeypatch):
     assert user["content"][0] == {"type": "text", "text": "o que é isso?"}
     assert user["content"][1]["type"] == "image_url" and user["content"][1]["image_url"]["url"].startswith("data:image/jpeg")
     assert svc._vision_client.deployment == "byte-visao"                     # BYTE_AZURE_VISAO escolhe a implantação
+    pc.vision(svc, "sistema", "junte", ["data:image/jpeg;base64," + JPEG] * 2)
+    parts = sent[1]["messages"][1]["content"]
+    assert [p["type"] for p in parts] == ["text", "image_url", "image_url"] and "2 RECORTES" in parts[0]["text"]
 
 
 def test_client_research_from_the_pc_uses_the_screen_and_live_notes(bit, monkeypatch):

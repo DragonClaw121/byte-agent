@@ -20,6 +20,10 @@ acioná-lo**, e não com um resumo genérico da web.
   grupo, olhando cada uma, e peça a análise: ele junta tudo, mais o que você escreveu na conversa. "Esse cliente" sem
   nome é o mais recente que apareceu.
 
+- **Com recortes (v13.75):** aperte **Ctrl+Alt+R** e recorte as partes que importam. Por exemplo, as compras no ERP,
+  o cadastro no CRM e a página de pessoas do LinkedIn da empresa (troque de página e aperte de novo). Depois escreva
+  "pesquise esse cliente": tudo vai numa mensagem só.
+
 ## O que o Bit faz
 1. **Identifica o cliente:** nome e CNPJ, pelo pedido, pela tela ou pelas notas do assistente.
 2. **Puxa o cadastro oficial** pelo CNPJ (Receita Federal, via BrasilAPI): razão social, nome fantasia, situação,
@@ -27,11 +31,30 @@ acioná-lo**, e não com um resumo genérico da web.
    CNPJ, ele procura "<nome> CNPJ" e só aceita o número se o nome do cadastro bater.
 3. **Faz buscas direcionadas** com o nome exato: site, notícias, pessoas-chave, Reclame Aqui, expansão e contratos.
    **Só ficam as fontes que mencionam o cliente.** Antes, vinham pesquisas de satisfação e criptomoedas.
-4. **Junta os dados internos** (compras, pedidos, valores, datas).
-5. **Monta o plano de conta** em Word (.docx), com:
+4. **LinkedIn (v13.75):** procura a página da empresa e os perfis públicos de pessoas de lá (diretores, gerentes,
+   coordenadores, compras, TI, financeiro).
+   - **Como procura:** pelo buscador (Tavily, Brave ou SearXNG), com o filtro só do LinkedIn, e usa apenas o título e o
+     trecho que o buscador mostra. Só ficam resultados que mencionam o cliente.
+   - **O que ele não faz:** não abre as páginas do LinkedIn, porque elas pedem login e o LinkedIn proíbe coleta
+     automática. Também não usa a sua conta.
+   - **Para ir além:** abra o LinkedIn você mesmo e mande recortes da tela (Ctrl+Alt+R). As pessoas e os cargos que
+     aparecem nos recortes também entram no plano, marcados como [tela].
+   - **O que entra no plano:**
+     - uma seção **"LinkedIn: empresa e pessoas"**: a página da empresa e uma tabela com pessoa, cargo, por que procurá-la
+       e o link do perfil;
+     - um **convite de conexão** sugerido (até 280 caracteres);
+     - o que olhar no LinkedIn com essa conta (vagas, posts, quem entrou).
+   - **Cuidados:**
+     - os links vêm sempre da busca, e o Bit apaga qualquer link que a IA tenha inventado;
+     - o cargo pode estar desatualizado: confirme antes de usar;
+     - as pessoas também entram nos contatos da ficha do cliente.
+   - **Requisito:** um buscador da web configurado (`TAVILY_API_KEY`, `BRAVE_API_KEY` ou `BYTE_SEARXNG_URL`). Só com a
+     Wikipédia, não há LinkedIn.
+5. **Junta os dados internos** (compras, pedidos, valores, datas).
+6. **Monta o plano de conta** em Word (.docx), com:
    - cadastro oficial e sócios;
    - o cliente em resumo e o momento atual;
-   - pessoas-chave e decisores;
+   - pessoas-chave e decisores, e o LinkedIn (empresa, pessoas e convite de conexão);
    - relação com a gente (compras);
    - oportunidades;
    - riscos;
@@ -40,8 +63,8 @@ acioná-lo**, e não com um resumo genérico da web.
    - o **e-mail de abordagem** pronto;
    - as fontes.
 
-Cada informação diz de onde veio: [n] para a web, [CNPJ] para o cadastro e [interno] para os seus dados. O que não foi
-encontrado aparece como "não encontrado": nada é inventado.
+Cada informação diz de onde veio: [n] para a web, [Ln] para o LinkedIn, [CNPJ] para o cadastro, [tela] para o que
+estava nos recortes e [interno] para os seus dados. O que não foi encontrado aparece como "não encontrado": nada é inventado.
 
 No Bit do PC, o e-mail de abordagem abre numa janela (copiar ou abrir no Outlook) e o .docx fica em Documentos\Bit.
 

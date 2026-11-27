@@ -32,7 +32,7 @@ import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 APP_NAME = "Bit no PC"
-VERSION = "1.18"
+VERSION = "1.19"
 IS_WINDOWS = sys.platform.startswith("win")
 BLOCKED_WORDS = ("senha", "password", "1password", "bitwarden", "keepass", "lastpass", "inprivate", "incognito",
                  "anônima", "anonima", "private browsing", "navegação privada", "internet banking", "banco do brasil",
@@ -328,6 +328,29 @@ def encode(img: Any, max_width: int = 1280, quality: int = 60) -> str:
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=quality, optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+MAX_SHOTS = 6                       # v1.19: recortes da tela numa mensagem só
+
+
+def normalize_rect(x0: float, y0: float, x1: float, y1: float, w: int, h: int) -> Optional[Tuple[int, int, int, int]]:
+    """Retângulo arrastado (em qualquer direção) -> (esq, topo, dir, baixo) dentro da imagem; None se for minúsculo."""
+    left, right = sorted((max(0, min(w, int(x0))), max(0, min(w, int(x1)))))
+    top, bottom = sorted((max(0, min(h, int(y0))), max(0, min(h, int(y1)))))
+    if right - left < 12 or bottom - top < 12:
+        return None
+    return left, top, right, bottom
+
+
+def crop_shots(img: Any, rects: List[Tuple[int, int, int, int]]) -> List[Any]:
+    """Os recortes escolhidos (no máximo 6), na ordem em que foram feitos."""
+    return [img.crop(r) for r in rects[:MAX_SHOTS]]
+
+
+def encode_shots(shots: List[Any]) -> List[str]:
+    """Cada recorte em JPEG; com muitos, um pouco menores (a mensagem inteira cabe no limite do servidor)."""
+    width = 1280 if len(shots) <= 3 else 1024
+    return [encode(im, max_width=width, quality=65) for im in shots[:MAX_SHOTS]]
 
 
 def signature(img: Any) -> List[int]:
@@ -1684,17 +1707,18 @@ class Voice:
 
 # ================================================================== atalhos globais (Windows)
 def hotkeys(events: "queue.Queue[Tuple[str, Any]]") -> None:
-    """Ctrl+Alt+B (abrir) e Ctrl+Alt+L (ajuda ao vivo), mesmo com o Bit minimizado."""
+    """Ctrl+Alt+B (abrir), Ctrl+Alt+L (ajuda ao vivo) e Ctrl+Alt+R (recortar partes da tela), mesmo com o Bit
+    minimizado."""
     if not IS_WINDOWS:
         return
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
     mods = 0x0001 | 0x0002 | 0x4000                    # Alt + Ctrl + sem repetição
-    keys = {1: (ord("B"), "abrir"), 2: (ord("L"), "ao_vivo")}
+    keys = {1: (ord("B"), "abrir"), 2: (ord("L"), "ao_vivo"), 3: (ord("R"), "recortar")}
     for hk_id, (vk, _) in keys.items():
         if not user32.RegisterHotKey(None, hk_id, mods, vk):
-            events.put(("aviso", "Outro programa já usa um dos atalhos do Bit (Ctrl+Alt+B / Ctrl+Alt+L)."))
+            events.put(("aviso", "Outro programa já usa um dos atalhos do Bit (Ctrl+Alt+B / Ctrl+Alt+L / Ctrl+Alt+R)."))
     msg = wintypes.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
         if msg.message == 0x0312 and msg.wParam in keys:        # WM_HOTKEY
@@ -2052,6 +2076,9 @@ class App:
         self.unread: List[str] = []
         self.bar_text, self.bar_hint_text = "", ""
         self.entry = self.chat = None
+        self.shots: List[Any] = []                            # v1.19: recortes que vão juntos na próxima mensagem
+        self.shots_label = None
+        self.snip_win = None
         self.my_pid = os.getpid()
         self.root = tk.Tk()
         self.root.title(APP_NAME)
@@ -2137,6 +2164,8 @@ class App:
                     self.hotkey_open()
                 elif kind == "ao_vivo":
                     self.toggle_live()
+                elif kind == "recortar":
+                    self.snip()
                 elif kind == "aviso":
                     if isinstance(payload, tuple):                    # v1.12: aviso com botões (ação e 👍/👎)
                         text, buttons = payload
@@ -2245,7 +2274,7 @@ class App:
         self.button(top, "Desconectar", self.disconnect).pack(side="right")
         self.button(top, "▭ Modo compacto", self.show_companion, primary=True).pack(side="right", padx=self.px(6))
         # de baixo para cima: o que precisa sempre aparecer entra primeiro (a conversa fica com o espaço que sobrar)
-        self.label(f, "Ctrl+Alt+B abre o Bit · Ctrl+Alt+L liga/desliga a ajuda ao vivo", 8, self.MUTED,
+        self.label(f, "Ctrl+Alt+B abre o Bit · Ctrl+Alt+L ajuda ao vivo · Ctrl+Alt+R recorta partes da tela", 8, self.MUTED,
                    wraplength=self.px(420)).pack(
             side="bottom", anchor="w", pady=(self.px(4), 0))
         opts = tk.Frame(f, bg=self.BG)
@@ -2285,6 +2314,17 @@ class App:
         self.entry.pack(side="left", fill="x", expand=True, ipady=self.px(5))
         self.entry.bind("<Return>", lambda e: self.send())
         self.button(row, "Enviar", self.send, primary=True).pack(side="left", padx=(self.px(6), 0))
+        tray = tk.Frame(f, bg=self.BG)                          # v1.19: recortes da tela que vão na próxima mensagem
+        tray.pack(side="bottom", fill="x", pady=(self.px(6), self.px(2)))
+        tk.Button(tray, text=tk_safe("✂ Recortar partes da tela"), command=self.snip, relief="flat", cursor="hand2",
+                  padx=self.px(7), pady=self.px(2), bg=self.HOVER, fg=self.INK, activebackground=self.PRI,
+                  font=("Segoe UI", 9), borderwidth=0).pack(side="left")
+        self.shots_label = tk.Label(tray, text="", bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9), anchor="w")
+        self.shots_label.pack(side="left", padx=(self.px(6), 0), fill="x", expand=True)
+        self.shots_clear = tk.Button(tray, text="Limpar", command=self.clear_shots, relief="flat", cursor="hand2",
+                                     bg=self.BG, fg=self.PRI, activebackground=self.BG, font=("Segoe UI", 9, "underline"),
+                                     borderwidth=0)
+        self.update_shots()
         box = tk.Frame(f, bg=self.CARD)
         box.pack(fill="both", expand=True, pady=self.px(8))
         self.chat = tk.Text(box, bg=self.CARD, fg=self.INK, wrap="word", relief="flat", font=("Segoe UI", 10),
@@ -2338,10 +2378,18 @@ class App:
 
     def ask(self, text: str) -> None:
         text = text.strip()
-        if not text or self.api is None:
+        if (not text and not self.shots) or self.api is None:
             return
         if CLIENT_ASK_RE.search(fold(text)):                      # "pesquise esse cliente": usa a tela (e as compras nela)
             self.prepare("cliente", text)
+            return
+        if self.shots:                                            # v1.19: os recortes vão juntos, numa mensagem só
+            shots = self.take_shots()
+            self.add_message(f"✂ {len(shots)} recorte(s) da tela" + (f" · {text}" if text else ""), "eu")
+            if self.bar is not None:
+                self.show_bubble([{"text": "Olhando os recortes…"}], wait=True)
+            self.run_bg(lambda: self.api.call("POST", "conversa", {"texto": text, "telas": encode_shots(shots)},
+                                              timeout=180), self.on_reply)
             return
         self.add_message(text, "eu")
         if self.live is not None:                               # durante a ajuda ao vivo, a pergunta vai com a tela
@@ -2363,6 +2411,155 @@ class App:
             pass
         self.add_message(label, "eu")
         self.run_bg(lambda: self.api.call("POST", "conversa", {"botao": data}, timeout=120), self.on_reply)
+
+    # ------------------------------------------------------------ recortes da tela (v1.19)
+    def update_shots(self) -> None:
+        n = len(self.shots)
+        if self.shots_label is not None and alive(self.shots_label):
+            self.shots_label.configure(text=tk_safe(
+                f"✂ {n} recorte(s): vão junto na próxima mensagem" if n else "Junte várias partes da tela numa mensagem só"),
+                fg=self.PRI if n else self.MUTED)
+            if n:
+                self.shots_clear.pack(side="right")
+            else:
+                self.shots_clear.pack_forget()
+        if self.bar is not None and (n or self.bar_text.startswith("✂")):
+            self.set_bar_text(f"✂ {n} recorte(s) prontos: escreva o pedido e Enter" if n else "")
+
+    def clear_shots(self) -> None:
+        self.shots = []
+        self.update_shots()
+
+    def take_shots(self) -> List[Any]:
+        shots, self.shots = self.shots[:MAX_SHOTS], []
+        self.update_shots()
+        return shots
+
+    def snip(self) -> None:
+        """Tela "congelada" em tela cheia: arraste para recortar quantas partes quiser (até 6 no total). Enter conclui,
+        Backspace desfaz o último, Esc cancela. Os recortes esperam na bandeja: dá para trocar de página e recortar mais
+        antes de enviar."""
+        if self.api is None or (self.snip_win is not None and alive(self.snip_win)):
+            return
+        if len(self.shots) >= MAX_SHOTS:
+            self.notice(f"Já há {MAX_SHOTS} recortes esperando: envie a mensagem ou limpe antes.")
+            return
+        try:
+            area = virtual_screen() if IS_WINDOWS else None
+            img, used = self.hidden_capture(area)
+        except Exception as err:
+            self.error(f"Não consegui capturar a tela: {err}")
+            return
+        self.open_snipper(img, used)
+
+    def open_snipper(self, img: Any, used: Dict[str, int]) -> None:
+        tk = self.tk
+        from PIL import ImageEnhance
+        try:
+            from PIL import ImageTk
+        except ImportError:
+            ImageTk = None                                      # type: ignore[assignment]
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.geometry(f"{img.width}x{img.height}+{used.get('left', 0)}+{used.get('top', 0)}")
+        canvas = tk.Canvas(win, width=img.width, height=img.height, highlightthickness=0, cursor="crosshair", bg="black")
+        canvas.pack(fill="both", expand=True)
+
+        def photo(im: Any) -> Any:
+            if ImageTk is not None:
+                return ImageTk.PhotoImage(im)
+            buf = io.BytesIO()
+            im.save(buf, "PNG")
+            return tk.PhotoImage(data=base64.b64encode(buf.getvalue()).decode("ascii"))
+        dim = ImageEnhance.Brightness(img.convert("RGB")).enhance(0.55)
+        state: Dict[str, Any] = {"rects": [], "items": [], "photos": [photo(dim)], "start": None, "box": None}
+        canvas.create_image(0, 0, image=state["photos"][0], anchor="nw")
+        room = MAX_SHOTS - len(self.shots)
+        tip = canvas.create_text(img.width // 2, 28, fill="white", font=("Segoe UI", 13, "bold"), text=tk_safe(
+            f"Arraste para recortar (até {room}) · Enter: concluir · Backspace: desfazer · Esc: cancelar"))
+
+        def redraw_tip() -> None:
+            left = room - len(state["rects"])
+            canvas.itemconfigure(tip, text=tk_safe(
+                f"{len(state['rects'])} recorte(s) · ainda cabem {left} · Enter: concluir · Backspace: desfazer · Esc: cancelar"))
+            canvas.tag_raise(tip)
+
+        def press(e: Any) -> None:
+            state["start"] = (e.x, e.y)
+            state["box"] = canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="#7ddc9a", width=2)
+
+        def drag(e: Any) -> None:
+            if state["box"] is not None and state["start"]:
+                canvas.coords(state["box"], state["start"][0], state["start"][1], e.x, e.y)
+
+        def release(e: Any) -> None:
+            if state["box"] is None or not state["start"]:
+                return
+            canvas.delete(state["box"])
+            state["box"] = None
+            rect = normalize_rect(state["start"][0], state["start"][1], e.x, e.y, img.width, img.height)
+            if rect is None or len(state["rects"]) >= room:
+                return
+            ph = photo(img.crop(rect))                            # o recorte aparece "aceso" sobre a tela escurecida
+            state["photos"].append(ph)
+            n = len(state["rects"]) + 1
+            items = [canvas.create_image(rect[0], rect[1], image=ph, anchor="nw"),
+                     canvas.create_rectangle(*rect, outline="#7ddc9a", width=3),
+                     canvas.create_text(rect[0] + 14, rect[1] + 14, text=str(n), fill="#0d1020",
+                                        font=("Segoe UI", 12, "bold"))]
+            items.insert(2, canvas.create_oval(rect[0] + 2, rect[1] + 2, rect[0] + 26, rect[1] + 26, fill="#7ddc9a",
+                                               outline=""))
+            canvas.tag_raise(items[3])
+            state["rects"].append(rect)
+            state["items"].append(items)
+            redraw_tip()
+            if len(state["rects"]) >= room:
+                finish()
+
+        def undo(_e: Any = None) -> None:
+            if state["rects"]:
+                state["rects"].pop()
+                for it in state["items"].pop():
+                    canvas.delete(it)
+                redraw_tip()
+
+        def finish(_e: Any = None) -> None:
+            cuts = crop_shots(img, state["rects"])
+            close()
+            if not cuts:
+                return
+            self.shots.extend(cuts)
+            self.shots = self.shots[:MAX_SHOTS]
+            self.update_shots()
+            msg = (f"✂ {len(self.shots)} recorte(s) prontos. Escreva o pedido (ex.: \"pesquise esse cliente\") e envie; "
+                   "ou recorte mais (Ctrl+Alt+R) em outra página antes.")
+            if self.bar is not None:
+                self.bar.deiconify()
+                self.bar_open_ask(True)
+                self.show_bubble([{"text": msg}])
+            else:
+                self.add_message(msg, "aviso")
+                self.bring_up()
+
+        def close(_e: Any = None) -> None:
+            self.snip_win = None
+            try:
+                win.destroy()
+            except Exception:
+                pass
+        canvas.bind("<ButtonPress-1>", press)
+        canvas.bind("<B1-Motion>", drag)
+        canvas.bind("<ButtonRelease-1>", release)
+        canvas.bind("<Button-3>", undo)
+        win.bind("<Return>", finish)
+        win.bind("<KP_Enter>", finish)
+        win.bind("<BackSpace>", undo)
+        win.bind("<Escape>", close)
+        self.snip_win = win
+        self.snip_actions = {"press": press, "drag": drag, "release": release, "finish": finish, "undo": undo,
+                             "close": close, "state": state}
+        win.after(50, win.focus_force)
 
     # ------------------------------------------------------------ olhar a tela
     def track_foreground(self) -> None:
@@ -2472,6 +2669,9 @@ class App:
             question = self.entry.get()
             self.entry.delete(0, "end")
         question = (question or "").strip()
+        if self.shots:                                            # v1.19: com recortes prontos, olha só eles
+            self.ask(question)
+            return
         image, _, _, title = self.grab()
         if image is None:
             msg = "⊘ A janela em uso parece privada (senha, banco ou navegação anônima): não vou olhar."
@@ -2618,7 +2818,11 @@ class App:
             return
         request = self.take_request_text() if request is None else request
         body: Dict[str, Any] = {"tipo": kind, "pedido": request}
-        if self.live is not None:
+        if self.shots:                                            # v1.19: os recortes escolhidos são a "tela"
+            body["telas"] = encode_shots(self.take_shots())
+            if self.live is not None:
+                body["sessao"] = self.live["sessao"]
+        elif self.live is not None:
             body["sessao"] = self.live["sessao"]
         else:
             image, _, _, _ = self.grab()
@@ -3422,7 +3626,7 @@ class App:
             w.bind("<ButtonRelease-1>", self.drag_end)
         self.bar_buttons = {}
         for key, cmd, tip in (("chat", lambda: self.bar_open_ask(), "Perguntar ao Bit (Ctrl+Alt+B)"),
-                              ("olhar", lambda: self.look(self.bar_take_text()), "Olhar minha tela"),
+                              ("olhar", lambda: self.look(self.bar_take_text()), "Olhar minha tela (Ctrl+Alt+R: recortar partes)"),
                               ("vivo", self.toggle_live, "Assistente ao vivo: observa e prepara (Ctrl+Alt+L)"),
                               ("reuniao", self.toggle_meeting, "Transcrever reunião (som do PC + microfone) e fazer a ata"),
                               ("preparar", lambda: self.bar_open_prepare(), "Preparar e-mail, planilha, slides, documento"),
@@ -3925,6 +4129,8 @@ class FakeApi:
         if sub == "parear":
             return {"token": "t" * 43, "agente": "Bit"}
         if sub == "conversa":
+            if (body or {}).get("telas"):
+                FakeApi.last_shots = list(body["telas"])               # type: ignore[attr-defined]
             return {"mensagens": [{"text": "Feito.", "buttons": [{"label": "✅ Aprovar", "data": "ok:1"}]}]}
         if sub == "ao-vivo":
             return {"vendo": "Outlook: e-mail da Ana pedindo o orçamento de 3 notebooks 📧", "notas": "Ana pede orçamento",
@@ -4175,6 +4381,38 @@ def autotest(out_path: str) -> int:
                 problems.append(f"imagens do modelo: {type(err).__name__}: {err}")
             app.root.after(1500, step_images)
 
+        def step_snip() -> None:                                  # v1.19: recortar várias partes e mandar juntas
+            from PIL import Image as PILImage
+            try:
+                fake = PILImage.new("RGB", (640, 400), (40, 60, 90))
+                app.open_snipper(fake, {"left": 0, "top": 0})
+                acts = app.snip_actions
+
+                class Ev:
+                    def __init__(self, x: int, y: int) -> None:
+                        self.x, self.y = x, y
+                for (x0, y0), (x1, y1) in (((10, 10), (200, 150)), ((300, 200), (620, 390)), ((5, 5), (8, 8))):
+                    acts["press"](Ev(x0, y0))
+                    acts["drag"](Ev(x1, y1))
+                    acts["release"](Ev(x1, y1))
+                result["recortes_na_tela"] = len(acts["state"]["rects"])
+                shot("recortes")
+                acts["finish"]()
+                result["recortes_prontos"] = len(app.shots)
+                app.ask("resuma estes recortes")
+            except Exception as err:
+                problems.append(f"recortes: {type(err).__name__}: {err}")
+            app.root.after(1200, step_snip2)
+
+        def step_snip2() -> None:
+            app.pump()
+            sent = getattr(FakeApi, "last_shots", None) or []
+            result["recortes_enviados"] = len(sent)
+            if result.get("recortes_na_tela") != 2 or result.get("recortes_prontos") != 2 or len(sent) != 2 or app.shots:
+                problems.append(f"recortes: tela {result.get('recortes_na_tela')}, prontos {result.get('recortes_prontos')}, "
+                                f"enviados {len(sent)}")
+            app.root.after(100, step_meet)
+
         def step_images() -> None:
             app.pump()
             box = getattr(app, "template_images_win", None)
@@ -4186,7 +4424,7 @@ def autotest(out_path: str) -> int:
                 box.destroy()
             if alive(getattr(app, "templates_window", None)):
                 app.templates_window.destroy()
-            app.root.after(100, step_meet)
+            app.root.after(100, step_snip)
 
         def step_meet() -> None:                                  # v1.8: transcrever reunião (com um som de teste)
             global MEET_CHUNK_S
